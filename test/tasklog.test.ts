@@ -58,7 +58,7 @@ describe("the ctx task log", () => {
 		await git(repo, "add", "-A");
 		await git(repo, "commit", "-q", "-m", "initial");
 
-		const session: TodoSession = { sessionManager: SessionManager.inMemory(repo), setTodoPhases: () => {} };
+		const session: TodoSession = { sessionManager: SessionManager.inMemory(repo), setTodoPhases: () => {}, model: undefined };
 		const initialized = await runTodo(session, {
 			input: document('INIT "Commit the work" "git holds the commit" "The log names it"', 'ADD "Implement" "Change the tracked file" 5'),
 		});

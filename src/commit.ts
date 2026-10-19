@@ -1,8 +1,10 @@
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { errorText } from "./errors.ts";
+import type { ModelRef } from "./models.ts";
 import { hostPhases, readTodoMore, TODO_MORE_ENTRY_TYPE, type TodoMoreState, toSnapshot } from "./state.ts";
 
-export type TodoSession = Pick<AgentSession, "sessionManager" | "setTodoPhases">;
+/** The session a todo call serves; `model` is the one it currently runs, which a `DONE` commit names. */
+export type TodoSession = Pick<AgentSession, "sessionManager" | "setTodoPhases"> & { readonly model: ModelRef | undefined };
 
 /** `persist` means acceptance by the authority branch, not a durable disk-write acknowledgement. */
 export type TodoCommitResult =

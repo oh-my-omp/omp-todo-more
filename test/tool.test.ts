@@ -55,6 +55,7 @@ function fixture(initial?: TodoMoreSnapshot): Fixture {
 	const projections: HostTodoPhase[][] = [];
 	const session: TodoSession = {
 		sessionManager,
+		model: undefined,
 		setTodoPhases: (phases) => {
 			projections.push(phases);
 		},

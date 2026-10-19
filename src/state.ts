@@ -44,6 +44,8 @@ export type CommitScope = { readonly kind: "all" } | { readonly kind: "paths"; r
  * The commit a completion made, as git answered it. Git is the authority for
  * what was committed; this is the copy the list keeps, taken once at the
  * commit and never refreshed, so it can be read back without asking git again.
+ * `message` is the completion's own message; git's copy also ends with the
+ * `Model` trailers of the committing session (`models.ts`).
  */
 export type CommitRecord = { readonly sha: string; readonly message: string; readonly scope: CommitScope };
 

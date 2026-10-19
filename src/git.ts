@@ -18,6 +18,7 @@ import { isAbsolute } from "node:path";
 import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { errorText } from "./errors.ts";
+import { withModelTrailers } from "./models.ts";
 import type { CommitRecord, CommitScope } from "./state.ts";
 
 /** What the repository says about the session's working tree. */
@@ -61,8 +62,16 @@ export async function worktreeState(cwd: string): Promise<WorktreeState> {
 	}
 }
 
-/** Stage a clause's scope and commit it; only a commit git accepted answers `committed`. */
-export async function commitCompletion(cwd: string, scope: CommitScope, message: string): Promise<CommitOutcome> {
+/**
+ * Stage a clause's scope and commit it; only a commit git accepted answers `committed`.
+ * git records the clause's message followed by one `Model` trailer per entry of `models`.
+ */
+export async function commitCompletion(
+	cwd: string,
+	scope: CommitScope,
+	message: string,
+	models: readonly string[],
+): Promise<CommitOutcome> {
 	const repo = repositoryAt(cwd);
 	if (repo === null) return { kind: "inert", because: "no-repository" };
 	const root = repo.primaryRoot();
@@ -84,7 +93,7 @@ export async function commitCompletion(cwd: string, scope: CommitScope, message:
 			}
 		}
 		const commit: CommitRecord = {
-			sha: await repo.commitCreate(message, files === undefined ? {} : { files: [...files] }),
+			sha: await repo.commitCreate(withModelTrailers(message, models), files === undefined ? {} : { files: [...files] }),
 			message,
 			scope: files === undefined ? scope : { kind: "paths", files },
 		};
