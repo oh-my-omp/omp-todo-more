@@ -200,6 +200,15 @@ session's directory, exactly like its shell. Every task this `DONE` completes
 records the accepted commit — sha, message and resolved scope — and summaries,
 native cards, the snapshot and the ctx task log show it.
 
+git records the message followed by one `Model: <provider>/<model-id>` trailer
+per model the committing session ran since its previous todo commit — the
+assistant turns on its branch after the last snapshot that brought in a new
+commit, failed requests excluded, plus the session's current model — each once,
+in order of first use. Only the committing session's own models are named: a
+`task:*` worker commits its own work and names its own models. The item keeps
+the message as given; `git log --format='%(trailers:key=Model,valueonly)'`
+reads the models back. With no model on record the message is committed alone.
+
 Outside a checkout, or with a clean working tree, the clause is inert: no commit
 is made and its parameters are ignored, whether or not they were given. In a
 checkout with uncommitted work, a `DONE` without a clause is rejected and asks

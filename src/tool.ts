@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
 import { commitTodoState, type TodoSession } from "./commit.ts";
 import { commitCompletion, worktreeState } from "./git.ts";
+import { participatingModels } from "./models.ts";
 import { customFormat, parametersSchema, parseTodo, type TodoCommand, type TodoCommitClause, type TodoTarget } from "./protocol.ts";
 import {
 	type CommitRecord,
@@ -596,10 +597,11 @@ function operations(commands: TodoCommand[]): Operations {
  * completion that would leave the checkout dirty is refused.
  */
 async function completeWithCommit(
-	cwd: string,
+	session: TodoSession,
 	clause: TodoCommitClause | undefined,
 	closed: readonly WorkItem[],
 ): Promise<{ kind: "ok"; note?: string } | { kind: "refused"; message: string }> {
+	const cwd = session.sessionManager.getCwd();
 	const named = closed.length === 1 ? `Task ${JSON.stringify(closed[0]!.title)}` : `${closed.length} completed tasks`;
 	if (clause === undefined) {
 		const state = await worktreeState(cwd);
@@ -610,7 +612,12 @@ async function completeWithCommit(
 			message: `${named} would leave uncommitted work in ${state.root}: re-issue DONE "title" "<message>" to commit every change, or DONE "title" "<paths>" "<message>" to commit a scope.`,
 		};
 	}
-	const outcome = await commitCompletion(cwd, clause.scope, clause.message);
+	const outcome = await commitCompletion(
+		cwd,
+		clause.scope,
+		clause.message,
+		participatingModels(session.sessionManager.getBranch(), session.model),
+	);
 	switch (outcome.kind) {
 		case "committed":
 			for (const item of closed) item.commit = outcome.commit;
@@ -674,7 +681,7 @@ export async function runTodo(session: TodoSession, raw: unknown): Promise<Agent
 				.flatMap((phase) => phase.items)
 				.filter((item) => item.status === "completed" && !alreadyCompleted.has(item.title));
 			if (closed.length > 0) {
-				const step = await completeWithCommit(session.sessionManager.getCwd(), params.commit, closed);
+				const step = await completeWithCommit(session, params.commit, closed);
 				if (step.kind === "refused") {
 					return result(session, previous, formatSummary(previous, [step.message], true), { op, operations: ops, isError: true });
 				}

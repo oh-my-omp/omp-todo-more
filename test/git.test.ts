@@ -3,8 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { TodoSession } from "../src/commit.ts";
+import type { ModelRef } from "../src/models.ts";
 import { type CommitRecord, readTodoMore, type TodoMoreSnapshot, toSnapshot } from "../src/state.ts";
 import { runTodo, type TodoMoreDetails } from "../src/tool.ts";
 
@@ -52,9 +54,9 @@ type Harness = {
 	snapshot: () => TodoMoreSnapshot;
 };
 
-function fixture(cwd: string): Harness {
+function fixture(cwd: string, model?: ModelRef): Harness {
 	const sessionManager = SessionManager.inMemory(cwd);
-	const session: TodoSession = { sessionManager, setTodoPhases: () => {} };
+	const session: TodoSession = { sessionManager, setTodoPhases: () => {}, model };
 	return {
 		cwd,
 		session,
@@ -77,6 +79,31 @@ function commitOf(harness: Harness, title: string): CommitRecord {
 	if (commit === undefined) throw new Error(`Expected a commit on ${title}`);
 	return commit;
 }
+
+/** A settled assistant turn on the session's branch, as the host persists it. */
+function reply(harness: Harness, provider: string, model: string, stopReason: AssistantMessage["stopReason"] = "stop"): void {
+	const message: AssistantMessage = {
+		role: "assistant",
+		content: [{ type: "text", text: "done" }],
+		api: "anthropic-messages",
+		provider,
+		model,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason,
+		timestamp: Date.now(),
+	};
+	harness.session.sessionManager.appendMessage(message);
+}
+
+const trailers = (cwd: string, revision: string): Promise<string> =>
+	git(cwd, "log", "-1", "--format=%(trailers:key=Model,valueonly)", revision);
 
 describe("the git association of a completion", () => {
 	test("the session's directory is the repository under test", async () => {
@@ -197,5 +224,37 @@ describe("the git association of a completion", () => {
 		]);
 		expect(details.more).toEqual(harness.snapshot());
 		expect(itemOf(harness.snapshot(), "Implement").commit?.sha).toMatch(/^[0-9a-f]{40}$/);
+	});
+});
+
+describe("the Model trailers of a completion's commit", () => {
+	test("name each model of the session since its previous todo commit once, in order of first use", async () => {
+		const harness = fixture(await repository({ "a.txt": "one\n" }), { provider: "anthropic", id: "claude-opus-5-5" });
+		await harness.call(init, 'ADD "First" "Change a.txt" 5', 'ADD "Second" "Change a.txt again" 5');
+		reply(harness, "openai-codex", "gpt-6-luna");
+		reply(harness, "anthropic", "claude-opus-5-5");
+		reply(harness, "openai-codex", "gpt-6-luna");
+		reply(harness, "zai", "glm-5.2", "error");
+		await Bun.write(join(harness.cwd, "a.txt"), "two\n");
+		await harness.call('DONE "First" "Commit the first item"');
+
+		expect(await git(harness.cwd, "log", "-1", "--format=%B")).toBe(
+			"Commit the first item\n\nModel: openai-codex/gpt-6-luna\nModel: anthropic/claude-opus-5-5",
+		);
+		expect(commitOf(harness, "First").message).toBe("Commit the first item");
+
+		reply(harness, "bansos", "muse-spark-1.3-contributor");
+		await Bun.write(join(harness.cwd, "a.txt"), "three\n");
+		await harness.call('DONE "Second" "Commit the second item"');
+		expect(await trailers(harness.cwd, "HEAD")).toBe("bansos/muse-spark-1.3-contributor\nanthropic/claude-opus-5-5");
+		expect(await git(harness.cwd, "log", "-1", "--format=%s")).toBe("Commit the second item");
+	});
+
+	test("a session with no model on record commits the message alone", async () => {
+		const harness = fixture(await repository({ "a.txt": "one\n" }));
+		await harness.call(init, 'ADD "Implement" "Change the tracked file" 5');
+		await Bun.write(join(harness.cwd, "a.txt"), "two\n");
+		await harness.call('DONE "Implement" "Implement the change"');
+		expect(await git(harness.cwd, "log", "-1", "--format=%B")).toBe("Implement the change");
 	});
 });

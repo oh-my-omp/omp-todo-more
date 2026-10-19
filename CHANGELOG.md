@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `DONE` commits now end with one `Model: <provider>/<model-id>` git trailer per model the committing session ran since its previous todo commit (failed requests excluded, the current model included), each once in order of first use. A `task:*` worker's commits name its own models; the item's recorded message stays as given.
 - Incremental CRUD `todo` cards (`ADD`, `DONE`, `START`, `RM`, `DROP`, `BLOCK`, `UNBLOCK`, `EXPLAIN`, `ESTIMATE`, `GOAL`) now render only the delta of changed items/goal while collapsed in both ANSI and native views (`INIT` and `VIEW` still render the full list, and expanding any card restores the full snapshot); stop reminders now render only the reminder event header without listing todo items.
 - Native result cards now carry the `Todo` header with `closed/total` progress (`tool.target`, `targetKind: "text"`) and the bare `Todo` title for empty and error results, matching the upstream native `todo`; `TOOL_FIELDS` now shares the ANSI `renderCall`/`renderResult` hooks with the host-tool install, so `task:*` subagents get the same card.
 - Render one card per `todo` call: the registered tool merges its call and result views, so the streaming preview is the pending card and the result view replaces it in both ANSI and native transcripts instead of the preview body stacking above the same list in one block.
