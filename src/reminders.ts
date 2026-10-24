@@ -19,7 +19,11 @@
  *   provider error, a run that ended with tool calls still outstanding, or an
  *   abort nobody asked for (`agent-session.ts`, settle routing) — is nudged from
  *   `agent_end` instead, deferred by a grace window: the reminder is sent only
- *   when no turn, no queued message and no editor draft appeared meanwhile. A stop
+ *   when no turn, no queued message and no editor draft appeared meanwhile. An
+ *   account usage-limit 429 waits until one minute past the account reset instead
+ *   (`quota-wait.ts`), with a one-line notice above the editor naming the send time;
+ *   when that wait ends with a draft in the editor, the reminder waits for the
+ *   draft to clear. Ctrl+N or `/todo-more-cancel` cancels a pending reminder. A stop
  *   the human asked for (Esc/Ctrl+C/Enter, or a silent abort) never resumes, and a
  *   stalled chain is nudged once: it is armed again only after the run produces a
  *   successful tool result or another prompt starts a new cycle.
@@ -59,6 +63,7 @@ import { cfgTodoEager, cfgTodoReminders, cfgTodoRemindersMax } from "@oh-my-pi/p
 import { type NativeNode, node, span } from "@oh-my-pi/pi-tui";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 import { errorText } from "./errors.ts";
+import { type CutOffWait, cutOffWait, quotaDeadline, quotaNoticeLine } from "./quota-wait.ts";
 import {
 	actionableItems,
 	explanationText,
@@ -89,6 +94,14 @@ const TODO_TOOL = "todo";
  * resumes while the human is still looking at it.
  */
 const CUT_OFF_GRACE_MS = 10_000;
+/** Longest single timer segment of a quota wait; the wall clock decides when the deadline is reached. */
+const MAX_TIMER_SEGMENT_MS = 60 * 60_000;
+/** Recheck interval while a due quota reminder waits for the editor draft to clear. */
+const DRAFT_RECHECK_MS = 10_000;
+const QUOTA_NOTICE_WIDGET_KEY = "todo-more.quota-reminder";
+const CANCEL_SHORTCUT = "ctrl+n";
+const CANCEL_SHORTCUT_LABEL = "Ctrl+N";
+const CANCEL_COMMAND = "todo-more-cancel";
 
 // @upstream verbatim @oh-my-pi/pi-coding-agent@18.10.1 src/session/todo-tracker.ts#MID_RUN_NUDGE_MUTATION_THRESHOLD
 const MID_RUN_NUDGE_MUTATION_THRESHOLD = 12;
@@ -177,6 +190,39 @@ type Completion =
 
 const SILENT: Completion = { kind: "silent" };
 const RESET: Completion = { kind: "reset" };
+
+/**
+ * A stalled chain's cut-off nudge, held until the run moves again (a successful
+ * tool result), another prompt starts a new cycle, or the session or branch
+ * changes. One nudge per chain: a human who stops the run it started is not
+ * fought twice, and a stall that follows real progress is nudged again.
+ */
+type CutOffLatch =
+	| { readonly kind: "open" }
+	/** The nudge went out; its own continuation prompt (`text`) keeps the latch. */
+	| { readonly kind: "nudged"; readonly text: string }
+	/** The human cancelled the pending nudge. */
+	| { readonly kind: "cancelled" };
+
+const LATCH_OPEN: CutOffLatch = { kind: "open" };
+const LATCH_CANCELLED: CutOffLatch = { kind: "cancelled" };
+
+/** A cut-off settle waiting for its reminder. */
+type CutOffPlan = {
+	readonly ctx: ExtensionContext;
+	readonly session: AgentSession;
+	readonly message: AssistantMessage;
+	readonly wait: CutOffWait;
+};
+type PendingCutOff = CutOffPlan & { readonly timer: Timer };
+
+/** What a cut-off timer does when it fires. */
+type CutOffStep =
+	| { readonly kind: "wait"; readonly ms: number }
+	| { readonly kind: "drop" }
+	| { readonly kind: "remind"; readonly completion: Extract<Completion, { kind: "remind" }> };
+
+const DROP: CutOffStep = { kind: "drop" };
 
 const ownSession = (ctx: ExtensionContext): AgentSession | undefined => AgentRegistry.global().get(ctx.agent.id)?.session ?? undefined;
 
@@ -738,42 +784,60 @@ export function registerReminders(pi: ExtensionAPI): void {
 
 	/**
 	 * A deferred reminder for a cut-off settle: armed at `agent_end`, cancelled the
-	 * moment a turn takes over (a scheduled continuation, the human's own reply).
-	 * The grace window is the only reason it is not sent from the settle itself.
+	 * moment a turn takes over (a scheduled continuation, the human's own reply), a
+	 * session or branch change, or the human's Ctrl+N / `/todo-more-cancel`. The
+	 * wait (`cutOffWait`) is the only reason it is not sent from the settle itself.
 	 */
-	let cutOff: { readonly ctx: ExtensionContext; readonly timer: Timer } | undefined;
-	/**
-	 * The reminder text of the cut-off nudge this stalled chain already got, held
-	 * until the run moves again (a successful tool result) or another prompt starts
-	 * a new cycle. One nudge per chain: a human who stops the run it started is not
-	 * fought twice, and a stall that follows real progress is nudged again.
-	 */
-	let cutOffNudge: string | undefined;
-	const cancelCutOff = (): void => {
+	let cutOff: PendingCutOff | undefined;
+	let latch: CutOffLatch = LATCH_OPEN;
+	/** Every path that ends a pending reminder goes through here, so its notice never outlives it. */
+	const clearCutOff = (): void => {
 		if (cutOff === undefined) return;
-		cutOff.ctx.clearTimer(cutOff.timer);
+		const { ctx, timer, wait } = cutOff;
 		cutOff = undefined;
+		ctx.clearTimer(timer);
+		if (wait.kind === "quota" && ctx.hasUI) ctx.ui.setWidget(QUOTA_NOTICE_WIDGET_KEY, undefined);
 	};
-	const armCutOff = (ctx: ExtensionContext, session: AgentSession, message: AssistantMessage): void => {
-		cancelCutOff();
-		cutOff = {
-			ctx,
-			timer: ctx.setTimeout(() => {
-				cutOff = undefined;
-				try {
-					if (ownSession(ctx) !== session) return;
-					// A chain that already got its nudge waits for progress or a new cycle.
-					if (cutOffNudge !== undefined) return;
-					// The human owns the stop once a turn runs, a message waits, or a draft is being typed.
-					if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
-					if (ctx.hasUI && ctx.ui.getEditorText().trim() !== "") return;
-					const completion = checkCompletion(session, cycle, cycle.reminderCount, message, readTodoMore(ctx.sessionManager.getBranch()));
-					if (completion.kind !== "remind") return;
+	const nextStep = ({ ctx, session, message, wait }: CutOffPlan): CutOffStep => {
+		if (ownSession(ctx) !== session) return DROP;
+		if (wait.kind === "quota") {
+			const left = quotaDeadline(wait) - Date.now();
+			if (left > 0) return { kind: "wait", ms: Math.min(left, MAX_TIMER_SEGMENT_MS) };
+		}
+		// A chain that already got its nudge, or had it cancelled, waits for progress or a new cycle.
+		if (latch.kind !== "open") return DROP;
+		// The human owns the stop once a turn runs or a message waits.
+		if (!ctx.isIdle() || ctx.hasPendingMessages()) return DROP;
+		// A draft being typed: the grace window yields to it, a quota wait keeps its
+		// notice until the draft clears (a submitted draft starts a turn and cancels).
+		if (ctx.hasUI && ctx.ui.getEditorText().trim() !== "") return wait.kind === "quota" ? { kind: "wait", ms: DRAFT_RECHECK_MS } : DROP;
+		const completion = checkCompletion(session, cycle, cycle.reminderCount, message, readTodoMore(ctx.sessionManager.getBranch()));
+		return completion.kind === "remind" ? { kind: "remind", completion } : DROP;
+	};
+	const schedule = (plan: CutOffPlan, ms: number): void => {
+		const pending: PendingCutOff = { ...plan, timer: plan.ctx.setTimeout(() => fire(pending), ms) };
+		cutOff = pending;
+	};
+	const fire = (pending: PendingCutOff): void => {
+		if (cutOff !== pending) return;
+		let waiting = false;
+		try {
+			const step = nextStep(pending);
+			switch (step.kind) {
+				case "wait":
+					schedule(pending, step.ms);
+					waiting = true;
+					return;
+				case "drop":
+					return;
+				case "remind": {
+					clearCutOff();
+					const { completion } = step;
 					// The message itself is this turn's prompt and its own visible reminder, so
 					// there is no host continuation to hand a notice to: `pending` stays clear and
 					// `before_agent_start` leaves the reminder count alone (only `resetCycle` runs),
 					// which is what keeps the budget counting nudges across settles.
-					cutOffNudge = completion.text;
+					latch = { kind: "nudged", text: completion.text };
 					cycle.reminderCount = completion.attempt;
 					cycle.awaitingProgress = true;
 					cycle.mutationsSinceLastTouch = 0;
@@ -781,14 +845,71 @@ export function registerReminders(pi: ExtensionAPI): void {
 						{ customType: REMINDER_TYPE, content: completion.text, display: true, details: completion.details, attribution: "agent" },
 						{ deliverAs: "nextTurn", triggerTurn: true },
 					);
-				} catch (error) {
-					pi.logger.warn("todo-more cut-off reminder failed", { error: errorText(error) });
+					return;
 				}
-			}, CUT_OFF_GRACE_MS),
-		};
+				default: {
+					const unreachable: never = step;
+					throw new Error(`Unexpected cut-off step: ${String(unreachable)}`);
+				}
+			}
+		} catch (error) {
+			pi.logger.warn("todo-more cut-off reminder failed", { error: errorText(error) });
+		} finally {
+			if (!waiting && cutOff === pending) clearCutOff();
+		}
 	};
-	pi.on("agent_start", () => cancelCutOff());
-	pi.on("session_shutdown", () => cancelCutOff());
+	const armCutOff = (ctx: ExtensionContext, session: AgentSession, message: AssistantMessage): void => {
+		clearCutOff();
+		const wait = cutOffWait(message, Date.now());
+		const plan: CutOffPlan = { ctx, session, message, wait };
+		switch (wait.kind) {
+			case "grace":
+				schedule(plan, CUT_OFF_GRACE_MS);
+				return;
+			case "quota":
+				if (ctx.hasUI) {
+					ctx.ui.setWidget(QUOTA_NOTICE_WIDGET_KEY, [quotaNoticeLine(wait, CANCEL_SHORTCUT_LABEL, CANCEL_COMMAND)], {
+						placement: "aboveEditor",
+					});
+				}
+				schedule(plan, Math.min(quotaDeadline(wait) - Date.now(), MAX_TIMER_SEGMENT_MS));
+				return;
+			default: {
+				const unreachable: never = wait;
+				throw new Error(`Unexpected cut-off wait: ${String(unreachable)}`);
+			}
+		}
+	};
+	/** The human's cancel: the chain is latched as if it had been nudged. */
+	const cancelByHuman = (): boolean => {
+		if (cutOff === undefined) return false;
+		clearCutOff();
+		latch = LATCH_CANCELLED;
+		return true;
+	};
+	/** A session or branch change starts a new chain. */
+	const resetCutOffChain = (): void => {
+		clearCutOff();
+		latch = LATCH_OPEN;
+	};
+	pi.on("agent_start", () => clearCutOff());
+	pi.on("session_shutdown", () => clearCutOff());
+	pi.on("session_switch", () => resetCutOffChain());
+	pi.on("session_branch", () => resetCutOffChain());
+	pi.on("session_tree", () => resetCutOffChain());
+	pi.registerShortcut(CANCEL_SHORTCUT, {
+		description: "Cancel the pending Todo More reminder",
+		handler: () => {
+			cancelByHuman();
+		},
+	});
+	pi.registerCommand(CANCEL_COMMAND, {
+		description: "Cancel the pending Todo More reminder",
+		handler: async (_args: string, ctx: ExtensionContext) => {
+			const cancelled = cancelByHuman();
+			if (ctx.hasUI) ctx.ui.notify(cancelled ? "Todo reminder cancelled" : "No pending Todo reminder", "info");
+		},
+	});
 
 	pi.on("agent_end", (event, ctx) => {
 		try {
@@ -836,7 +957,8 @@ export function registerReminders(pi: ExtensionAPI): void {
 					cycle.awaitingProgress = false;
 					return;
 				case "remind":
-					armCutOff(ctx, session, cutOff);
+					// A chain already nudged or cancelled is not armed: a notice it would never act on stays off screen.
+					if (latch.kind === "open") armCutOff(ctx, session, cutOff);
 					return;
 				default: {
 					const unreachable: never = completion;
@@ -854,7 +976,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 			pending = NO_PENDING;
 			// This module's own cut-off nudge keeps its latch; any other prompt is a new
 			// cycle where the human or another continuation is driving.
-			if (event.prompt !== cutOffNudge) cutOffNudge = undefined;
+			if (latch.kind !== "nudged" || event.prompt !== latch.text) latch = LATCH_OPEN;
 			switch (own.kind) {
 				case "none":
 					break;
@@ -909,7 +1031,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 		onToolResult(cycle, message.toolName, message.isError);
 		// A cancelled or failed result is not progress: only a successful one settles the
 		// chain's nudge, so interrupting a running tool cannot re-arm it.
-		if (!message.isError) cutOffNudge = undefined;
+		if (!message.isError) latch = LATCH_OPEN;
 	});
 
 	pi.on("turn_end", (event, ctx) => {
