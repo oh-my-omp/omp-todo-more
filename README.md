@@ -226,6 +226,20 @@ tool-restricted sessions get it through the host tool slot. Stop reminders,
 mid-run nudges, the eager prelude, goal-mode context and request-only user
 reminders are kept. A human interruption is not resumed automatically.
 
+When the main session stops mid-work without a text answer — a provider error,
+a run that ended with tool calls outstanding, or an abort nobody asked for —
+the reminder is sent after a 10-second grace window, unless a turn, a queued
+message or an editor draft appeared meanwhile. An account usage-limit 429
+waits until one minute past the account reset instead: the provider's retry
+hint when the error carries one, otherwise omp's estimate for the limit (30
+minutes for an exhausted quota, marked as estimated). While it waits, a
+one-line notice above the editor shows the send time and the reason without
+taking focus; a draft still in the editor at that time holds the reminder
+until it is cleared. `Ctrl+N` or `/todo-more-cancel` cancels the pending
+reminder; submitting a message, switching sessions or branches, and
+shutting down cancel it too. The pending reminder does not survive the
+process.
+
 The planning guard reads the current branch when an edit actually executes,
 not when the tool batch is pre-checked; a Todo INIT/edit or RM/edit sequence
 therefore uses the accepted document's state at edit execution time.
