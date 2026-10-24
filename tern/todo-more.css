@@ -1,10 +1,13 @@
 /* OMP's nativeDock has thirteen stable source slots (interactive-mode.ts).
  * Preserve every slot and its native sizing; overlay only Todo More's row in
  * the existing activity track. The original Todo remains an invisible layout
- * reference, not an emptied domain projection. Revalidate on dock changes. */
+ * reference, not an emptied domain projection. Revalidate on dock changes.
+ * The column is a definite 100% track, not 1fr: Tern's grid sizes an fr track
+ * through its items' intrinsic widths, and a relayout after an edit (window or
+ * pane resize) then left the composer text at min-content width, one glyph. */
 .sf-dock[data-surface="omp.session"] {
 	display: grid;
-	grid-template-columns: 1fr;
+	grid-template-columns: 100%;
 	grid-template-rows: repeat(13, auto);
 	row-gap: 0;
 	position: relative;
