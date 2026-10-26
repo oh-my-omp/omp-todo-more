@@ -267,12 +267,16 @@ type TodoMoreReadResponse =
       kind: "ok";
       goal: { objective: string; measure: string; doneWhen: string } | null;
       openItems: readonly { phase: string; title: string; explanation: string | null }[];
+      counts: { pending: number; in_progress: number; completed: number; abandoned: number; blocked: number };
     }
   | { kind: "unavailable" };
 ```
 
-Only pending/in_progress items are returned; a missing goal or explanation is
-`null`. No session or a read error is `unavailable`, not an empty Todo. The
+`openItems` holds only pending/in_progress items; a missing goal or explanation
+is `null`. `counts` gives the number of items in each status over the whole
+list, all zero for an empty list, so a consumer can tell an empty list, one
+with blocked items left and one whose items are all closed apart. No session or
+a read error is `unavailable`, not an empty Todo. The
 channel writes no state, offers no watch, installs nothing into Tern and
 exports no internal reader. The listener is removed on the instance's
 `session_shutdown`; subagents use their own bus.

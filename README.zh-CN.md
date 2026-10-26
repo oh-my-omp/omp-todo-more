@@ -146,11 +146,12 @@ type TodoMoreReadResponse =
       kind: "ok";
       goal: { objective: string; measure: string; doneWhen: string } | null;
       openItems: readonly { phase: string; title: string; explanation: string | null }[];
+      counts: { pending: number; in_progress: number; completed: number; abandoned: number; blocked: number };
     }
   | { kind: "unavailable" };
 ```
 
-只返回 pending/in_progress 项；missing goal/explanation 为 null。无会话或读取异常是 unavailable，不是空 Todo。通道不写状态、不提供 watch，不安装 Tern、不导出内部 reader。监听器在实例 session_shutdown 取消，子会话使用自己的 bus。
+`openItems` 只含 pending/in_progress 项；missing goal/explanation 为 null。`counts` 是整个列表各状态的项数，空列表全为 0，消费者据此区分空列表、仍有 blocked 项和全部关闭的列表。无会话或读取异常是 unavailable，不是空 Todo。通道不写状态、不提供 watch，不安装 Tern、不导出内部 reader。监听器在实例 session_shutdown 取消，子会话使用自己的 bus。
 
 completion judge 应在构造模型 prompt 前请求一次，并在模型返回后、检查 openItems 前再次请求；不可用时沿用 warning + fail-open。ctx 历史消费者从成功的 `details.changes` 记录每个已接受逻辑操作及其显式 goal 替换，不把历史当作当前 Todo 状态。
 
