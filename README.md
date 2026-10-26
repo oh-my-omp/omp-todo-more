@@ -32,6 +32,17 @@ verification should use a source copy under `/tmp` with no development
 `node_modules`; type-checking cannot prove that the OMP binary can load the
 host imports.
 
+## UI language
+
+Todo More localizes its human-facing labels, cards, reminders, editor and
+notifications. `OMOMP_LANG=en` or `OMOMP_LANG=zh` selects the language
+(case-insensitive); when it is unset, the plugin reads `omomp-lang.language`
+from the single `omomp.yml`, `omomp.yaml`, `omomp.json` or `omomp.toml` in the
+OMP agent directory, then falls back to `LC_ALL`, `LC_MESSAGES`, `LANG` and
+English. Configuration changes apply on the next process start. Command names,
+configuration keys, protocol values, model-facing prompts and tool-result
+content remain unchanged.
+
 ## Tool and state
 
 The model sends one Todo document per call. OMP providers with custom-tool

@@ -1,11 +1,11 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type ToolRenderResultOptions, z } from "@oh-my-pi/pi-coding-agent";
 import { type Component, replaceTabs, Text, type Theme, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { tr } from "./i18n.ts";
 import { previewTodo, type TodoCommand, type TodoPreview, type TodoTarget } from "./protocol.ts";
 import {
 	commitScopeSchema,
 	commitScopeText,
-	goalLines,
 	TODO_STATUSES,
 	type TodoMoreSnapshot,
 	type TodoStatus,
@@ -51,23 +51,39 @@ export const detailsSchema = z.object({
 });
 type Item = TodoMoreSnapshot["phases"][number]["items"][number];
 
+function goalUiLines(goal: TodoMoreSnapshot["goal"]): string[] {
+	const missing = tr("[goal missing]", "[缺少目标]");
+	if (goal === null) {
+		return [
+			`${tr("Objective", "目标")}: ${missing}`,
+			`${tr("Measure", "衡量方式")}: ${missing}`,
+			`${tr("Done when", "完成条件")}: ${missing}`,
+		];
+	}
+	return [
+		`${tr("Objective", "目标")}: ${goal.objective}`,
+		`${tr("Measure", "衡量方式")}: ${goal.measure}`,
+		`${tr("Done when", "完成条件")}: ${goal.doneWhen}`,
+	];
+}
+
 // Streaming arguments may not yet contain input; protocol parsing owns complete-line detection.
 const callSchema = z.object({ input: z.string().optional() });
 type Call = TodoPreview;
 export function parseCall(args: unknown): Call {
 	const parsed = callSchema.safeParse(args);
-	if (!parsed.success) return { commands: [], pending: "", complete: false, error: "Expected Todo input text" };
+	if (!parsed.success) return { commands: [], pending: "", complete: false, error: tr("Expected Todo input text", "需要 Todo 输入文本") };
 	return previewTodo(parsed.data.input ?? "");
 }
 
 function previewTarget(target: TodoTarget): string {
 	switch (target.kind) {
 		case "task":
-			return `task: ${target.title}`;
+			return `${tr("task", "任务")}: ${target.title}`;
 		case "phase":
-			return `phase: ${target.name}`;
+			return `${tr("phase", "阶段")}: ${target.name}`;
 		case "all":
-			return "all todos";
+			return tr("all todos", "全部待办");
 		default: {
 			const unreachable: never = target;
 			throw new Error(`Unexpected todo target: ${String(unreachable)}`);
@@ -80,34 +96,50 @@ function commandPreviewLines(command: TodoCommand): string[] {
 		case "init":
 		case "goal":
 			return [
-				`${command.kind.toUpperCase()} goal`,
-				`  Objective: ${command.goal.objective}`,
-				`  Measure: ${command.goal.measure}`,
-				`  Done when: ${command.goal.doneWhen}`,
+				`${command.kind.toUpperCase()} ${tr("goal", "目标")}`,
+				`  ${tr("Objective", "目标")}: ${command.goal.objective}`,
+				`  ${tr("Measure", "衡量方式")}: ${command.goal.measure}`,
+				`  ${tr("Done when", "完成条件")}: ${command.goal.doneWhen}`,
 			];
 		case "phase":
-			return [`PHASE: ${command.name} (ADD context)`];
+			return [`PHASE: ${command.name} (${tr("ADD context", "ADD 上下文")})`];
 		case "add":
-			return [`ADD task: ${command.title}`, `  Explanation: ${command.explanation}`, `  Estimate: ${command.estimatedMinutes}m`];
+			return [
+				`ADD ${tr("task", "任务")}: ${command.title}`,
+				`  ${tr("Explanation", "说明")}: ${command.explanation}`,
+				`  ${tr("Estimate", "预计")}: ${command.estimatedMinutes}${tr("m", "分钟")}`,
+			];
 		case "explain":
-			return [`EXPLAIN task: ${command.title}`, `  Explanation: ${command.explanation}`];
+			return [`EXPLAIN ${tr("task", "任务")}: ${command.title}`, `  ${tr("Explanation", "说明")}: ${command.explanation}`];
 		case "estimate":
-			return [`ESTIMATE task: ${command.title}`, `  Estimate: ${command.estimatedMinutes}m`];
+			return [
+				`ESTIMATE ${tr("task", "任务")}: ${command.title}`,
+				`  ${tr("Estimate", "预计")}: ${command.estimatedMinutes}${tr("m", "分钟")}`,
+			];
 		case "start":
-			return [`START task: ${command.title}`];
+			return [`START ${tr("task", "任务")}: ${command.title}`];
 		case "done":
 			return [
 				`DONE ${previewTarget(command.target)}`,
-				...(command.commit === undefined ? [] : [`  Commit ${commitScopeText(command.commit.scope)}: ${command.commit.message}`]),
+				...(command.commit === undefined
+					? []
+					: [
+							`  ${tr("Commit", "提交")} ${
+								command.commit.scope.kind === "all" ? tr("all changes", "全部更改") : commitScopeText(command.commit.scope)
+							}: ${command.commit.message}`,
+						]),
 			];
 		case "drop":
 		case "rm":
 		case "unblock":
 			return [`${command.kind.toUpperCase()} ${previewTarget(command.target)}`];
 		case "block":
-			return [`BLOCK ${previewTarget(command.target)}`, ...(command.reason === undefined ? [] : [`  Reason: ${command.reason}`])];
+			return [
+				`BLOCK ${previewTarget(command.target)}`,
+				...(command.reason === undefined ? [] : [`  ${tr("Reason", "原因")}: ${command.reason}`]),
+			];
 		case "view":
-			return ["VIEW current todos"];
+			return [`VIEW ${tr("current todos", "当前待办")}`];
 		default: {
 			const unreachable: never = command;
 			throw new Error(`Unexpected todo command: ${String(unreachable)}`);
@@ -117,12 +149,17 @@ function commandPreviewLines(command: TodoCommand): string[] {
 
 /** Shared display-only intent for ANSI and native call views, never a projected snapshot. */
 export function callPreviewLines(call: Call): string[] {
-	const lines = ["Preview only — not committed."];
+	const lines = [tr("Preview only — not committed.", "仅预览 — 未提交。")];
 	for (const command of call.commands) lines.push(...commandPreviewLines(command));
-	if (call.commands.length === 0) lines.push("Waiting for complete command lines.");
-	if (call.error) lines.push(`Invalid preview: ${call.error}`);
-	if (!call.complete && call.pending !== "") lines.push(`Pending line — unfinished, not executable: ${call.pending}`);
-	lines.push(call.complete ? "Document complete; awaiting execution." : "Generating — awaiting a complete Todo document.");
+	if (call.commands.length === 0) lines.push(tr("Waiting for complete command lines.", "等待完整命令行。"));
+	if (call.error) lines.push(`${tr("Invalid preview", "预览无效")}: ${call.error}`);
+	if (!call.complete && call.pending !== "")
+		lines.push(`${tr("Pending line — unfinished, not executable", "待处理行 — 未完成，无法执行")}: ${call.pending}`);
+	lines.push(
+		call.complete
+			? tr("Document complete; awaiting execution.", "文档完整；等待执行。")
+			: tr("Generating — awaiting a complete Todo document.", "正在生成 — 等待完整 Todo 文档。"),
+	);
 	return lines.map(forDisplay);
 }
 
@@ -204,7 +241,10 @@ function selectWithinCap(items: Item[]): { items: Item[]; summary: string } {
 	const active = items.filter((item) => item.status === "in_progress");
 	if (active.length > COLLAPSED_ITEMS) {
 		const hidden = active.length - COLLAPSED_ITEMS;
-		return { items: active.slice(0, COLLAPSED_ITEMS), summary: `… ${hidden} more active todo${hidden === 1 ? "" : "s"}` };
+		return {
+			items: active.slice(0, COLLAPSED_ITEMS),
+			summary: tr(`… ${hidden} more active todo${hidden === 1 ? "" : "s"}`, `… 还有 ${hidden} 个进行中的待办`),
+		};
 	}
 	const firstActive = active[0];
 	const start = firstActive === undefined ? 0 : items.indexOf(firstActive);
@@ -215,7 +255,10 @@ function selectWithinCap(items: Item[]): { items: Item[]; summary: string } {
 	}
 	const selected = [...active, ...fill];
 	const hidden = items.length - selected.length;
-	return { items: selected, summary: hidden > 0 ? `… ${hidden} more todo${hidden === 1 ? "" : "s"}` : "" };
+	return {
+		items: selected,
+		summary: hidden > 0 ? tr(`… ${hidden} more todo${hidden === 1 ? "" : "s"}`, `… 还有 ${hidden} 个待办`) : "",
+	};
 }
 // @upstream-end
 
@@ -239,7 +282,7 @@ export type ResultView =
 	| { readonly kind: "delta"; readonly goalChanged: boolean; readonly phases: readonly DeltaPhase[] };
 
 export function compactRemovedLabel(title: string): string {
-	return `${forDisplay(title)} · removed`;
+	return `${forDisplay(title)} · ${tr("removed", "已删除")}`;
 }
 
 /** Full view for INIT, VIEW and expanded cards; incremental CRUD shows only the items/goal changed in this call. */
@@ -395,9 +438,10 @@ function completionLabel(text: string, transitioned: boolean, frame: number | un
 // @upstream adapted @oh-my-pi/pi-tui@18.10.1 src/tools/todo.ts#formatTodoLine
 /** One row per task: estimate and missing explanation stay inline so the collapsed card keeps every field on one line. */
 export function compactTodoLabel(item: Item): string {
-	const parts = [forDisplay(item.title), item.time.kind === "estimated" ? `${item.time.minutes}m` : "no estimate"];
-	if (item.explanation === null) parts.push("[explanation missing]");
-	if (item.status === "blocked") parts.push(item.blocker ? `blocked: ${forDisplay(item.blocker)}` : "blocked");
+	const parts = [forDisplay(item.title), item.time.kind === "estimated" ? `${item.time.minutes}m` : tr("no estimate", "无估计")];
+	if (item.explanation === null) parts.push(tr("[explanation missing]", "[缺少说明]"));
+	if (item.status === "blocked")
+		parts.push(item.blocker ? `${tr("blocked", "已阻塞")}: ${forDisplay(item.blocker)}` : tr("blocked", "已阻塞"));
 	if (item.commit !== undefined) parts.push(item.commit.sha.slice(0, 7));
 	return parts.join(" · ");
 }
@@ -425,7 +469,7 @@ function formatItem(item: Item, theme: Theme, transitioned: boolean, frame: numb
 
 // @upstream adapted @oh-my-pi/pi-tui@18.10.1 src/render/status-line.ts#renderStatusLine
 function statusLine(theme: Theme, icon: string, meta: string): string {
-	return `${icon} ${theme.fg("accent", "Todo")}${meta ? ` ${theme.fg("dim", forDisplay(meta).replace(/\r\n?|\n/g, " "))}` : ""}`;
+	return `${icon} ${theme.fg("accent", tr("Todo", "待办"))}${meta ? ` ${theme.fg("dim", forDisplay(meta).replace(/\r\n?|\n/g, " "))}` : ""}`;
 }
 // @upstream-end
 
@@ -461,7 +505,7 @@ function framedCard(theme: Theme, header: string, build: () => string[], error =
 // @upstream adapted @oh-my-pi/pi-tui@18.10.1 src/tools/todo.ts#todoToolRenderer.renderCall
 export function renderTodoCall(args: unknown, _options: ToolRenderResultOptions, theme: Theme): Component {
 	const call = parseCall(args);
-	const header = statusLine(theme, theme.styledSymbol("status.pending", "muted"), "preview — not committed");
+	const header = statusLine(theme, theme.styledSymbol("status.pending", "muted"), tr("preview — not committed", "预览 — 未提交"));
 	return framedCard(theme, header, () => callPreviewLines(call).map((line) => theme.fg("dim", line)));
 }
 // @upstream-end
@@ -476,7 +520,10 @@ export function renderTodoResult(
 	const text = result.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
 	const parsed = detailsSchema.safeParse(result.details);
 	if (result.isError || !parsed.success) {
-		const detail = forDisplay(text || (result.isError ? "Todo operation failed" : "Invalid todo-more result details"))
+		const detail = forDisplay(
+			text ||
+				(result.isError ? tr("Todo operation failed", "待办操作失败") : tr("Invalid todo-more result details", "Todo More 结果详情无效")),
+		)
 			.replace(/^Error:\s*/, "")
 			.trim();
 		return framedCard(theme, statusLine(theme, theme.styledSymbol("status.error", "error"), ""), () => [theme.fg("error", detail)], true);
@@ -487,15 +534,16 @@ export function renderTodoResult(
 	const completionKeys = new Set(completed.map((item) => `${item.phase}\u0000${item.content}`));
 	const { closed, total } = progressCounts(details.more);
 	const header = statusLine(theme, theme.styledSymbol("tool.todo", "accent"), `${closed}/${total}`);
-	if (total === 0) return new Text(`${header}\n  ${theme.fg("dim", "No todos")}`, 0, 0);
+	if (total === 0) return new Text(`${header}\n  ${theme.fg("dim", tr("No todos", "没有待办"))}`, 0, 0);
 	return framedCard(theme, header, () => {
 		const lines: string[] = [];
 		const { expanded, spinnerFrame } = options;
 		const view = resultView(details, args, expanded);
 		if (view.kind === "delta") {
 			if (view.goalChanged) {
-				if (details.more.goal === null) lines.push(theme.fg("warning", "Objective: [goal missing]"));
-				else for (const line of goalLines(details.more.goal)) lines.push(theme.fg("dim", forDisplay(line)));
+				if (details.more.goal === null)
+					lines.push(theme.fg("warning", `${tr("Objective", "目标")}: ${tr("[goal missing]", "[缺少目标]")}`));
+				else for (const line of goalUiLines(details.more.goal)) lines.push(theme.fg("dim", forDisplay(line)));
 			}
 			for (let index = 0; index < view.phases.length; index++) {
 				const phase = view.phases[index];
@@ -512,7 +560,9 @@ export function renderTodoResult(
 							const continued = last ? "   " : `${theme.tree.vertical}  `;
 							lines.push(`  ${branch} ${formatItem(item, theme, completionKeys.has(`${phase.name}\u0000${item.title}`), spinnerFrame)}`);
 							if (phase.explained.has(item.title)) {
-								const explanation = forDisplay(item.explanation ?? "(no explanation yet: add one with EXPLAIN)");
+								const explanation = forDisplay(
+									item.explanation ?? tr("(no explanation yet: add one with EXPLAIN)", "（尚无说明：请使用 EXPLAIN 添加）"),
+								);
 								for (const line of explanation.split("\n")) lines.push(`  ${theme.fg("dim", continued)}  ${theme.fg("dim", line)}`);
 							}
 						}
@@ -522,12 +572,12 @@ export function renderTodoResult(
 						const name = `${phaseRomanNumeral(index + 1)}. ${forDisplay(phase.name)}`;
 						lines.push(theme.fg("accent", theme.bold(name)));
 						lines.push(
-							`  ${theme.fg("dim", theme.tree.last)} ${theme.fg("error", `${theme.checkbox.unchecked} ${strike("Phase removed")}`)}`,
+							`  ${theme.fg("dim", theme.tree.last)} ${theme.fg("error", `${theme.checkbox.unchecked} ${strike(tr("Phase removed", "阶段已删除"))}`)}`,
 						);
 						break;
 					}
 					case "removed_tasks": {
-						const name = `${phaseRomanNumeral(index + 1)}. Removed`;
+						const name = `${phaseRomanNumeral(index + 1)}. ${tr("Removed", "已删除")}`;
 						lines.push(theme.fg("accent", theme.bold(name)));
 						for (let row = 0; row < phase.titles.length; row++) {
 							const title = phase.titles[row];
@@ -546,9 +596,9 @@ export function renderTodoResult(
 			}
 			return lines;
 		}
-		if (details.more.goal === null) lines.push(theme.fg("warning", "Objective: [goal missing]"));
+		if (details.more.goal === null) lines.push(theme.fg("warning", `${tr("Objective", "目标")}: ${tr("[goal missing]", "[缺少目标]")}`));
 		else {
-			const goal = goalLines(details.more.goal);
+			const goal = goalUiLines(details.more.goal);
 			for (const line of expanded ? goal : goal.slice(0, 1)) lines.push(theme.fg("dim", forDisplay(line)));
 		}
 		const multiPhase = phases.length > 1;
@@ -569,7 +619,9 @@ export function renderTodoResult(
 				const continued = last ? "   " : `${theme.tree.vertical}  `;
 				lines.push(`  ${branch} ${formatItem(item, theme, completionKeys.has(`${phase.name}\u0000${item.title}`), spinnerFrame)}`);
 				if (expanded && !isClosed(item)) {
-					const explanation = forDisplay(item.explanation ?? "(no explanation yet: add one with EXPLAIN)");
+					const explanation = forDisplay(
+						item.explanation ?? tr("(no explanation yet: add one with EXPLAIN)", "（尚无说明：请使用 EXPLAIN 添加）"),
+					);
 					for (const line of explanation.split("\n")) lines.push(`  ${theme.fg("dim", continued)}  ${theme.fg("dim", line)}`);
 				}
 			}

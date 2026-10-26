@@ -63,6 +63,7 @@ import { cfgTodoEager, cfgTodoReminders, cfgTodoRemindersMax } from "@oh-my-pi/p
 import { type NativeNode, node, span } from "@oh-my-pi/pi-tui";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 import { errorText } from "./errors.ts";
+import { tr } from "./i18n.ts";
 import { type CutOffWait, cutOffWait, quotaDeadline, quotaNoticeLine } from "./quota-wait.ts";
 import {
 	actionableItems,
@@ -736,7 +737,10 @@ export const renderReminder: MessageRenderer = (message, _options, theme) => {
 	if (!parsed.success) return undefined;
 	const { items, attempt, max } = parsed.data;
 	const count = items.length;
-	const header = `${count} incomplete ${count === 1 ? "todo" : "todos"} - reminder ${attempt}/${max}`;
+	const header = tr(
+		`${count} incomplete ${count === 1 ? "todo" : "todos"} - reminder ${attempt}/${max}`,
+		`${count} 个待办未完成 - 提醒 ${attempt}/${max}`,
+	);
 	return new NativeReminderText(theme.fg("warning", `${theme.icon.warning} ${header}`), header);
 };
 // @upstream-end
@@ -898,16 +902,20 @@ export function registerReminders(pi: ExtensionAPI): void {
 	pi.on("session_branch", () => resetCutOffChain());
 	pi.on("session_tree", () => resetCutOffChain());
 	pi.registerShortcut(CANCEL_SHORTCUT, {
-		description: "Cancel the pending Todo More reminder",
+		description: tr("Cancel the pending Todo More reminder", "取消待发的 Todo More 提醒"),
 		handler: () => {
 			cancelByHuman();
 		},
 	});
 	pi.registerCommand(CANCEL_COMMAND, {
-		description: "Cancel the pending Todo More reminder",
+		description: tr("Cancel the pending Todo More reminder", "取消待发的 Todo More 提醒"),
 		handler: async (_args: string, ctx: ExtensionContext) => {
 			const cancelled = cancelByHuman();
-			if (ctx.hasUI) ctx.ui.notify(cancelled ? "Todo reminder cancelled" : "No pending Todo reminder", "info");
+			if (ctx.hasUI)
+				ctx.ui.notify(
+					cancelled ? tr("Todo reminder cancelled", "待办提醒已取消") : tr("No pending Todo reminder", "没有待发的待办提醒"),
+					"info",
+				);
 		},
 	});
 

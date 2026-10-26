@@ -21,6 +21,15 @@ todo:
 
 本地开发使用 `omp plugin link <package-directory>`。运行验证应使用 `/tmp` 下无开发 `node_modules` 的源码副本；类型检查不能证明 OMP 二进制能加载 host imports。
 
+## 界面语言
+
+Todo More 会本地化面向人的标签、卡片、提醒、编辑器和通知。设置
+`OMOMP_LANG=en` 或 `OMOMP_LANG=zh`（不区分大小写）即可选择语言；未设置时，
+插件从 OMP agent 目录中唯一的 `omomp.yml`、`omomp.yaml`、`omomp.json` 或
+`omomp.toml` 读取 `omomp-lang.language`，再依次回退到 `LC_ALL`、
+`LC_MESSAGES`、`LANG`，最后使用英语。配置修改在下次进程启动时生效。命令名、
+配置键、协议值、面向模型的 prompt 和返回模型的 tool-result 内容保持不变。
+
 ## 工具与状态
 
 模型每次调用发送一份 Todo 文档。支持 custom-tool 的 OMP provider 使用 edit 风格的 Lark grammar；普通 function-tool provider 发送 `{input: "<同一份文档>"}`，两者共用解析和执行路径。

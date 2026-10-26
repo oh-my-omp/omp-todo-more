@@ -54,6 +54,7 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { registerCtx } from "./src/ctx/index.ts";
 import { registerCtxTasklog } from "./src/ctx/tasklog.ts";
 import { errorText } from "./src/errors.ts";
+import { tr } from "./src/i18n.ts";
 import { describeTodoCall, describeTodoResult } from "./src/native.ts";
 import { registerOvertime } from "./src/overtime.ts";
 import { registerPlanning } from "./src/planning.ts";
@@ -76,7 +77,6 @@ const TODO_AGENTS: Record<string, true> = {
 /** Fields shared by the registered tool and the host-tool install, matching the native tool's. */
 const TOOL_FIELDS = {
 	name: TOOL_NAME,
-	label: "Todo",
 	summary: "Write a structured todo list with a goal to track progress within a session",
 	description: DESCRIPTION,
 	parameters: parametersSchema,
@@ -117,8 +117,13 @@ async function installForTask(ctx: ExtensionContext): Promise<void> {
 		await session.setActiveToolsByName([...enabled, TOOL_NAME]);
 		return;
 	}
-	// A tool-restricted session registers no extension tools; the RPC host-tool slot still takes one.
-	const hostTool = { ...TOOL_FIELDS, execute: async (_toolCallId: string, params: unknown) => runTodo(session, params) };
+	const hostTool = {
+		...TOOL_FIELDS,
+		get label(): string {
+			return tr("Todo", "待办");
+		},
+		execute: async (_toolCallId: string, params: unknown) => runTodo(session, params),
+	};
 	// The host registry erases each tool's parameter schema; the tool validates its input itself.
 	await session.refreshRpcHostTools([hostTool as unknown as AgentTool]);
 }
@@ -126,6 +131,9 @@ async function installForTask(ctx: ExtensionContext): Promise<void> {
 /** The registered `todo` tool: shared fields, native describe hooks, ANSI renderers and the merge flag. */
 export const TODO_TOOL_DEFINITION = {
 	...TOOL_FIELDS,
+	get label(): string {
+		return tr("Todo", "待办");
+	},
 	execute: async (
 		_toolCallId: string,
 		params: unknown,

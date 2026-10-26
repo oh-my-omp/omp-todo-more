@@ -21,12 +21,70 @@ import {
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { saveTodoEdit, type TodoEdit } from "./edit.ts";
 import { errorText } from "./errors.ts";
+import { tr } from "./i18n.ts";
 import { describeSnapshot, describeTodoHud } from "./native.ts";
-import { goalLines, readTodoMore, timeEstimateText, toSnapshot } from "./state.ts";
+import { type ItemTime, readTodoMore, type TodoGoal, type TodoStatus, toSnapshot } from "./state.ts";
 
 const FIELDS = ["objective", "measure", "doneWhen"] as const;
 type GoalField = (typeof FIELDS)[number];
-const LABELS: Record<GoalField, string> = { objective: "Objective", measure: "Measure", doneWhen: "Done when" };
+
+function goalFieldLabel(field: GoalField): string {
+	switch (field) {
+		case "objective":
+			return tr("Objective", "目标");
+		case "measure":
+			return tr("Measure", "衡量方式");
+		case "doneWhen":
+			return tr("Done when", "完成条件");
+		default: {
+			const unreachable: never = field;
+			throw new Error(`Unexpected goal field: ${String(unreachable)}`);
+		}
+	}
+}
+
+function uiGoalLines(goal: TodoGoal): string[] {
+	return [
+		`${tr("Objective", "目标")}: ${goal.objective}`,
+		`${tr("Measure", "衡量方式")}: ${goal.measure}`,
+		`${tr("Done when", "完成条件")}: ${goal.doneWhen}`,
+	];
+}
+
+function uiTimeEstimate(time: ItemTime): string {
+	return time.kind === "estimated"
+		? `${tr("Estimate", "预计")}: ${time.minutes} ${tr("min", "分钟")}`
+		: tr("(no time estimate yet: add one with ESTIMATE)", "（尚无时间估计：请使用 ESTIMATE 添加）");
+}
+
+function uiStatus(status: TodoStatus): string {
+	switch (status) {
+		case "pending":
+			return tr("pending", "待处理");
+		case "in_progress":
+			return tr("in progress", "进行中");
+		case "completed":
+			return tr("completed", "已完成");
+		case "abandoned":
+			return tr("abandoned", "已放弃");
+		case "blocked":
+			return tr("blocked", "已阻塞");
+		default: {
+			const unreachable: never = status;
+			throw new Error(`Unexpected todo status: ${String(unreachable)}`);
+		}
+	}
+}
+
+function editErrorText(message: string): string {
+	if (message === "Authority branch did not accept the todo snapshot.")
+		return tr("Authority branch did not accept the Todo snapshot.", "权威分支未接受 Todo 快照。");
+	if (message.startsWith("Todo branch snapshot was not accepted: "))
+		return `${tr("Todo branch snapshot was not accepted", "Todo 分支快照未被接受")}${message.slice("Todo branch snapshot was not accepted".length)}`;
+	if (message.startsWith("Todo branch state accepted, but host projection failed: "))
+		return `${tr("Todo branch state accepted, but host projection failed", "Todo 分支状态已接受，但宿主投影失败")}${message.slice("Todo branch state accepted, but host projection failed".length)}`;
+	return message;
+}
 type DraftField = { editor: Editor; field: FormField };
 type Mode =
 	| { kind: "panel"; selected: number }
@@ -95,7 +153,7 @@ class TodoPanel implements Component {
 	private openGoal(): void {
 		const state = readTodoMore(this.session.sessionManager.getBranch());
 		if (state.kind === "empty") {
-			this.error = "Todo list is empty.";
+			this.error = tr("Todo list is empty.", "待办列表为空。");
 			this.changed();
 			return;
 		}
@@ -105,9 +163,9 @@ class TodoPanel implements Component {
 			kind: "goal",
 			active: "objective",
 			fields: {
-				objective: this.makeField("Objective", goal.objective),
-				measure: this.makeField("Measure", goal.measure),
-				doneWhen: this.makeField("Done when", goal.doneWhen),
+				objective: this.makeField(goalFieldLabel("objective"), goal.objective),
+				measure: this.makeField(goalFieldLabel("measure"), goal.measure),
+				doneWhen: this.makeField(goalFieldLabel("doneWhen"), goal.doneWhen),
 			},
 		};
 		this.error = undefined;
@@ -117,13 +175,13 @@ class TodoPanel implements Component {
 	private openExplanation(title: string): void {
 		const state = readTodoMore(this.session.sessionManager.getBranch());
 		if (state.kind === "empty") {
-			this.error = "Todo list is empty.";
+			this.error = tr("Todo list is empty.", "待办列表为空。");
 			this.changed();
 			return;
 		}
 		const item = state.phases.flatMap((phase) => phase.items).find((candidate) => candidate.title === title);
 		if (!item) {
-			this.error = `Task "${title}" not found`;
+			this.error = `${tr("Task", "任务")} "${title}" ${tr("not found", "未找到")}`;
 			this.changed();
 			return;
 		}
@@ -131,7 +189,7 @@ class TodoPanel implements Component {
 		this.mode = {
 			kind: "explanation",
 			title,
-			draft: this.makeField(`Explanation: ${title}`, item.explanation.kind === "explained" ? item.explanation.text : ""),
+			draft: this.makeField(`${tr("Explanation", "说明")}: ${title}`, item.explanation.kind === "explained" ? item.explanation.text : ""),
 		};
 		this.error = undefined;
 		this.changed();
@@ -184,7 +242,7 @@ class TodoPanel implements Component {
 				break;
 			case "failed":
 			case "rejected":
-				this.error = result.message;
+				this.error = editErrorText(result.message);
 				break;
 			default: {
 				const unreachable: never = result;
@@ -208,7 +266,7 @@ class TodoPanel implements Component {
 		switch (this.mode.kind) {
 			case "panel": {
 				role = "todo-more.panel";
-				head = "Todo More";
+				head = tr("Todo More", "Todo More");
 				const snapshot = toSnapshot(readTodoMore(branch));
 				let count = 0;
 				let selectedTitle: string | undefined;
@@ -217,14 +275,17 @@ class TodoPanel implements Component {
 						if (++count === this.mode.selected) selectedTitle = item.title;
 					}
 				this.mode.selected = Math.min(this.mode.selected, count + 1);
-				body.push(this.button("Edit goal", "todo-more.goal", this.mode.selected === 0), ...describeSnapshot(snapshot, true, selectedTitle));
-				actions = [this.button("Close", "close", this.mode.selected === count + 1)];
+				body.push(
+					this.button(tr("Edit goal", "编辑目标"), "todo-more.goal", this.mode.selected === 0),
+					...describeSnapshot(snapshot, true, selectedTitle),
+				);
+				actions = [this.button(tr("Close", "关闭"), "close", this.mode.selected === count + 1)];
 				break;
 			}
 			case "goal": {
 				role = "todo-more.goal-editor";
-				head = "Edit goal";
-				actions = [this.button("Save", "todo-more.save"), this.button("Cancel", "close")];
+				head = tr("Edit goal", "编辑目标");
+				actions = [this.button(tr("Save", "保存"), "todo-more.save"), this.button(tr("Cancel", "取消"), "close")];
 				for (const name of FIELDS) {
 					const draft = this.mode.fields[name];
 					draft.field.focused = this.focused && name === this.mode.active;
@@ -235,8 +296,8 @@ class TodoPanel implements Component {
 									"col",
 									{ gap: "xs", actions: { click: `todo-more.field.${name}` } },
 									[
-										node("text", { spans: [span(LABELS[name], "strong")] }),
-										node("text", { text: draft.editor.getExpandedText() || "[empty]", wrap: "word" }),
+										node("text", { spans: [span(goalFieldLabel(name), "strong")] }),
+										node("text", { text: draft.editor.getExpandedText() || tr("[empty]", "[空]"), wrap: "word" }),
 									],
 									name,
 								),
@@ -246,10 +307,10 @@ class TodoPanel implements Component {
 			}
 			case "explanation":
 				role = "todo-more.explanation-editor";
-				head = `Edit explanation: ${this.mode.title}`;
+				head = `${tr("Edit explanation", "编辑说明")}: ${this.mode.title}`;
 				this.mode.draft.field.focused = this.focused;
 				body.push(this.mode.draft.field);
-				actions = [this.button("Save", "todo-more.save"), this.button("Cancel", "close")];
+				actions = [this.button(tr("Save", "保存"), "todo-more.save"), this.button(tr("Cancel", "取消"), "close")];
 				break;
 			default: {
 				const unreachable: never = this.mode;
@@ -261,8 +322,11 @@ class TodoPanel implements Component {
 			node("text", {
 				text:
 					this.mode.kind === "panel"
-						? "Tab / arrows select · Enter edit · Escape close"
-						: "Enter newline · Tab / Shift+Tab field · Ctrl+Enter save · Escape cancel",
+						? tr("Tab / arrows select · Enter edit · Escape close", "Tab / 方向键选择 · Enter 编辑 · Escape 关闭")
+						: tr(
+								"Enter newline · Tab / Shift+Tab field · Ctrl+Enter save · Escape cancel",
+								"Enter 换行 · Tab / Shift+Tab 切换字段 · Ctrl+Enter 保存 · Escape 取消",
+							),
 				wrap: "word",
 			}),
 		);
@@ -336,30 +400,34 @@ class TodoPanel implements Component {
 	render(width: number): readonly string[] {
 		const lines = [
 			this.theme.bold(
-				this.mode.kind === "panel" ? "Todo More" : this.mode.kind === "goal" ? "Edit goal" : `Edit explanation: ${this.mode.title}`,
+				this.mode.kind === "panel"
+					? tr("Todo More", "Todo More")
+					: this.mode.kind === "goal"
+						? tr("Edit goal", "编辑目标")
+						: `${tr("Edit explanation", "编辑说明")}: ${this.mode.title}`,
 			),
 		];
 		switch (this.mode.kind) {
 			case "panel": {
 				const state = readTodoMore(this.session.sessionManager.getBranch());
-				const labels = ["Edit goal"];
-				if (state.kind === "empty") lines.push("Todo list is empty.");
+				const labels = [tr("Edit goal", "编辑目标")];
+				if (state.kind === "empty") lines.push(tr("Todo list is empty.", "待办列表为空。"));
 				else {
-					lines.push(...(state.goal.kind === "set" ? goalLines(state.goal.goal) : ["Goal: [missing]"]));
+					lines.push(...(state.goal.kind === "set" ? uiGoalLines(state.goal.goal) : [tr("Goal: [missing]", "目标：[缺少]")]));
 					for (const phase of state.phases) {
 						lines.push(phase.name);
 						for (const item of phase.items) {
 							lines.push(
-								`${item.title} [${item.status}]`,
-								timeEstimateText(item.time),
-								item.explanation.kind === "explained" ? item.explanation.text : "[explanation missing]",
-								`Blocker: ${item.blocker ?? "(none)"}`,
+								`${item.title} [${uiStatus(item.status)}]`,
+								uiTimeEstimate(item.time),
+								item.explanation.kind === "explained" ? item.explanation.text : tr("[explanation missing]", "[缺少说明]"),
+								`${tr("Blocker", "阻塞原因")}: ${item.blocker ?? tr("(none)", "（无）")}`,
 							);
-							labels.push(`Edit explanation: ${item.title}`);
+							labels.push(`${tr("Edit explanation", "编辑说明")}: ${item.title}`);
 						}
 					}
 				}
-				labels.push("Close");
+				labels.push(tr("Close", "关闭"));
 				const selected = this.mode.selected;
 				lines.push(...labels.map((label, index) => `${index === selected ? ">" : " "} ${label}`));
 				break;
@@ -380,7 +448,7 @@ class TodoPanel implements Component {
 			}
 		}
 		if (this.error) lines.push(this.theme.fg("error", this.error));
-		lines.push("Ctrl+Enter save · Escape cancel/close · Tab next");
+		lines.push(tr("Ctrl+Enter save · Escape cancel/close · Tab next", "Ctrl+Enter 保存 · Escape 取消/关闭 · Tab 下一个"));
 		return new Text(lines.join("\n"), 0, 0).render(width);
 	}
 
@@ -442,7 +510,7 @@ class TodoHud implements Component {
 					: describeTodoHud(toSnapshot(readTodoMore(session.sessionManager.getBranch())), this.disclosure.kind === "open");
 			if (described === null) this.closeDisclosure();
 			// Keep our own slot identifiable when empty, without showing a pill.
-			return described ?? node("row", { role: "omp.hud.activity", aria: "Todo More progress", hidden: true });
+			return described ?? node("row", { role: "omp.hud.activity", aria: tr("Todo More progress", "Todo More 进度"), hidden: true });
 		} catch (error) {
 			this.closeDisclosure();
 			this.pi.logger.warn("todo-more HUD could not read the current branch", { error: errorText(error) });
@@ -538,7 +606,7 @@ export function registerUi(pi: ExtensionAPI): void {
 			// Session transitions abort the old overlay and discard its draft normally.
 			if (!opened.controller.signal.aborted) {
 				pi.logger.warn("todo-more UI failed", { error: errorText(error) });
-				ctx.ui.notify(errorText(error), "error");
+				ctx.ui.notify(`${tr("Todo More UI failed", "Todo More 界面失败")}: ${errorText(error)}`, "error");
 			}
 		} finally {
 			if (active === opened) active = undefined;
@@ -598,7 +666,7 @@ export function registerUi(pi: ExtensionAPI): void {
 		if (args === "" || args === "edit") return { text: "/todo-more" };
 	});
 	pi.registerCommand("todo-more", {
-		description: "Show rich todos and edit the current session's goal and explanations",
+		description: tr("Show rich todos and edit the current session's goal and explanations", "显示丰富待办并编辑当前会话的目标和说明"),
 		handler: async (_args: string, ctx: ExtensionContext) => open(ctx),
 	});
 }

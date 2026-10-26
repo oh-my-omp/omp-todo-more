@@ -11,6 +11,7 @@
  */
 import { type AssistantMessage, calculateRateLimitBackoffMs, isUsageLimitOutcome, parseRateLimitReason } from "@oh-my-pi/pi-ai";
 import { extractRetryHint } from "@oh-my-pi/pi-utils";
+import { tr } from "./i18n.ts";
 
 /** Margin after the account reset before the reminder is sent. */
 export const QUOTA_RESET_MARGIN_MS = 60_000;
@@ -51,7 +52,10 @@ function clock(ms: number): string {
 export function quotaNoticeLine(wait: QuotaWait, cancelKey: string, cancelCommand: string): string {
 	const reason =
 		wait.source === "hint"
-			? `account quota 429, resets ${clock(wait.resetAt)}`
-			: `account quota 429, reset estimated ${clock(wait.resetAt)}`;
-	return `Todo reminder scheduled for ${clock(quotaDeadline(wait))} (${reason}) · ${cancelKey} or /${cancelCommand} to cancel`;
+			? tr(`account quota 429, resets ${clock(wait.resetAt)}`, `账户配额 429，将于 ${clock(wait.resetAt)} 重置`)
+			: tr(`account quota 429, reset estimated ${clock(wait.resetAt)}`, `账户配额 429，预计于 ${clock(wait.resetAt)} 重置`);
+	return tr(
+		`Todo reminder scheduled for ${clock(quotaDeadline(wait))} (${reason}) · ${cancelKey} or /${cancelCommand} to cancel`,
+		`待办提醒计划于 ${clock(quotaDeadline(wait))} 发送（${reason}）· 按 ${cancelKey} 或 /${cancelCommand} 取消`,
+	);
 }

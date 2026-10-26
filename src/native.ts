@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { type NativeChild, type NativeNode, node, stableKey } from "@oh-my-pi/pi-tui";
+import { tr } from "./i18n.ts";
 import type { parametersSchema } from "./protocol.ts";
 import {
 	callPreviewLines,
@@ -11,8 +12,14 @@ import {
 	progressCounts,
 	resultView,
 } from "./render.ts";
-import { commitRecordText, type TodoMoreSnapshot, type TodoStatus, timeEstimateText } from "./state.ts";
+import { commitRecordText, type TodoMoreSnapshot, type TodoStatus } from "./state.ts";
 import type { TodoMoreDetails } from "./tool.ts";
+
+function uiTimeEstimate(item: TodoMoreSnapshot["phases"][number]["items"][number]): string {
+	return item.time.kind === "estimated"
+		? `${tr("Estimate", "预计")}: ${item.time.minutes} ${tr("min", "分钟")}`
+		: tr("(no time estimate yet: add one with ESTIMATE)", "（尚无时间估计：请使用 ESTIMATE 添加）");
+}
 
 function checklistStatus(status: TodoStatus): "pending" | "active" | "done" | "dropped" | "blocked" {
 	switch (status) {
@@ -42,22 +49,23 @@ function checklistPhases(snapshot: TodoMoreSnapshot) {
 			id: item.title,
 			text: item.title,
 			status: checklistStatus(item.status),
-			note: `${timeEstimateText(item.time)}\nExplanation: ${item.explanation ?? "[explanation missing]"}${item.blocker === undefined ? "" : `\nBlocker: ${item.blocker}`}${item.commit === undefined ? "" : `\nCommit: ${commitRecordText(item.commit)}`}`,
+			note: `${uiTimeEstimate(item)}\n${tr("Explanation", "说明")}: ${item.explanation ?? tr("[explanation missing]", "[缺少说明]")}${item.blocker === undefined ? "" : `\n${tr("Blocker", "阻塞原因")}: ${item.blocker}`}${item.commit === undefined ? "" : `\n${tr("Commit", "提交")}: ${commitRecordText(item.commit)}`}`,
 		})),
 	}));
 }
 
 /** A presentation of a snapshot only; callers must read the branch before editing. */
 export function describeSnapshot(snapshot: TodoMoreSnapshot, editable = false, selectedTitle?: string): NativeChild[] {
+	const missingGoal = tr("[goal missing]", "[缺少目标]");
 	const body: NativeChild[] = [
 		node(
 			"kv",
 			{
 				role: "todo-more.goal",
 				items: [
-					{ k: "Objective", v: snapshot.goal?.objective ?? "[goal missing]" },
-					{ k: "Measure", v: snapshot.goal?.measure ?? "[goal missing]" },
-					{ k: "Done when", v: snapshot.goal?.doneWhen ?? "[goal missing]" },
+					{ k: tr("Objective", "目标"), v: snapshot.goal?.objective ?? missingGoal },
+					{ k: tr("Measure", "衡量方式"), v: snapshot.goal?.measure ?? missingGoal },
+					{ k: tr("Done when", "完成条件"), v: snapshot.goal?.doneWhen ?? missingGoal },
 				],
 			},
 			undefined,
@@ -74,20 +82,22 @@ export function describeSnapshot(snapshot: TodoMoreSnapshot, editable = false, s
 			"list",
 		),
 	];
-	if (snapshot.phases.every((phase) => phase.items.length === 0)) body.push(node("text", { text: "Todo list is empty." }));
+	if (snapshot.phases.every((phase) => phase.items.length === 0))
+		body.push(node("text", { text: tr("Todo list is empty.", "待办列表为空。") }));
 	if (editable) {
 		for (const phase of snapshot.phases) {
 			for (const item of phase.items) {
+				const editExplanation = `${tr("Edit explanation", "编辑说明")}: ${item.title}`;
 				body.push(
 					node(
 						"row",
 						{
 							role: "omp.btn",
 							actions: { click: `todo-more.explain:${item.title}` },
-							title: `Edit explanation: ${item.title}`,
+							title: editExplanation,
 							tone: selectedTitle === item.title ? "accent" : undefined,
 						},
-						[node("text", { text: `Edit explanation: ${item.title}` })],
+						[node("text", { text: editExplanation })],
 						stableKey(item.title),
 					),
 				);
@@ -127,19 +137,19 @@ export function describeTodoHud(snapshot: TodoMoreSnapshot, expanded = false): N
 		}
 	}
 	if (total === 0) return null;
-	const label = active ?? pending ?? (closed === total ? "All done" : "Todos");
+	const label = active ?? pending ?? (closed === total ? tr("All done", "全部完成") : tr("Todos", "待办"));
 	return node(
 		"row",
-		{ role: "omp.hud.activity", aria: "Todo More progress", align: "center", gap: "sm" },
+		{ role: "omp.hud.activity", aria: tr("Todo More progress", "Todo More 进度"), align: "center", gap: "sm" },
 		[
 			node(
 				"col",
-				{ role: "omp.hud.todo", aria: "Todo More pill", gap: "none" },
+				{ role: "omp.hud.todo", aria: tr("Todo More pill", "Todo More 待办条"), gap: "none" },
 				[
 					node(
 						"card",
 						{
-							aria: "Todo More disclosure",
+							aria: tr("Todo More disclosure", "Todo More 展开项"),
 							head: `${label} ${closed}/${total}`,
 							variant: "bare",
 							collapsible: true,
@@ -152,7 +162,7 @@ export function describeTodoHud(snapshot: TodoMoreSnapshot, expanded = false): N
 						? [
 								node(
 									"col",
-									{ role: "todo-more.popover", aria: "Todo More popover" },
+									{ role: "todo-more.popover", aria: tr("Todo More popover", "Todo More 弹出面板") },
 									[
 										node(
 											"col",
@@ -162,7 +172,7 @@ export function describeTodoHud(snapshot: TodoMoreSnapshot, expanded = false): N
 												node(
 													"row",
 													{ role: "omp.btn", actions: { click: "todo-more.open" } },
-													[node("text", { text: "Edit goal / explanations" })],
+													[node("text", { text: tr("Edit goal / explanations", "编辑目标/说明") })],
 													"edit",
 												),
 											],
@@ -185,9 +195,9 @@ export const describeTodoCall: NonNullable<ToolDefinition<typeof parametersSchem
 	const call = parseCall(args);
 	return {
 		tool: {
-			title: "Todo More",
-			target: "preview — not committed",
-			meta: [`${call.commands.length} complete command${call.commands.length === 1 ? "" : "s"}`],
+			title: tr("Todo More", "Todo More"),
+			target: tr("preview — not committed", "预览 — 未提交"),
+			meta: [tr(`${call.commands.length} complete command${call.commands.length === 1 ? "" : "s"}`, `${call.commands.length} 条完整命令`)],
 		},
 		open: true,
 		preview: "children",
@@ -210,14 +220,14 @@ export const describeTodoResult: NonNullable<ToolDefinition<typeof parametersSch
 	if (result.isError || !parsed.success) {
 		const text = result.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
 		return {
-			tool: { title: "Todo" },
+			tool: { title: tr("Todo", "待办") },
 			tone: "error",
-			body: [node("text", { text: text || "Invalid todo-more result details", wrap: "word" })],
+			body: [node("text", { text: text || tr("Invalid todo-more result details", "Todo More 结果详情无效"), wrap: "word" })],
 		};
 	}
 	const { closed, total } = progressCounts(parsed.data.more);
 	return {
-		tool: total === 0 ? { title: "Todo" } : { title: "Todo", target: `${closed}/${total}`, targetKind: "text" },
+		tool: total === 0 ? { title: tr("Todo", "待办") } : { title: tr("Todo", "待办"), target: `${closed}/${total}`, targetKind: "text" },
 		open: true,
 		preview: "none",
 		body: [node("col", { role: "todo-more.panel", gap: "sm" }, resultPanel(parsed.data, args, options.expanded))],
@@ -228,7 +238,8 @@ export const describeTodoResult: NonNullable<ToolDefinition<typeof parametersSch
 function resultPanel(details: TodoMoreDetails, args: unknown, expanded: boolean): NativeChild[] {
 	const { more } = details;
 	const phases = more.phases.filter((phase) => phase.items.length > 0);
-	if (phases.length === 0) return [node("text", { text: "Todo list is empty.", wrap: "word" }, undefined, "empty")];
+	const missingGoal = tr("[goal missing]", "[缺少目标]");
+	if (phases.length === 0) return [node("text", { text: tr("Todo list is empty.", "待办列表为空。"), wrap: "word" }, undefined, "empty")];
 	const view = resultView(details, args, expanded);
 	if (view.kind === "delta") {
 		const children: NativeChild[] = [];
@@ -239,9 +250,9 @@ function resultPanel(details: TodoMoreDetails, args: unknown, expanded: boolean)
 					{
 						role: "todo-more.goal",
 						items: [
-							{ k: "Objective", v: more.goal?.objective ?? "[goal missing]" },
-							{ k: "Measure", v: more.goal?.measure ?? "[goal missing]" },
-							{ k: "Done when", v: more.goal?.doneWhen ?? "[goal missing]" },
+							{ k: tr("Objective", "目标"), v: more.goal?.objective ?? missingGoal },
+							{ k: tr("Measure", "衡量方式"), v: more.goal?.measure ?? missingGoal },
+							{ k: tr("Done when", "完成条件"), v: more.goal?.doneWhen ?? missingGoal },
 						],
 					},
 					undefined,
@@ -261,7 +272,9 @@ function resultPanel(details: TodoMoreDetails, args: unknown, expanded: boolean)
 								id: `p${p}.${t}`,
 								text: compactTodoLabel(item),
 								status: checklistStatus(item.status),
-								...(phase.explained.has(item.title) ? { note: `Explanation: ${item.explanation ?? "[explanation missing]"}` } : {}),
+								...(phase.explained.has(item.title)
+									? { note: `${tr("Explanation", "说明")}: ${item.explanation ?? tr("[explanation missing]", "[缺少说明]")}` }
+									: {}),
 							})),
 						};
 					case "removed_phase":
@@ -269,12 +282,12 @@ function resultPanel(details: TodoMoreDetails, args: unknown, expanded: boolean)
 							id: `p${p}`,
 							title: phase.name,
 							collapsed: false,
-							items: [{ id: `p${p}.0`, text: "Phase removed", status: "dropped" as const }],
+							items: [{ id: `p${p}.0`, text: tr("Phase removed", "阶段已删除"), status: "dropped" as const }],
 						};
 					case "removed_tasks":
 						return {
 							id: `p${p}`,
-							title: "Removed",
+							title: tr("Removed", "已删除"),
 							collapsed: false,
 							items: phase.titles.map((title, t) => ({
 								id: `p${p}.${t}`,
@@ -298,15 +311,15 @@ function resultPanel(details: TodoMoreDetails, args: unknown, expanded: boolean)
 				{
 					role: "todo-more.goal",
 					items: [
-						{ k: "Objective", v: more.goal?.objective ?? "[goal missing]" },
-						{ k: "Measure", v: more.goal?.measure ?? "[goal missing]" },
-						{ k: "Done when", v: more.goal?.doneWhen ?? "[goal missing]" },
+						{ k: tr("Objective", "目标"), v: more.goal?.objective ?? missingGoal },
+						{ k: tr("Measure", "衡量方式"), v: more.goal?.measure ?? missingGoal },
+						{ k: tr("Done when", "完成条件"), v: more.goal?.doneWhen ?? missingGoal },
 					],
 				},
 				undefined,
 				"goal",
 			)
-		: node("text", { text: `Objective: ${more.goal?.objective ?? "[goal missing]"}`, wrap: "word" }, undefined, "goal");
+		: node("text", { text: `${tr("Objective", "目标")}: ${more.goal?.objective ?? missingGoal}`, wrap: "word" }, undefined, "goal");
 	const checklistPhases = phases.map((phase, p) => ({
 		id: `p${p}`,
 		title: phase.name,
@@ -317,7 +330,7 @@ function resultPanel(details: TodoMoreDetails, args: unknown, expanded: boolean)
 			status: checklistStatus(item.status),
 			...(expanded
 				? {
-						note: `Explanation: ${item.explanation ?? "[explanation missing]"}${item.commit === undefined ? "" : `\nCommit: ${commitRecordText(item.commit)}`}`,
+						note: `${tr("Explanation", "说明")}: ${item.explanation ?? tr("[explanation missing]", "[缺少说明]")}${item.commit === undefined ? "" : `\n${tr("Commit", "提交")}: ${commitRecordText(item.commit)}`}`,
 					}
 				: {}),
 		})),

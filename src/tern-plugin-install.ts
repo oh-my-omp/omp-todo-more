@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "./errors.ts";
+import { tr } from "./i18n.ts";
 
 const ID = "omp-todo-more";
 const BUNDLE_DIR = fileURLToPath(new URL("../tern/", import.meta.url));
@@ -36,7 +37,13 @@ function runTern(tern: string, args: string[]): Promise<CliResult> {
 		(error, stdout, stderr) => {
 			done(
 				error
-					? { kind: "failed", message: `tern plugin ${args.join(" ")} failed (${error.code ?? "unknown"}): ${stderr || error.message}` }
+					? {
+							kind: "failed",
+							message: tr(
+								`tern plugin ${args.join(" ")} failed (${error.code ?? "unknown"}): ${stderr || error.message}`,
+								`tern 插件 ${args.join(" ")} 失败（${error.code ?? "unknown"}）：${stderr || error.message}`,
+							),
+						}
 					: { kind: "ok", stdout },
 			);
 		},
@@ -50,7 +57,12 @@ async function ownerReply(tern: string, args: string[]): Promise<unknown> {
 	try {
 		return JSON.parse(result.stdout);
 	} catch (error) {
-		throw new Error(`tern plugin ${args.join(" ")} returned invalid JSON: ${errorText(error)}`);
+		throw new Error(
+			tr(
+				`tern plugin ${args.join(" ")} returned invalid JSON: ${errorText(error)}`,
+				`tern 插件 ${args.join(" ")} 返回了无效 JSON：${errorText(error)}`,
+			),
+		);
 	}
 }
 
@@ -67,7 +79,7 @@ function readBundle(): Bundle {
 	const manifest = readFileSync(join(BUNDLE_DIR, "plugin.toml"), "utf8");
 	const version = /^version\s*=\s*"([^"]+)"\s*$/m.exec(manifest)?.[1];
 	if (version === undefined || !/^id\s*=\s*"omp-todo-more"\s*$/m.test(manifest))
-		throw new Error("Bundled Tern manifest has invalid identity/version.");
+		throw new Error(tr("Bundled Tern manifest has invalid identity/version.", "内置 Tern 清单的身份或版本无效。"));
 	return {
 		version,
 		manifest,
@@ -112,19 +124,23 @@ async function initialize(): Promise<void> {
 		if (isCurrent(before, root, bundle)) return;
 		const installed = installedSchema.parse(await ownerReply(tern, ["install", BUNDLE_DIR, "--force", "--json"]));
 		if (installed.id !== ID || installed.version !== bundle.version || resolve(installed.dir) !== resolve(join(root, ID))) {
-			throw new Error("Tern returned an unexpected plugin identity, version or destination.");
+			throw new Error(
+				tr("Tern returned an unexpected plugin identity, version or destination.", "Tern 返回了意外的插件身份、版本或目标路径。"),
+			);
 		}
 		const after = catalogSchema.parse(await ownerReply(tern, ["list", "--json"]));
 		if (!isCurrent(after, root, bundle)) {
 			const plugin = after.plugins.find((entry) => entry.id === ID);
 			throw new Error(
 				typeof plugin?.status === "object"
-					? `Tern catalog failed: ${plugin.status.failed}`
-					: "Tern did not confirm the matching ready/disabled normal copy.",
+					? tr(`Tern catalog failed: ${plugin.status.failed}`, `Tern 目录失败：${plugin.status.failed}`)
+					: tr("Tern did not confirm the matching ready/disabled normal copy.", "Tern 未确认匹配的 ready/disabled 正常副本。"),
 			);
 		}
 	} catch (error) {
-		throw new Error(`omp-todo-more Tern initialization failed: ${errorText(error)}`);
+		throw new Error(
+			tr(`omp-todo-more Tern initialization failed: ${errorText(error)}`, `omp-todo-more Tern 初始化失败：${errorText(error)}`),
+		);
 	}
 }
 

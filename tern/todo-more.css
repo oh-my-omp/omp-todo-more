@@ -46,7 +46,7 @@
 	> :nth-child(9):nth-child(n + 2 of :not(.sf-void):not(.sf-hidden)),
 .sf-dock[data-surface="omp.session"]:not(.sf-chat-spine)
 	> :nth-child(9):nth-child(n + 2 of :not(.sf-void):not(.sf-hidden))
-	+ * + * + * + :nth-child(13) > [aria-label="Todo More progress"] {
+	+ * + * + * + :nth-child(13) > :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]) {
 	margin-top: 4px;
 }
 .sf-dock[data-surface="omp.session"] > :nth-child(10) { grid-row: 10; }
@@ -62,8 +62,8 @@
 	grid-column: 1;
 	justify-self: center;
 }
-.sf-dock[data-surface="omp.session"] > :nth-child(13) > :first-child:not([aria-label="Todo More progress"]),
-.sf-dock[data-surface="omp.session"] > :nth-child(13) > [aria-label="Todo More progress"]:first-child + * {
+	.sf-dock[data-surface="omp.session"] > :nth-child(13) > :first-child:not(:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"])),
+	.sf-dock[data-surface="omp.session"] > :nth-child(13) > :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]):first-child + * {
 	margin-top: 4px;
 }
 
@@ -72,7 +72,7 @@
 	pointer-events: none;
 }
 
-.sf-dock[data-surface="omp.session"] [aria-label="Todo More progress"] {
+	.sf-dock[data-surface="omp.session"] :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]) {
 	position: relative;
 	grid-row: 9;
 	grid-column: 1;
@@ -95,21 +95,21 @@
 .sf-chat-spine.sf-dock[data-surface="omp.session"] > * {
 	margin-top: 0;
 }
-.sf-chat-spine.sf-dock[data-surface="omp.session"] [aria-label="Todo More progress"],
-.sf-chat-console.sf-dock[data-surface="omp.session"] [aria-label="Todo More progress"] {
+	.sf-chat-spine.sf-dock[data-surface="omp.session"] :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]),
+	.sf-chat-console.sf-dock[data-surface="omp.session"] :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]) {
 	justify-self: stretch;
 }
-.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(13) > :not([aria-label="Todo More progress"]) {
+	.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(13) > :not(:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"])) {
 	justify-self: stretch;
 	min-width: 0;
 	margin: 4px var(--sp-side) 0;
 }
-.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(13) > :first-child:not([aria-label="Todo More progress"]),
-.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(13) > [aria-label="Todo More progress"]:first-child + * {
+	.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(13) > :first-child:not(:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"])),
+	.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(13) > :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]):first-child + * {
 	margin-top: var(--todo-more-below-top);
 }
 .sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(13)
-	> :nth-last-child(1 of :not([aria-label="Todo More progress"])) {
+	> :nth-last-child(1 of :not(:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]))) {
 	margin-bottom: var(--todo-more-below-bottom);
 }
 .sf-chat-spine.sf-dock[data-surface="omp.session"]::after {
@@ -130,14 +130,14 @@
 
 /* Keep the popup beside, not inside, the hovered disclosure. The native Todo
  * role gives this wrapper the original pill's activity-row sizing and margins. */
-[aria-label="Todo More pill"] {
+	:is([aria-label="Todo More pill"], [aria-label="Todo More 待办条"]) {
 	position: relative;
 	min-width: 0;
 }
 
 /* A bare native card provides the sole accessible disclosure control. Its
  * always-visible body retains the actual checklist's intrinsic pill visuals. */
-[aria-label="Todo More disclosure"] {
+	:is([aria-label="Todo More disclosure"], [aria-label="Todo More 展开项"]) {
 	position: relative;
 	overflow: visible;
 	width: auto !important;
@@ -147,7 +147,7 @@
 	background: none;
 	box-shadow: none;
 }
-.sf-dock .sf-card[aria-label="Todo More disclosure"] > .sf-card-head {
+	.sf-dock .sf-card:is([aria-label="Todo More disclosure"], [aria-label="Todo More 展开项"]) > .sf-card-head {
 	position: absolute;
 	inset: 0;
 	z-index: 0;
@@ -161,15 +161,15 @@
 	pointer-events: auto;
 	cursor: pointer;
 }
-.sf-dock .sf-card[aria-label="Todo More disclosure"] > .sf-card-head > * {
+	.sf-dock .sf-card:is([aria-label="Todo More disclosure"], [aria-label="Todo More 展开项"]) > .sf-card-head > * {
 	opacity: 0;
 }
-.sf-dock .sf-card[aria-label="Todo More disclosure"] > .sf-card-head:hover {
+	.sf-dock .sf-card:is([aria-label="Todo More disclosure"], [aria-label="Todo More 展开项"]) > .sf-card-head:hover {
 	background: var(--l1);
 }
-.sf-chat-spine.sf-dock .sf-card[aria-label="Todo More disclosure"] > .sf-card-head { border-radius: 7px; }
-.sf-chat-console.sf-dock .sf-card[aria-label="Todo More disclosure"] > .sf-card-head { border-radius: 4px; }
-.sf-dock .sf-card[aria-label="Todo More disclosure"] > .sf-card-body {
+	.sf-chat-spine.sf-dock .sf-card:is([aria-label="Todo More disclosure"], [aria-label="Todo More 展开项"]) > .sf-card-head { border-radius: 7px; }
+	.sf-chat-console.sf-dock .sf-card:is([aria-label="Todo More disclosure"], [aria-label="Todo More 展开项"]) > .sf-card-head { border-radius: 4px; }
+	.sf-dock .sf-card:is([aria-label="Todo More disclosure"], [aria-label="Todo More 展开项"]) > .sf-card-body {
 	display: flex !important;
 	max-height: none !important;
 	min-width: 0;
@@ -189,7 +189,7 @@
 [data-role="todo-more.visual"] .sf-ck-pill > .n {
 	visibility: visible;
 }
-.sf-card[aria-label="Todo More disclosure"]:hover [data-role="todo-more.visual"] .sf-ck-pill {
+ .sf-card:is([aria-label="Todo More disclosure"], [aria-label="Todo More 展开项"]):hover [data-role="todo-more.visual"] .sf-ck-pill {
 	color: var(--t1);
 }
 [data-role="todo-more.visual"] .sf-ck-pop {
@@ -198,7 +198,7 @@
 /* Preserve omp-composer.css's conditional clearance across the dock adapter. */
 .sf-dock[data-surface="omp.session"] > .sf-row[data-role="omp.hud"]:not(.sf-hidden):not(.sf-void)
 	+ .sf-row[data-role="omp.hud.activity"] + * + * + * + :nth-child(13)
-	[aria-label="Todo More progress"] {
+	:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]) {
 	--todo-more-hud-clear: var(--sf-hud-clear, 34px);
 }
 /* Match omp-tools.css's .sf-ck-pop directly. The relative native-sized wrapper

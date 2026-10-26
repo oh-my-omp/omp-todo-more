@@ -7,6 +7,7 @@ import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-ent
 import type { GlobMatch, GrepMatch } from "@oh-my-pi/pi-natives";
 import { FileType, GrepOutputMode, glob, grep } from "@oh-my-pi/pi-natives";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import { tr } from "../i18n.ts";
 import { parseTaskLogEvent, type TaskLogGoal, taskLogGoalLines, taskLogGoalSchema, taskLogPath } from "./task-log.ts";
 
 const COLLAPSE_THRESHOLD = 8;
@@ -1667,7 +1668,7 @@ export async function renderCtxShowText(inventory: Inventory, id?: string): Prom
 export function registerCtxTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "ctx",
-		label: "Context Directory",
+		label: tr("Context Directory", "上下文目录"),
 		description:
 			"Composed, read-only recall view of what prior contexts (this session and its subagents) did — never mutates a session or file. A different axis from `read history://<id>`, which returns the raw transcript verbatim: `ctx` stitches the current session, its subagent registry, transcripts, compaction sidecar summaries, and per-agent task logs into a shallow tree of status, handoff, and task counts.\n" +
 			'- `ctx list`: the current session and its `task` subagents as a shallow tree with status, one-line handoff, and todo progress (done / total / blocked); internal contexts (mentor/discuss/trace) are hidden by default. `ctx list all=true` includes them; `ctx list <id>` expands the subtree rooted at that context (large subtrees collapse with a `ctx list <id>` expand marker). Answer most "what did we already do?" questions here before opening any transcript.\n' +
