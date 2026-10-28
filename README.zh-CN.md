@@ -124,9 +124,11 @@ DONE "显示流式预览" "src/render.ts" "显示流式意图"                 #
 
 一个字符串是提交信息，提交全部未提交改动；空 scope 字符串 `DONE "title" "" "message"` 含义相同。两个字符串依次是空白分隔的 scope 与其提交信息；pathspec 相对会话目录解析，与模型自己的 shell 一致。该 `DONE` 完成的每个任务都会记录被 git 接受的提交（sha、message、解析后的 scope），summary、native 卡片、snapshot 与 ctx task log 都会显示。
 
-git 记录的提交信息在 message 之后，为提交方会话自上一次 todo 提交以来运行过的每个模型写一行 `Model: <provider>/<model-id>` trailer：范围是分支上最后一个带来新提交的 snapshot 之后的 assistant 轮次（失败的请求除外），再加上会话当前模型，按首次出现顺序去重。只记录提交方会话自己的模型：`task:*` worker 自己提交自己的改动并记录自己的模型。任务上保留的 message 不含 trailer；用 `git log --format='%(trailers:key=Model,valueonly)'` 读回模型。没有任何模型记录时只提交 message。
+git 记录的提交信息在 message 之后，为提交方会话自上一次 todo 提交以来运行过的每个模型写一行 `Model: <provider>/<model-id>` trailer：范围是分支上最后一个带来新提交的 snapshot 之后的 assistant 轮次（失败的请求除外），再加上会话当前模型，按首次出现顺序去重。只记录提交方会话自己的模型：在自己工作树里的 `task:*` worker 自己提交自己的改动并记录自己的模型。任务上保留的 message 不含 trailer；用 `git log --format='%(trailers:key=Model,valueonly)'` 读回模型。没有任何模型记录时只提交 message。
 
 不在 checkout 内，或工作区没有未提交改动时，该子句是惰性的：不产生提交，参数无论是否给出都被忽略。在存在未提交改动的 checkout 内，不带子句的 `DONE` 会被拒绝并要求补上子句——被拒绝的是这次完成，不是检查本身。scope 按原样提交，工具不会校验它是否覆盖了全部未提交改动；暂存不到任何内容的 scope 会带着 git 自己的回答被拒绝。同一批次中的每个 `DONE` 提交该时刻仍存在的未提交改动，因此同批次后续子句面对干净工作区时会保持惰性。
+
+工作树与父 agent 相同的 `task:*` 子 agent 不提交：该工作树里还有父 agent 与其他会话尚未提交的改动，由父 agent 集成并提交。无论哪种 `DONE` 写法（不带子句、只带提交信息、带 scope 与提交信息），任务都会完成，既不产生提交，也不触发未提交改动的拒绝，结果说明改动由父 agent 集成。判定共享的条件是：父 agent 的 live session（通过子 agent 的 `parentId` 在 agent registry 中找到）与子 agent 解析出同一个 git 工作树根目录；linked worktree 按它自己的根目录比较，因此 isolated 子 agent 仍遵循上面的规则。父 agent 的 registry 条目或 live session 已不存在，或任一方目录不在 checkout 内时，同样遵循上面的规则。
 
 ## 子会话与提醒
 

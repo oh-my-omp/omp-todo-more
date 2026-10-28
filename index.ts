@@ -12,7 +12,10 @@
  * context), plus `before_agent_start` to give `task:*` subagents the tool.
  * A completion commits the work it closes (src/git.ts) through the host's git
  * bindings: `DONE` carries the commit clause, a checkout with uncommitted work
- * refuses a completion without one, and each committed item keeps the sha.
+ * refuses a completion without one, and each committed item keeps the sha. A
+ * subagent whose working tree is its parent's (the parent's live session,
+ * found through the registry by `ctx.agent.parentId`) commits nothing and is
+ * never refused: the parent integrates that worktree.
  *
  * Also registers `ctx` (src/ctx/index.ts): the read-only context tool and its
  * post-compaction hint. src/ctx/tasklog.ts appends each successful `todo` / `goal`
@@ -62,7 +65,7 @@ import { registerReminders } from "./src/reminders.ts";
 import { renderTodoCall, renderTodoResult } from "./src/render.ts";
 import { registerReviewApi } from "./src/review-api.ts";
 import { initializeTernPlugin } from "./src/tern-plugin-install.ts";
-import { customFormat, DESCRIPTION, parametersSchema, runTodo, type TodoMoreDetails } from "./src/tool.ts";
+import { customFormat, DESCRIPTION, type ParentCwd, parametersSchema, runTodo, type TodoMoreDetails } from "./src/tool.ts";
 import { registerUi } from "./src/ui.ts";
 
 const TOOL_NAME = "todo";
@@ -99,6 +102,14 @@ const TOOL_FIELDS = {
 /** The AgentSession this extension instance serves, through the registry entry of its agent id. */
 const ownSession = (ctx: ExtensionContext): AgentSession | undefined => AgentRegistry.global().get(ctx.agent.id)?.session ?? undefined;
 
+/** The spawning agent's live session cwd, looked up at each call; absent for a top-level session or a released parent. */
+const parentCwdOf =
+	(ctx: ExtensionContext): ParentCwd =>
+	() => {
+		const parentId = ctx.agent.parentId;
+		return parentId === undefined ? undefined : AgentRegistry.global().get(parentId)?.session?.sessionManager.getCwd();
+	};
+
 const isTaskAgent = (ctx: ExtensionContext): boolean => {
 	if (ctx.agent.kind !== "sub") return false;
 	const ref = AgentRegistry.global().get(ctx.agent.id);
@@ -122,7 +133,7 @@ async function installForTask(ctx: ExtensionContext): Promise<void> {
 		get label(): string {
 			return tr("Todo", "待办");
 		},
-		execute: async (_toolCallId: string, params: unknown) => runTodo(session, params),
+		execute: async (_toolCallId: string, params: unknown) => runTodo(session, params, parentCwdOf(ctx)),
 	};
 	// The host registry erases each tool's parameter schema; the tool validates its input itself.
 	await session.refreshRpcHostTools([hostTool as unknown as AgentTool]);
@@ -143,7 +154,7 @@ export const TODO_TOOL_DEFINITION = {
 	) => {
 		const session = ownSession(ctx);
 		if (session === undefined) throw new Error(`todo: no session registered for agent ${ctx.agent.id}`);
-		return runTodo(session, params);
+		return runTodo(session, params, parentCwdOf(ctx));
 	},
 };
 

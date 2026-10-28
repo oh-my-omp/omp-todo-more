@@ -216,7 +216,7 @@ per model the committing session ran since its previous todo commit — the
 assistant turns on its branch after the last snapshot that brought in a new
 commit, failed requests excluded, plus the session's current model — each once,
 in order of first use. Only the committing session's own models are named: a
-`task:*` worker commits its own work and names its own models. The item keeps
+`task:*` worker in its own worktree commits its own work and names its own models. The item keeps
 the message as given; `git log --format='%(trailers:key=Model,valueonly)'`
 reads the models back. With no model on record the message is committed alone.
 
@@ -228,6 +228,18 @@ committed as given — the tool never verifies that it covered everything
 uncommitted — and a scope that stages nothing is refused with git's own answer.
 Each `DONE` in a batch commits the work still uncommitted at that point, so a
 later clause in the same batch finds a clean tree and stays inert.
+
+A `task:*` subagent whose working tree is its parent agent's commits nothing:
+that worktree also holds the parent's and other sessions' uncommitted changes,
+and the parent integrates and commits them. Every `DONE` form — no clause, a
+message, or a scope and message — completes the task without a commit or the
+uncommitted-work refusal, and the result says the parent integrates the
+changes. Sharing means the parent's live session (found through the agent
+registry by the subagent's `parentId`) and the subagent resolve to the same git
+working-tree root; a linked worktree counts by its own root, so an isolated
+subagent keeps the rules above. When the parent's registry entry or live
+session is gone, or either directory is outside a checkout, the rules above
+apply too.
 
 ## Subagents and reminders
 
