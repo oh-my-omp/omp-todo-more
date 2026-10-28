@@ -13,6 +13,11 @@
  * pathspecs the way the model's own shell names them (relative to the session
  * directory); `all` covers the whole checkout. The scope is committed as
  * given: this module never checks that it covered everything that changed.
+ *
+ * A subagent working in its parent's worktree owes no commit at all: that
+ * worktree holds the parent's and other sessions' changes too, and the parent
+ * integrates them. Sharing is a comparison of the two working-tree roots git
+ * reports (a linked worktree's own root, not its primary checkout).
  */
 import { isAbsolute } from "node:path";
 import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
@@ -60,6 +65,18 @@ export async function worktreeState(cwd: string): Promise<WorktreeState> {
 	} catch (error) {
 		return { kind: "failed", message: `Cannot read the working tree of ${root}: ${failureText(error)}` };
 	}
+}
+
+/**
+ * The working-tree root git reports for both directories when they lie in the
+ * same working tree; `null` when either is outside every checkout or they lie
+ * in different working trees (another linked worktree of the same repository
+ * included).
+ */
+export function sharedWorktreeRoot(cwd: string, otherCwd: string): string | null {
+	const root = repositoryAt(cwd)?.info().repoRoot;
+	if (root === undefined) return null;
+	return repositoryAt(otherCwd)?.info().repoRoot === root ? root : null;
 }
 
 /**

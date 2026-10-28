@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
 import { commitTodoState, type TodoSession } from "./commit.ts";
-import { commitCompletion, worktreeState } from "./git.ts";
+import { commitCompletion, sharedWorktreeRoot, worktreeState } from "./git.ts";
 import { participatingModels } from "./models.ts";
 import { customFormat, parametersSchema, parseTodo, type TodoCommand, type TodoCommitClause, type TodoTarget } from "./protocol.ts";
 import {
@@ -43,7 +43,7 @@ PHASE "name" followed by one or more ADD "title" "explanation" minutes appends o
 Every ADD requires your own positive integer minute estimate, no fractions or defaults. ESTIMATE "title" minutes supplies or revises a budget; EXPLAIN "title" "explanation" revises an explanation. Batch related edits in one document.
 GOAL "objective" "measure" "doneWhen" replaces all goal fields on an existing nonempty list without normalizing task status; put GOAL first if the list lacks one.
 START "title" selects the active task. DONE, DROP and RM take "title", PHASE "name", or ALL. BLOCK and UNBLOCK take "title" or PHASE "name"; BLOCK may add a quoted reason. RM ALL clears the list and goal.
-A DONE carries the commit its completion owes: DONE "title" "<message>" commits every change, DONE "title" "<paths>" "<message>" commits only those whitespace-separated pathspecs (an empty scope commits every change). The tool stages and commits through git itself and records the commit on every task that DONE completes. Outside a git checkout, or with nothing uncommitted, the clause is inert and no commit happens. In a checkout with uncommitted work a DONE without a clause is rejected: commit the work through the clause, or discard it, before completing. A clause commits the work as it stands and is never checked for covering everything uncommitted.
+A DONE carries the commit its completion owes: DONE "title" "<message>" commits every change, DONE "title" "<paths>" "<message>" commits only those whitespace-separated pathspecs (an empty scope commits every change). The tool stages and commits through git itself and records the commit on every task that DONE completes. Outside a git checkout, or with nothing uncommitted, the clause is inert and no commit happens. In a checkout with uncommitted work a DONE without a clause is rejected: commit the work through the clause, or discard it, before completing. A clause commits the work as it stands and is never checked for covering everything uncommitted. A subagent working in its parent agent's git worktree never commits: every DONE form completes without a commit or the uncommitted-work refusal, and the parent agent integrates and commits the changes.
 VIEW must be the sole command; mutations already return the resulting list. Titles/phase names are unique and stable; NEVER use generated IDs or guess lost titles.
 Partial input is an uncommitted preview. The complete document is validated in order and committed once; syntax, target or rule errors reject the entire batch.
 Before substantive multi-step work, INIT the entire requested plan with a goal, explanation and estimate for EVERY requested item; NEVER omit work or remember leftovers. Update the goal, steps, explanations, estimates and statuses with material scope changes.
@@ -593,15 +593,34 @@ function operations(commands: TodoCommand[]): Operations {
 }
 
 /**
+ * The working directory of the agent that spawned the session, read when a
+ * completion needs it; `undefined` for a top-level session, or when the parent's
+ * registry entry or live session is gone.
+ */
+export type ParentCwd = () => string | undefined;
+
+const TOP_LEVEL: ParentCwd = () => undefined;
+
+/**
  * The git association: a completion that closes work commits it, and a
- * completion that would leave the checkout dirty is refused.
+ * completion that would leave the checkout dirty is refused. A subagent in
+ * its parent's worktree neither commits nor is refused: the parent integrates.
  */
 async function completeWithCommit(
 	session: TodoSession,
 	clause: TodoCommitClause | undefined,
 	closed: readonly WorkItem[],
+	parentCwd: ParentCwd,
 ): Promise<{ kind: "ok"; note?: string } | { kind: "refused"; message: string }> {
 	const cwd = session.sessionManager.getCwd();
+	const parent = parentCwd();
+	const shared = parent === undefined ? null : sharedWorktreeRoot(cwd, parent);
+	if (shared !== null) {
+		return {
+			kind: "ok",
+			note: `Shared worktree with the parent agent (${shared}): this DONE committed nothing; the parent agent integrates and commits these changes.`,
+		};
+	}
 	const named = closed.length === 1 ? `Task ${JSON.stringify(closed[0]!.title)}` : `${closed.length} completed tasks`;
 	if (clause === undefined) {
 		const state = await worktreeState(cwd);
@@ -642,8 +661,15 @@ async function completeWithCommit(
 	}
 }
 
-/** Complete calls have one acceptance anchor; generated prefixes never reach this state path. */
-export async function runTodo(session: TodoSession, raw: unknown): Promise<AgentToolResult<TodoMoreDetails>> {
+/**
+ * Complete calls have one acceptance anchor; generated prefixes never reach this state path.
+ * `parentCwd` locates the spawning agent's worktree for a subagent's `DONE`.
+ */
+export async function runTodo(
+	session: TodoSession,
+	raw: unknown,
+	parentCwd: ParentCwd = TOP_LEVEL,
+): Promise<AgentToolResult<TodoMoreDetails>> {
 	const previous = readTodoMore(session.sessionManager.getBranch());
 	const input = parametersSchema.safeParse(raw);
 	if (!input.success) return result(session, previous, `Invalid todo arguments: ${input.error.message}`, { isError: true });
@@ -681,7 +707,7 @@ export async function runTodo(session: TodoSession, raw: unknown): Promise<Agent
 				.flatMap((phase) => phase.items)
 				.filter((item) => item.status === "completed" && !alreadyCompleted.has(item.title));
 			if (closed.length > 0) {
-				const step = await completeWithCommit(session, params.commit, closed);
+				const step = await completeWithCommit(session, params.commit, closed, parentCwd);
 				if (step.kind === "refused") {
 					return result(session, previous, formatSummary(previous, [step.message], true), { op, operations: ops, isError: true });
 				}

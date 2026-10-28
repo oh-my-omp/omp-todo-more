@@ -8,7 +8,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import type { TodoSession } from "../src/commit.ts";
 import type { ModelRef } from "../src/models.ts";
 import { type CommitRecord, readTodoMore, type TodoMoreSnapshot, toSnapshot } from "../src/state.ts";
-import { runTodo, type TodoMoreDetails } from "../src/tool.ts";
+import { type ParentCwd, runTodo, type TodoMoreDetails } from "../src/tool.ts";
 
 const goal = {
 	objective: "Commit the work each item completes",
@@ -54,13 +54,13 @@ type Harness = {
 	snapshot: () => TodoMoreSnapshot;
 };
 
-function fixture(cwd: string, model?: ModelRef): Harness {
+function fixture(cwd: string, model?: ModelRef, parentCwd?: ParentCwd): Harness {
 	const sessionManager = SessionManager.inMemory(cwd);
 	const session: TodoSession = { sessionManager, setTodoPhases: () => {}, model };
 	return {
 		cwd,
 		session,
-		call: (...lines: string[]) => runTodo(session, { input: document(...lines) }),
+		call: (...lines: string[]) => runTodo(session, { input: document(...lines) }, parentCwd),
 		snapshot: (): TodoMoreSnapshot => toSnapshot(readTodoMore(sessionManager.getBranch())),
 	};
 }
@@ -224,6 +224,67 @@ describe("the git association of a completion", () => {
 		]);
 		expect(details.more).toEqual(harness.snapshot());
 		expect(itemOf(harness.snapshot(), "Implement").commit?.sha).toMatch(/^[0-9a-f]{40}$/);
+	});
+});
+
+describe("a subagent's completion in its parent's worktree", () => {
+	const forms = ['DONE "Investigate"', 'DONE "Investigate" "Record the finding"', 'DONE "Investigate" "a.txt" "Record the finding"'];
+
+	test("every DONE form completes without committing or refusing, leaving others' changes alone", async () => {
+		const cwd = await repository({ "a.txt": "one\n" });
+		await Bun.write(join(cwd, "sub", "keep.txt"), "x\n");
+		await git(cwd, "add", "-A");
+		await git(cwd, "commit", "-q", "-m", "sub");
+		const head = await git(cwd, "rev-parse", "HEAD");
+		await Bun.write(join(cwd, "foreign.txt"), "someone else's\n");
+		await Bun.write(join(cwd, "a.txt"), "two\n");
+		// The parent sits in a subdirectory of the same working tree: roots, not cwd strings, decide.
+		const harness = fixture(cwd, undefined, () => join(cwd, "sub"));
+		for (const form of forms) {
+			await harness.call(init, 'ADD "Investigate" "Read only" 5');
+			const result = await harness.call(form);
+			expect(result.isError).not.toBe(true);
+			expect(textOf(result)).toContain(`Shared worktree with the parent agent (${cwd})`);
+			expect(textOf(result)).toContain("the parent agent integrates and commits these changes");
+			expect(itemOf(harness.snapshot(), "Investigate").status).toBe("completed");
+			expect(itemOf(harness.snapshot(), "Investigate").commit).toBeUndefined();
+		}
+		expect(await git(cwd, "rev-parse", "HEAD")).toBe(head);
+		expect(await git(cwd, "status", "--porcelain")).toBe("M a.txt\n?? foreign.txt");
+	});
+
+	test("an unresolved parent keeps the refusal and the commit", async () => {
+		const harness = fixture(await repository({ "a.txt": "one\n" }), undefined, () => undefined);
+		await harness.call(init, 'ADD "Implement" "Change the tracked file" 5');
+		await Bun.write(join(harness.cwd, "a.txt"), "two\n");
+
+		const refused = await harness.call('DONE "Implement"');
+		expect(refused.isError).toBe(true);
+		expect(textOf(refused)).toContain(`Task "Implement" would leave uncommitted work in ${harness.cwd}`);
+		const committed = await harness.call('DONE "Implement" "Implement the change"');
+		expect(committed.isError).not.toBe(true);
+		expect(commitOf(harness, "Implement").sha).toBe(await git(harness.cwd, "rev-parse", "HEAD"));
+	});
+
+	test("a parent in another linked worktree of the same repository keeps the refusal and the commit", async () => {
+		const parent = await repository({ "a.txt": "one\n" });
+		const isolated = await mkdtemp(join(tmpdir(), "todo-more-linked-"));
+		created.push(isolated);
+		await rm(isolated, { recursive: true, force: true });
+		await git(parent, "worktree", "add", "-q", "-b", "child", isolated);
+		await Bun.write(join(parent, "foreign.txt"), "parent's\n");
+		const harness = fixture(isolated, undefined, () => parent);
+		await harness.call(init, 'ADD "Implement" "Change the tracked file" 5');
+		await Bun.write(join(isolated, "a.txt"), "two\n");
+
+		const refused = await harness.call('DONE "Implement"');
+		expect(refused.isError).toBe(true);
+		expect(textOf(refused)).toContain('Task "Implement" would leave uncommitted work');
+		const committed = await harness.call('DONE "Implement" "Implement the change"');
+		expect(committed.isError).not.toBe(true);
+		expect(await git(isolated, "log", "-1", "--format=%s")).toBe("Implement the change");
+		expect(await git(parent, "log", "-1", "--format=%s", "main")).toBe("initial");
+		expect(await git(parent, "status", "--porcelain")).toBe("?? foreign.txt");
 	});
 });
 
