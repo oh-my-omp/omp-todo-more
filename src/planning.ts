@@ -1,8 +1,10 @@
 /**
  * Enforce a non-empty todo before `edit`, and annotate every real user
- * message with the todo snapshot and the obligation to keep it aligned with
- * the plan. `context` rewrites only provider input, not the stored human text.
- * Keeping the user role also lets OMP deliver mid-response steering live.
+ * message with the todo snapshot: an empty list asks for a todo only for
+ * work (changes to files, config, git or external state), never for
+ * discussion or investigation. `context` rewrites only provider input, not the
+ * stored human text. Keeping the user role also lets OMP deliver mid-response
+ * steering live.
  */
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
@@ -11,7 +13,7 @@ import { errorText } from "./errors.ts";
 import { readTodoMore, type TodoMoreState, toSnapshot } from "./state.ts";
 
 const INIT_REMINDER =
-	'Todo is empty. Initialize it now with one complete Todo document: INIT "objective" "measure" "doneWhen", PHASE "name", and ADD "title" "explanation" minutes for every step, between *** Begin Todo and *** End Todo. Estimate each item yourself in positive integer minutes; no fractions or defaults. edit is blocked until the complete document succeeds and the list has items.';
+	'Todo is empty. Work phase (this request changes files, config, git or external state): before the first change, initialize with one complete Todo document: INIT "objective" "measure" "doneWhen", PHASE "name", and ADD "title" "explanation" minutes for every step, between *** Begin Todo and *** End Todo. Estimate each item yourself in positive integer minutes; no fractions or defaults. edit is blocked until the complete document succeeds and the list has items. Non-work phase (discussion, investigation, explanation, answering questions): no todo.';
 
 type HumanMessage = Extract<AgentMessage, { role: "user" | "custom" }>;
 
@@ -28,7 +30,7 @@ function reminder(state: TodoMoreState): string {
 		case "list":
 			return [
 				'<system-reminder source="todo-more">',
-				'Check that this todo matches your current plan and latest user instructions. Update the goal, steps, explanations, estimates and statuses wherever they disagree; do not omit or narrow work. The complete snapshot includes completed, abandoned and blocked items. A null goal/explanation is missing; time.kind missing requires ESTIMATE "title" minutes with your own positive integer estimate. Batch related changes in one Todo document. Budgets are forecasts, not permission to reduce scope or quality. You do not need VIEW to check this snapshot.',
+				'Discussion, investigation, explanation and questions add no items. Check that this todo matches your current plan and latest user instructions. Update the goal, steps, explanations, estimates and statuses wherever they disagree; do not omit or narrow work. The complete snapshot includes completed, abandoned and blocked items. A null goal/explanation is missing; time.kind missing requires ESTIMATE "title" minutes with your own positive integer estimate. Batch related changes in one Todo document. Budgets are forecasts, not permission to reduce scope or quality. You do not need VIEW to check this snapshot.',
 				JSON.stringify(toSnapshot(state), null, 2),
 				"</system-reminder>",
 			].join("\n");

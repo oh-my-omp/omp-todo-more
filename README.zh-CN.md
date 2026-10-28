@@ -134,6 +134,8 @@ git 记录的提交信息在 message 之后，为提交方会话自上一次 tod
 
 每个会话独立持有列表。插件在 `before_agent_start` 恢复 `task:high/mid/low/free` 被宿主剥离的 todo；tool-restricted 会话通过宿主工具槽安装。保留 stop reminder、mid-run nudge、eager prelude、goal-mode context 与 request-only 用户提醒。人工中断不自动恢复。
 
+Todo 只属于工作阶段：请求会改动文件、配置、git 或外部状态。讨论、调查、解释与回答问题属于非工作阶段，不建 todo。工具说明、每条用户消息附带的空列表提醒与 `preferred` eager prelude 都按此划分；真正强制的只有 `edit` 守卫，因为 `edit` 就是工作。
+
 主会话在没有文本答复时中途停下（provider 错误、仍有未完成的 tool call、非人为的 abort），提醒在 10 秒宽限后发送；期间出现新一轮、排队消息或输入框草稿则不发。账户额度用尽的 429 改为等到额度重置后一分钟：错误带有重试提示时取 provider 给出的时间，否则取 omp 对该限额的估计（额度用尽为 30 分钟，并标明为估计）。等待期间输入框上方显示一行不抢焦点的提示，写明发送时间与原因；到点时输入框仍有草稿则等草稿清空后再发。`Ctrl+N` 或 `/todo-more-cancel` 取消待发提醒；提交消息、切换会话或分支、退出也会取消。待发提醒不跨进程保留。
 
 planning guard 在真正执行 edit 时读取当前分支，不在工具批次预检时判断；Todo INIT/edit 或 RM/edit 序列因此按 edit 执行时已接受文档的列表检查。

@@ -249,6 +249,12 @@ tool-restricted sessions get it through the host tool slot. Stop reminders,
 mid-run nudges, the eager prelude, goal-mode context and request-only user
 reminders are kept. A human interruption is not resumed automatically.
 
+A todo belongs to the work phase only: a request that changes files, config,
+git or external state. Discussion, investigation, explanation and answering
+questions are the non-work phase and get no todo. The tool description, the
+empty-list reminder on each user message and the `preferred` eager prelude all
+carry this split; only the `edit` guard enforces it, since `edit` is work.
+
 When the main session stops mid-work without a text answer — a provider error,
 a run that ended with tool calls outstanding, or an abort nobody asked for —
 the reminder is sent after a 10-second grace window, unless a turn, a queued

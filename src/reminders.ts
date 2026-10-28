@@ -532,7 +532,7 @@ Wrap all commands in *** Begin Todo and *** End Todo, JSON-quote strings, and do
 
 After \`${todo}\` succeeds, continue the request in the same turn.
 NEVER call \`${todo}\` again unless task state has materially changed.`
-		: `Consider calling \`${todo}\` first to lay out a phased plan in one complete Todo document. Cover the whole request — investigation through implementation and verification — not just the next step.
+		: `If this request is work (it changes files, config, git or external state), call \`${todo}\` first to lay out a phased plan in one complete Todo document; discussion, investigation, explanation and questions need no todo. Cover the whole request — investigation through implementation and verification — not just the next step.
 Use INIT "objective" "measure" "doneWhen", PHASE "name", and ADD "title" "explanation" minutes between *** Begin Todo and *** End Todo. Use JSON-quoted strings, specific titles, complete explanations and your own positive integer minute estimates; no fractions or defaults.
 If you create the list, continue the request in the same turn and avoid re-calling \`${todo}\` unless task state materially changes.`;
 	return `<system-reminder>\n${body}\n</system-reminder>\n`;
