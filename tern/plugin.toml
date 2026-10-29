@@ -1,6 +1,6 @@
 schema = 1
 id = "omp-todo-more"
 name = "Todo More"
-version = "0.1.16"
+version = "0.1.17"
 window = "window.luau"
 styles = ["todo-more.css"]
