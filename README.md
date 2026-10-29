@@ -159,10 +159,16 @@ estimate starts at the accepted batch's anchor if the item is already active.
 An item that remains `in_progress` continues to accrue wall time while its
 session is idle or the process is stopped; this is not CPU-time accounting.
 Native status changes use the corresponding session entry's timestamp.
+Time spent waiting on the user in `ask` is not work time and is left out of
+every `in_progress` interval: a wait runs from the host's
+`tool_execution_start` record of the `ask` call (`startedAt`) to that call's
+tool result (`timestamp`), or to the host's `session_exit` record when the
+process ended while the ask was open. All of it is read from the branch.
 
 The plugin maintains one one-shot timeout for the nearest active budget's
-deadline. Todo-related journal appends and session/branch changes re-arm it;
-there is no periodic polling and no end-hook deadline check. Native `/todo`,
+deadline. Todo-related journal appends, the start and result of an `ask` call,
+and session/branch changes re-arm it; while an `ask` is open no deadline runs.
+There is no periodic polling and no end-hook deadline check. Native `/todo`,
 delayed native tool results and accepted rich commits are observed at their
 journal write methods, even when the host projection fails. Ordinary messages
 do not trigger branch reads, and the collaboration append callback is untouched.

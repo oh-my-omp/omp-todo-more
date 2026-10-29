@@ -4,7 +4,7 @@ import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-m
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 import { errorText } from "./errors.ts";
-import { elapsedTime, readTodoMore, TODO_MORE_ENTRY_TYPE } from "./state.ts";
+import { askWaits, elapsedTime, readTodoMore, TODO_MORE_ENTRY_TYPE } from "./state.ts";
 
 export const OVERTIME_TYPE = `${TODO_MORE_ENTRY_TYPE}.overtime`;
 export const overtimeDetailsSchema = z.object({
@@ -32,6 +32,13 @@ type DeadlineBinding = {
 };
 
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+
+/** The host's record that an `ask` call started (`tool_execution_start`, written before the tool runs). */
+function isAskStart(customType: string, data: unknown): boolean {
+	return (
+		customType === "tool_execution_start" && typeof data === "object" && data !== null && "toolName" in data && data.toolName === "ask"
+	);
+}
 
 /**
  * Observe accepted todo journal writes, not projection setters or end events:
@@ -64,14 +71,18 @@ export function registerOvertime(pi: ExtensionAPI): void {
 			}
 			const state = readTodoMore(branch);
 			const now = Date.now();
+			// Waiting on the user in `ask` is not work time: no deadline runs while an ask is open,
+			// and the ask's start or result re-reads the clock.
+			const waits = askWaits(branch);
+			const waiting = waits.some((wait) => wait.end === null);
 			let nextDeadline: number | undefined;
-			if (state.kind === "list") {
+			if (state.kind === "list" && !waiting) {
 				for (const phase of state.phases) {
 					for (const item of phase.items) {
 						const time = item.time;
 						if (item.status !== "in_progress" || time.kind === "missing" || time.runningSince === null) continue;
 						if (pending.has(time.budgetId) || hasOvertimeWarning(branch, time.budgetId)) continue;
-						const elapsedMs = elapsedTime(time, now);
+						const elapsedMs = elapsedTime(time, now, waits);
 						const remainingMs = time.minutes * 60_000 - elapsedMs;
 						if (remainingMs > 0) {
 							const deadline = now + remainingMs;
@@ -139,12 +150,12 @@ Keep the todo aligned with actual progress. Do not reset the list or inflate an 
 		};
 		const observedEntry: typeof appendEntry = function (this: SessionManager, customType, data) {
 			const result = appendEntry.call(this, customType, data);
-			if (customType === TODO_MORE_ENTRY_TYPE || customType === USER_TODO_EDIT_CUSTOM_TYPE) changed();
+			if (customType === TODO_MORE_ENTRY_TYPE || customType === USER_TODO_EDIT_CUSTOM_TYPE || isAskStart(customType, data)) changed();
 			return result;
 		};
 		const observedMessage: typeof appendMessage = function (this: SessionManager, message) {
 			const result = appendMessage.call(this, message);
-			if (message.role === "toolResult" && message.toolName === "todo") changed();
+			if (message.role === "toolResult" && (message.toolName === "todo" || message.toolName === "ask")) changed();
 			return result;
 		};
 		const observedCustomMessage: typeof appendCustomMessage = function (
@@ -163,8 +174,13 @@ Keep the todo aligned with actual progress. Do not reset the list or inflate an 
 		const observedReplication: typeof ingestReplicatedEntry = function (this: SessionManager, entry) {
 			const result = ingestReplicatedEntry.call(this, entry);
 			if (
-				(entry.type === "custom" && (entry.customType === TODO_MORE_ENTRY_TYPE || entry.customType === USER_TODO_EDIT_CUSTOM_TYPE)) ||
-				(entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "todo") ||
+				(entry.type === "custom" &&
+					(entry.customType === TODO_MORE_ENTRY_TYPE ||
+						entry.customType === USER_TODO_EDIT_CUSTOM_TYPE ||
+						isAskStart(entry.customType, entry.data))) ||
+				(entry.type === "message" &&
+					entry.message.role === "toolResult" &&
+					(entry.message.toolName === "todo" || entry.message.toolName === "ask")) ||
 				(entry.type === "custom_message" && entry.customType === OVERTIME_TYPE)
 			)
 				changed();

@@ -736,6 +736,28 @@ describe("atomic batch timing through the authority branch", () => {
 		expectSaved(harness, await harness.callAt(epoch + 35_000, 'DONE "Implement"'), final, 5, 5);
 	});
 
+	test("a transition leaves the time spent waiting on the user in ask out of elapsed time", async () => {
+		const harness = fixture(timed());
+		const manager = harness.session.sessionManager;
+		manager.appendCustomEntry("tool_execution_start", {
+			toolCallId: "ask-1",
+			toolName: "ask",
+			startedAt: new Date(epoch + 2_000).toISOString(),
+		});
+		manager.appendMessage({
+			role: "toolResult",
+			toolName: "ask",
+			toolCallId: "ask-1",
+			content: [{ type: "text", text: "User answers:\nq: A" }],
+			details: { results: [] },
+			isError: false,
+			timestamp: epoch + 302_000,
+		});
+		expect((await harness.callAt(epoch + 306_000, 'BLOCK "Implement" "Wait"')).isError).not.toBe(true);
+		// 1 250 ms before, then 306 s in progress of which 300 s were the ask.
+		expect(estimateOf(harness.snapshot(), "Implement")).toEqual(time("implement-budget", 10, 7_250));
+	});
+
 	test("repeated START, EXPLAIN, same-budget ESTIMATE and VIEW never reset a running interval", async () => {
 		const harness = fixture(timed());
 		const before = timed();

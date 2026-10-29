@@ -79,15 +79,70 @@ export const itemTimeSchema = z.union([
 ]);
 export type ItemTime = z.infer<typeof itemTimeSchema>;
 
-/** Only in_progress wall time counts; leaving it closes the current interval. */
-export function transitionTime(time: ItemTime, status: TodoStatus, now: number): ItemTime {
-	if (time.kind === "missing") return time;
-	if (status === "in_progress") return time.runningSince === null ? { ...time, runningSince: now } : time;
-	return time.runningSince === null ? time : { ...time, elapsedMs: elapsedTime(time, now), runningSince: null };
+/**
+ * A span the session spent waiting on the user in `ask`, read from the branch:
+ * the host's `tool_execution_start` record of an `ask` call opens it (its
+ * `startedAt`), the call's tool result closes it (the result's `timestamp`), or
+ * the host's `session_exit` record does when the process ended while the ask
+ * was open. `end` is null while the ask is still open.
+ */
+export type AskWait = { readonly start: number; readonly end: number | null };
+
+/** Host custom entry types (`pi-coding-agent` `session/exit-diagnostics.ts`). */
+const TOOL_EXECUTION_START = "tool_execution_start";
+const SESSION_EXIT = "session_exit";
+const toolStartSchema = z.object({ toolCallId: z.string(), toolName: z.string(), startedAt: z.string() });
+
+/** The ask waits on `entries` (a session branch, oldest first). */
+export function askWaits(entries: readonly SessionEntry[]): AskWait[] {
+	const open = new Map<string, number>();
+	const waits: AskWait[] = [];
+	for (const entry of entries) {
+		if (entry.type === "custom" && entry.customType === TOOL_EXECUTION_START) {
+			const parsed = toolStartSchema.safeParse(entry.data);
+			const start = parsed.success && parsed.data.toolName === "ask" ? Date.parse(parsed.data.startedAt) : Number.NaN;
+			if (parsed.success && Number.isFinite(start)) open.set(parsed.data.toolCallId, start);
+		} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "ask") {
+			const start = open.get(entry.message.toolCallId);
+			if (start === undefined) continue;
+			open.delete(entry.message.toolCallId);
+			waits.push({ start, end: entry.message.timestamp });
+		} else if (entry.type === "custom" && entry.customType === SESSION_EXIT) {
+			const end = Date.parse(entry.timestamp);
+			for (const start of open.values()) waits.push({ start, end });
+			open.clear();
+		}
+	}
+	for (const start of open.values()) waits.push({ start, end: null });
+	return waits;
 }
 
-export function elapsedTime(time: Extract<ItemTime, { kind: "estimated" }>, now: number): number {
-	return time.elapsedMs + (time.runningSince === null ? 0 : Math.max(0, now - time.runningSince));
+/** Milliseconds of [from, to) spent in `waits` (an open wait runs to `to`); overlapping waits count once. */
+function waitedIn(waits: readonly AskWait[], from: number, to: number): number {
+	const spans = waits
+		.map((wait) => [Math.max(from, wait.start), Math.min(to, wait.end ?? to)] as const)
+		.filter(([start, end]) => end > start)
+		.sort((left, right) => left[0] - right[0]);
+	let total = 0;
+	let reached = from;
+	for (const [start, end] of spans) {
+		const begin = Math.max(start, reached);
+		if (end > begin) total += end - begin;
+		reached = Math.max(reached, end);
+	}
+	return total;
+}
+
+/** Only in_progress wall time counts, minus the time spent waiting on the user in `ask`; leaving in_progress closes the interval. */
+export function transitionTime(time: ItemTime, status: TodoStatus, now: number, waits: readonly AskWait[] = []): ItemTime {
+	if (time.kind === "missing") return time;
+	if (status === "in_progress") return time.runningSince === null ? { ...time, runningSince: now } : time;
+	return time.runningSince === null ? time : { ...time, elapsedMs: elapsedTime(time, now, waits), runningSince: null };
+}
+
+export function elapsedTime(time: Extract<ItemTime, { kind: "estimated" }>, now: number, waits: readonly AskWait[] = []): number {
+	if (time.runningSince === null) return time.elapsedMs;
+	return time.elapsedMs + Math.max(0, now - time.runningSince - waitedIn(waits, time.runningSince, now));
 }
 
 export function timeEstimateText(time: ItemTime): string {
@@ -242,7 +297,7 @@ function recordOf(entry: SessionEntry): Record | undefined {
  * nearest earlier rich snapshot: titles keep their explanation, the goal carries
  * over, new titles are `missing`. An empty snapshot in between ends the join.
  */
-function joinNative(phases: NativePhases, base: TodoMoreState, at: number): TodoMoreState {
+function joinNative(phases: NativePhases, base: TodoMoreState, at: number, waits: readonly AskWait[]): TodoMoreState {
 	const known = new Map<string, TodoItem>();
 	if (base.kind === "list") for (const item of base.phases.flatMap((phase) => phase.items)) known.set(item.title, item);
 	const joined = phases.map((phase) => ({
@@ -252,7 +307,7 @@ function joinNative(phases: NativePhases, base: TodoMoreState, at: number): Todo
 			return {
 				title: task.content,
 				explanation: previous?.explanation ?? { kind: "missing" },
-				time: transitionTime(previous?.time ?? { kind: "missing" }, task.status, at),
+				time: transitionTime(previous?.time ?? { kind: "missing" }, task.status, at, waits),
 				status: task.status,
 				...(task.blocker === undefined ? {} : { blocker: task.blocker }),
 				...(previous?.commit === undefined ? {} : { commit: previous.commit }),
@@ -265,17 +320,18 @@ function joinNative(phases: NativePhases, base: TodoMoreState, at: number): Todo
 /** The todo-more state on `entries` (a session branch, oldest first). */
 export function readTodoMore(entries: readonly SessionEntry[]): TodoMoreState {
 	const pending: Extract<Record, { kind: "native" }>[] = [];
+	const join = (state: TodoMoreState, native: Extract<Record, { kind: "native" }>): TodoMoreState =>
+		joinNative(native.phases, state, native.at, askWaits(entries));
 	for (let index = entries.length - 1; index >= 0; index--) {
 		const entry = entries[index];
 		if (entry === undefined) continue;
 		const record = recordOf(entry);
 		if (record === undefined) continue;
-		if (record.kind === "rich")
-			return pending.reduceRight<TodoMoreState>((state, native) => joinNative(native.phases, state, native.at), record.state);
+		if (record.kind === "rich") return pending.reduceRight<TodoMoreState>(join, record.state);
 		pending.push(record);
 		if (record.phases.every((phase) => phase.tasks.length === 0)) break;
 	}
-	return pending.reduceRight<TodoMoreState>((state, native) => joinNative(native.phases, state, native.at), EMPTY);
+	return pending.reduceRight<TodoMoreState>(join, EMPTY);
 }
 
 /** The host's view of the list: what `session.setTodoPhases`, the HUD and native tool-result consumers take. */

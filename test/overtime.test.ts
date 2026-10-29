@@ -7,6 +7,7 @@ import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo
 import { commitTodoState } from "../src/commit.ts";
 import { OVERTIME_TYPE, overtimeDetailsSchema, registerOvertime } from "../src/overtime.ts";
 import {
+	askWaits,
 	elapsedTime,
 	type ItemTime,
 	readTodoMore,
@@ -206,6 +207,29 @@ class SchedulerFixture {
 		}
 		await Promise.resolve();
 	}
+
+	/** The host's record of an `ask` call starting, as `AgentSession` writes it. */
+	async askStart(toolCallId: string): Promise<void> {
+		this.manager.appendCustomEntry("tool_execution_start", {
+			toolCallId,
+			toolName: "ask",
+			startedAt: new Date(this.clock.now).toISOString(),
+		});
+		await Promise.resolve();
+	}
+
+	async askAnswered(toolCallId: string): Promise<void> {
+		this.manager.appendMessage({
+			role: "toolResult",
+			toolName: "ask",
+			toolCallId,
+			content: [{ type: "text", text: "User answers:\nq: A" }],
+			details: { results: [] },
+			isError: false,
+			timestamp: this.clock.now,
+		});
+		await Promise.resolve();
+	}
 }
 
 describe("overtime deadline scheduling", () => {
@@ -229,6 +253,25 @@ describe("overtime deadline scheduling", () => {
 			await fixture.clock.advanceTo(epoch + 180_000);
 			expect(warnings(fixture.manager)).toHaveLength(1);
 			expect(fixture.clock.deadlines).toEqual([]);
+		});
+	});
+
+	test("time spent waiting on the user in ask is not work time", async () => {
+		await withScheduler(async (fixture) => {
+			await fixture.append(estimatedState());
+			await fixture.clock.advanceTo(epoch + 20_000);
+			await fixture.askStart("ask-1");
+			// No deadline runs while the user is deciding.
+			expect(fixture.clock.deadlines).toEqual([]);
+			await fixture.clock.advanceTo(epoch + 200_000);
+			expect(warnings(fixture.manager)).toEqual([]);
+			await fixture.askAnswered("ask-1");
+			expect(elapsedTime(estimateOf(fixture.manager), fixture.clock.now, askWaits(fixture.manager.getBranch()))).toBe(20_000);
+			expect(fixture.clock.deadlines).toEqual([epoch + 240_000]);
+			await fixture.clock.advanceTo(epoch + 239_999);
+			expect(warnings(fixture.manager)).toEqual([]);
+			await fixture.clock.advanceTo(epoch + 240_000);
+			expect(warningDetails(fixture.manager)).toEqual({ budgetId: "original-budget", title, estimatedMinutes: 1, elapsedMs: 60_000 });
 		});
 	});
 

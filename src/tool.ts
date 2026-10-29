@@ -5,6 +5,7 @@ import { commitCompletion, sharedWorktreeRoot, worktreeState } from "./git.ts";
 import { participatingModels } from "./models.ts";
 import { customFormat, parametersSchema, parseTodo, type TodoCommand, type TodoCommitClause, type TodoTarget } from "./protocol.ts";
 import {
+	askWaits,
 	type CommitRecord,
 	commitRecordText,
 	commitScopeText,
@@ -688,6 +689,8 @@ export async function runTodo(
 	const notes: string[] = [];
 	// All internal transitions belong to this one atomic mutation, not separate visible work intervals.
 	const now = Date.now();
+	// Time spent waiting on the user in `ask` is not work time.
+	const waits = askWaits(session.sessionManager.getBranch());
 	for (const params of batch.params) {
 		const errors = ruleErrors(params, next);
 		if (params.op === "goal" && next.kind === "empty") errors.push("GOAL requires a non-empty list; use INIT to create one");
@@ -718,7 +721,7 @@ export async function runTodo(
 		if (params.op !== "goal") {
 			normalizeInProgress(phases);
 			for (const phase of phases) {
-				for (const item of phase.items) item.time = transitionTime(item.time, item.status, now);
+				for (const item of phase.items) item.time = transitionTime(item.time, item.status, now, waits);
 			}
 		}
 		const goal: GoalState =
