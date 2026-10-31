@@ -71,13 +71,6 @@ import { registerUi } from "./src/ui.ts";
 
 const TOOL_NAME = "todo";
 
-const TODO_AGENTS: Record<string, true> = {
-	"task:high": true,
-	"task:mid": true,
-	"task:low": true,
-	"task:free": true,
-};
-
 /** Fields shared by the registered tool and the host-tool install, matching the native tool's. */
 const TOOL_FIELDS = {
 	name: TOOL_NAME,
@@ -112,17 +105,11 @@ const parentCwdOf =
 		return parentId === undefined ? undefined : AgentRegistry.global().get(parentId)?.session?.sessionManager.getCwd();
 	};
 
-const isTaskAgent = (ctx: ExtensionContext): boolean => {
-	if (ctx.agent.kind !== "sub") return false;
-	const ref = AgentRegistry.global().get(ctx.agent.id);
-	return ref !== undefined && Object.hasOwn(TODO_AGENTS, ref.displayName);
-};
-
-/** `task:*` subagent: put the tool back after the executor stripped `todo`. */
-async function installForTask(ctx: ExtensionContext): Promise<void> {
-	if (!isTaskAgent(ctx)) return;
+/** Editing subagent: restore `todo` so its edit precondition is satisfiable. */
+async function installForSubagent(ctx: ExtensionContext): Promise<void> {
+	if (ctx.agent.kind !== "sub") return;
 	const session = ownSession(ctx);
-	if (session === undefined) return;
+	if (session === undefined || !session.getEnabledToolNames().includes("edit")) return;
 	if (session.getAllToolNames().includes(TOOL_NAME)) {
 		const enabled = session.getEnabledToolNames();
 		if (enabled.includes(TOOL_NAME)) return;
@@ -166,7 +153,7 @@ export default async function todoMore(pi: ExtensionAPI): Promise<void> {
 
 	pi.on("before_agent_start", async (_event, ctx) => {
 		try {
-			await installForTask(ctx);
+			await installForSubagent(ctx);
 		} catch (error) {
 			pi.logger.warn("todo-more could not install todo", { error: errorText(error) });
 		}

@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 A rich Todo plugin for OMP. It replaces the native `todo` while keeping
 title-based addressing, phase progress, reminders, planning checks and
-`task:*` subagent behavior; the list carries a goal, an explanation and a
+editing subagent behavior; the list carries a goal, an explanation and a
 model-estimated time budget per item.
 
 ## Install and enable
@@ -60,7 +60,7 @@ Detailed model-facing calling instructions ship as native tool topics:
 `xd://todo/lifecycle` covers work planning, blockers and time budgets;
 `xd://ctx/recall` covers context lists, handoffs, task timelines and transcript
 fallbacks. The descriptions at `xd://todo` and `xd://ctx` point to these topics,
-including when Todo is restored for a task agent.
+including when Todo is restored for an editing subagent.
 
 Initialize the entire plan in one call:
 
@@ -266,10 +266,14 @@ apply too.
 ## Subagents and reminders
 
 Every session holds its own list. In `before_agent_start` the plugin restores
-the todo tool that the host strips from `task:high/mid/low/free`;
-tool-restricted sessions get it through the host tool slot. Stop reminders,
-mid-run nudges, the eager prelude, goal-mode context and request-only user
-reminders are kept. A human interruption is not resumed automatically.
+the todo tool stripped by the host for any subagent whose own enabled tools
+include `edit`. This keeps the edit precondition satisfiable without depending
+on an agent's name or an explicit `todo` declaration; default-tool `task:*`
+agents and custom editing agents use the same rule. Subagents without enabled
+`edit` do not receive a restored tool. Tool-restricted sessions get it through
+the host tool slot. Stop reminders, mid-run nudges, the eager prelude, goal-mode
+context and request-only user reminders are kept. A human interruption is not
+resumed automatically.
 
 A todo belongs to the work phase only: a request that changes files, config,
 git or external state. Discussion, investigation, explanation and answering

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Restore `todo` for every subagent with enabled `edit`, replacing the four-name `task:*` whitelist so custom editing agents can satisfy the same Todo edit precondition themselves. Read-only subagents do not gain the tool.
 - Publish the full Todo protocol/work lifecycle and ctx recall instructions as packaged native `docTopics`, with concise tool descriptions linking to `xd://todo/protocol`, `xd://todo/lifecycle` and `xd://ctx/recall`; task-agent Todo installation shares the same topics.
 - Keep Todo preview parser diagnostics structured until ANSI/native call-card rendering, so human-facing errors follow the current English/Chinese UI language while model-facing execution errors remain English.
 - The agent-directory `omomp-lang` section now strictly accepts only `language: en` or `language: zh`, rejecting case/whitespace variants and extra fields instead of treating them as valid configuration. `OMOMP_LANG` still ignores case and surrounding whitespace, duplicate configuration files remain ambiguous, and environment variables remain fresh on every resolution.

@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-OMP 的富信息 Todo 插件。替代原生 `todo`，保留标题寻址、阶段进度、提醒、planning 检查与 `task:*` 子会话行为；列表包含 goal，以及每项 explanation 和模型预估耗时。
+OMP 的富信息 Todo 插件。替代原生 `todo`，保留标题寻址、阶段进度、提醒、planning 检查与编辑型子会话行为；列表包含 goal，以及每项 explanation 和模型预估耗时。
 
 ## 安装与启用
 
@@ -42,7 +42,7 @@ Todo More 会本地化面向人的标签、卡片、提醒、编辑器和通知�
 `xd://todo/protocol` 包含文档语法、选择器与完成提交；
 `xd://todo/lifecycle` 包含工作规划、阻塞和时间预算；
 `xd://ctx/recall` 包含上下文列表、handoff、任务时间线和原始 transcript 回退。
-`xd://todo` 与 `xd://ctx` 的工具说明列出相应指针，task agent 恢复安装的 Todo 也提供这些 topic。
+`xd://todo` 与 `xd://ctx` 的工具说明列出相应指针，编辑型子 agent 恢复安装的 Todo 也提供这些 topic。
 
 一次初始化全部阶段和任务：
 
@@ -144,7 +144,7 @@ git 记录的提交信息在 message 之后，为提交方会话自上一次 tod
 
 ## 子会话与提醒
 
-每个会话独立持有列表。插件在 `before_agent_start` 恢复 `task:high/mid/low/free` 被宿主剥离的 todo；tool-restricted 会话通过宿主工具槽安装。保留 stop reminder、mid-run nudge、eager prelude、goal-mode context 与 request-only 用户提醒。人工中断不自动恢复。
+每个会话独立持有列表。插件在 `before_agent_start` 为自身已启用工具包含 `edit` 的任意子 agent 恢复被宿主剥离的 todo，让 edit 前置条件可以由该 agent 自己满足，不依赖 agent 名称或显式的 `todo` 声明；默认工具集的 `task:*` 与自定义编辑型 agent 使用同一规则。未启用 `edit` 的子 agent 不会获得恢复的工具。tool-restricted 会话通过宿主工具槽安装。保留 stop reminder、mid-run nudge、eager prelude、goal-mode context 与 request-only 用户提醒。人工中断不自动恢复。
 
 Todo 只属于工作阶段：请求会改动文件、配置、git 或外部状态。讨论、调查、解释与回答问题属于非工作阶段，不建 todo。Todo lifecycle topic、每条用户消息附带的空列表提醒与 `preferred` eager prelude 都按此划分；真正强制的只有 `edit` 守卫，因为 `edit` 就是工作。
 
