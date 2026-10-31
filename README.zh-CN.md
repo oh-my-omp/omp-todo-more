@@ -24,11 +24,15 @@ todo:
 ## 界面语言
 
 Todo More 会本地化面向人的标签、卡片、提醒、编辑器和通知。设置
-`OMOMP_LANG=en` 或 `OMOMP_LANG=zh`（不区分大小写）即可选择语言；未设置时，
-插件从 OMP agent 目录中唯一的 `omomp.yml`、`omomp.yaml`、`omomp.json` 或
-`omomp.toml` 读取 `omomp-lang.language`，再依次回退到 `LC_ALL`、
-`LC_MESSAGES`、`LANG`，最后使用英语。配置修改在下次进程启动时生效。命令名、
-配置键、协议值、面向模型的 prompt 和返回模型的 tool-result 内容保持不变。
+`OMOMP_LANG=en` 或 `OMOMP_LANG=zh` 即可选择语言，值会去除首尾空白并忽略大小写；
+未设置或无效时继续回退。插件只读取 OMP agent 目录中唯一的 `omomp.yml`、
+`omomp.yaml`、`omomp.json` 或 `omomp.toml`；多个文件同时存在视为有歧义，不提供配置语言。
+`omomp-lang` 段必须仅含 `language: en` 或 `language: zh`，不接受额外字段，
+无效段会被忽略。只有这次配置查找在进程内缓存，
+配置修改在下次进程启动时生效。环境变量每次解析时重新读取。没有有效配置时，
+取 `LC_ALL`、`LC_MESSAGES`、`LANG` 中第一个去除首尾空白后非空的值；
+以 `zh` 开头（不区分大小写）时使用中文，否则使用英语；全部为空时也使用英语。
+命令名、配置键、协议值、面向模型的 prompt 和返回模型的 tool-result 内容保持不变。
 
 ## 工具与状态
 

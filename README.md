@@ -35,13 +35,19 @@ host imports.
 ## UI language
 
 Todo More localizes its human-facing labels, cards, reminders, editor and
-notifications. `OMOMP_LANG=en` or `OMOMP_LANG=zh` selects the language
-(case-insensitive); when it is unset, the plugin reads `omomp-lang.language`
-from the single `omomp.yml`, `omomp.yaml`, `omomp.json` or `omomp.toml` in the
-OMP agent directory, then falls back to `LC_ALL`, `LC_MESSAGES`, `LANG` and
-English. Configuration changes apply on the next process start. Command names,
-configuration keys, protocol values, model-facing prompts and tool-result
-content remain unchanged.
+notifications. `OMOMP_LANG=en` or `OMOMP_LANG=zh` selects the language after
+trimming whitespace and ignoring case; unset or invalid values fall through.
+The plugin then reads the single `omomp.yml`, `omomp.yaml`, `omomp.json` or
+`omomp.toml` in the OMP agent directory. Multiple files are ambiguous and
+provide no configured language. The `omomp-lang` section must contain exactly
+`language: en` or `language: zh`, with no extra fields; invalid sections are
+ignored. Only this configuration lookup is cached for the process; changes
+apply on the next process start. Environment variables are read on every
+resolution. Without a configured language, the first trimmed, nonempty value
+of `LC_ALL`, `LC_MESSAGES`, `LANG` selects Chinese if it starts with `zh`
+(case-insensitive), and English otherwise; no value means English. Command
+names, configuration keys, protocol values, model-facing prompts and
+tool-result content remain unchanged.
 
 ## Tool and state
 

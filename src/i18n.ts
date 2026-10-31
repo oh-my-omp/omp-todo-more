@@ -49,7 +49,9 @@ function readOmompLanguage(): Language | undefined {
 		if (!isConfigValue(parsed)) return undefined;
 		const section = parsed["omomp-lang"];
 		if (!isConfigValue(section)) return undefined;
-		omompLanguage = parseLanguage(section.language);
+		if (Object.keys(section).length !== 1) return undefined;
+		if (section.language !== "en" && section.language !== "zh") return undefined;
+		omompLanguage = section.language;
 		return omompLanguage;
 	} catch {
 		return undefined;

@@ -48,6 +48,22 @@ describe("runtime UI language resolution", () => {
 		expect(await runLanguage({ LANG: "zh_CN.UTF-8" }, { "omomp.yml": "omomp-lang:\n  language: en\n", "omomp.json": "{}" })).toBe("zh");
 	});
 
+	test("agent config requires an exact language enum and no extra section fields", async () => {
+		for (const section of [{ language: "ZH" }, { language: " zh " }, { language: "zh", extra: true }, { language: 1 }, {}, ["zh"]]) {
+			expect(await runLanguage({ LANG: "en_US.UTF-8" }, { "omomp.json": JSON.stringify({ "omomp-lang": section }) })).toBe("en");
+		}
+	});
+
+	test("each supported agent config format accepts the exact section", async () => {
+		for (const [name, content] of Object.entries({
+			"omomp.yml": "omomp-lang:\n  language: zh\n",
+			"omomp.yaml": "omomp-lang:\n  language: zh\n",
+			"omomp.json": '{"omomp-lang":{"language":"zh"}}',
+			"omomp.toml": '[omomp-lang]\nlanguage = "zh"\n',
+		})) {
+			expect(await runLanguage({ LANG: "en_US.UTF-8" }, { [name]: content })).toBe("zh");
+		}
+	});
 	test("missing values default to English", async () => {
 		expect(await runLanguage({ OMOMP_LANG: "", LC_ALL: "", LC_MESSAGES: "", LANG: "" })).toBe("en");
 	});
