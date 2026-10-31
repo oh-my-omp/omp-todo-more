@@ -291,7 +291,7 @@ describe("streamed Todo intent preview", () => {
 		const invalid = previewTodo(`${prefix}START not-quoted\n`);
 		expect(invalid.commands).toEqual([{ kind: "init", goal }]);
 		expect(invalid.complete).toBe(false);
-		expect(invalid.error).toContain("Line 3");
+		expect(invalid.error).toEqual({ kind: "line", line: 3, error: { kind: "token" } });
 		expectInvalid(`${prefix}START not-quoted\n*** End Todo`);
 	});
 
@@ -336,7 +336,7 @@ describe("streamed Todo intent preview", () => {
 			expect(invalid.commands).toEqual(commands);
 			expect(invalid.pending).toBe("");
 			expect(invalid.complete).toBe(false);
-			expect(invalid.error).toContain("Line 4");
+			expect(invalid.error).toMatchObject({ kind: "line", line: 4 });
 			expectInvalid(`${prefix}${line}\n*** End Todo`);
 		});
 	}

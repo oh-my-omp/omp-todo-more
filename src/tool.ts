@@ -30,31 +30,11 @@ import {
 	unexplainedItems,
 } from "./state.ts";
 
-// @upstream adapted @oh-my-pi/pi-coding-agent@18.10.1 src/prompts/tools/todo.md#*
 export const DESCRIPTION = `Batch Todo initialization and edits in one document; do not call once per task.
-Input is plain text on custom-tool providers, otherwise {input: "the same document"}. Use uppercase commands, one per physical line, and JSON-quoted strings (escape newlines as \\n):
-*** Begin Todo
-INIT "Deliver feature" "Real user path passes" "Runtime verified"
-PHASE "Implementation"
-ADD "Implement feature" "Cover the requested behavior" 20
-ADD "Verify feature" "Exercise the real entry and check the result" 10
-*** End Todo
-INIT replaces the list and goal, must be first and unique, and carries objective, measure, doneWhen. Following PHASE/ADD blocks form one init; ADD before PHASE uses "Tasks".
-PHASE "name" followed by one or more ADD "title" "explanation" minutes appends outside INIT; each block needs ADD, and its scope ends at the first non-ADD. Status selectors never inherit PHASE.
-Every ADD requires your own positive integer minute estimate, no fractions or defaults. ESTIMATE "title" minutes supplies or revises a budget; EXPLAIN "title" "explanation" revises an explanation. Batch related edits in one document.
-GOAL "objective" "measure" "doneWhen" replaces all goal fields on an existing nonempty list without normalizing task status; put GOAL first if the list lacks one.
-START "title" selects the active task. DONE, DROP and RM take "title", PHASE "name", or ALL. BLOCK and UNBLOCK take "title" or PHASE "name"; BLOCK may add a quoted reason. RM ALL clears the list and goal.
-A DONE carries the commit its completion owes: DONE "title" "<message>" commits every change, DONE "title" "<paths>" "<message>" commits only those whitespace-separated pathspecs (an empty scope commits every change). The tool stages and commits through git itself and records the commit on every task that DONE completes. Outside a git checkout, or with nothing uncommitted, the clause is inert and no commit happens. In a checkout with uncommitted work a DONE without a clause is rejected: commit the work through the clause, or discard it, before completing. A clause commits the work as it stands and is never checked for covering everything uncommitted. A subagent working in its parent agent's git worktree never commits: every DONE form completes without a commit or the uncommitted-work refusal, and the parent agent integrates and commits the changes.
-VIEW must be the sole command; mutations already return the resulting list. Titles/phase names are unique and stable; NEVER use generated IDs or guess lost titles.
-Partial input is an uncommitted preview. The complete document is validated in order and committed once; syntax, target or rule errors reject the entire batch.
-Work phase: the request changes files, config, git or external state. Before its first change, INIT the entire requested plan with a goal, explanation and estimate for EVERY requested item; NEVER omit work or remember leftovers. Update the goal, steps, explanations, estimates and statuses with material scope changes.
-Non-work phase: discussion, investigation, explanation, answering questions; nothing changes. NEVER create or extend a todo for it. Investigation that ends in a decided change enters the work phase at that change.
-After each logical task operation, no active means earliest pending starts in phase order; only the earliest active remains; blocked never starts automatically. Completion can return the pointer to earlier open work without reopening completed items.
-BLOCK external waits (user, agent, service) with an optional reason to suppress stop reminders; UNBLOCK returns pending. Append a clearing task for an agent-actionable blocker.
-Only in_progress time counts; pending/blocked/closed pause it. Repeated START, VIEW and EXPLAIN do not reset elapsed time. ESTIMATE preserves elapsed time and gives a changed budget one new overtime warning. Never re-init or inflate estimates to hide overruns.
-A time budget is a forecast, not permission to reduce scope, quality or stop. On an overtime warning, verify the cause, reconsider the approach, consult a subagent (or parent) where useful, and keep advancing the full task.
-NEVER call todo alone: initialize with first work and update with the next action.`;
-// @upstream-end
+
+Topics — read the one a call needs before making it:
+- \`xd://todo/protocol\` — before writing a Todo document, choosing selectors, or completing tasks with commits
+- \`xd://todo/lifecycle\` — before planning work, changing task state, handling blockers, or revising time budgets`;
 
 export const OPS = ["init", "start", "done", "rm", "drop", "block", "unblock", "append", "view", "explain", "estimate", "goal"] as const;
 export type Op = (typeof OPS)[number];

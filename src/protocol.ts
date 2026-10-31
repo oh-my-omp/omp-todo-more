@@ -44,11 +44,55 @@ export type TodoCommand =
 	| { kind: "block"; target: Exclude<TodoTarget, { kind: "all" }>; reason?: string }
 	| { kind: "view" };
 export type TodoProgram = { kind: "ok"; commands: TodoCommand[] } | { kind: "invalid"; message: string };
-export type TodoPreview = { commands: TodoCommand[]; pending: string; complete: boolean; error?: string };
+type TodoLineError =
+	| { kind: "quoted-string" | "estimate" | "token" | "argument-spacing" | "trailing-whitespace" | "uppercase-command" }
+	| { kind: "command"; command: string };
+export type TodoParseError =
+	| TodoLineError
+	| { kind: "input" | "begin" | "after-end" }
+	| { kind: "line"; line: number; error: TodoLineError };
+export type TodoPreview = { commands: TodoCommand[]; pending: string; complete: boolean; error?: TodoParseError };
+
+/** Parser diagnostics stay structured until the model or human boundary chooses a language. */
+export function formatTodoParseError(error: TodoParseError, language: "en" | "zh" = "en"): string {
+	const zh = language === "zh";
+	switch (error.kind) {
+		case "input":
+			return zh ? "需要 Todo 输入文本" : "Expected Todo input text";
+		case "begin":
+			return zh ? "需要 *** Begin Todo" : "Expected *** Begin Todo";
+		case "after-end":
+			return zh ? "*** End Todo 后有意外文本" : "Unexpected text after *** End Todo";
+		case "quoted-string":
+			return zh ? "需要带引号的 JSON 字符串" : "Expected a quoted JSON string";
+		case "estimate":
+			return zh ? "预计时间必须是支持范围内的正整数分钟数" : "Estimate must be a supported positive integer minute value";
+		case "token":
+			return zh
+				? "需要命令、选择器、带引号的 JSON 字符串或正整数预计时间"
+				: "Expected a command, selector, quoted JSON string, or positive integer estimate";
+		case "argument-spacing":
+			return zh ? "参数之间须用空格分隔" : "Separate arguments with spaces";
+		case "trailing-whitespace":
+			return zh ? "行末有意外空白" : "Unexpected trailing whitespace";
+		case "uppercase-command":
+			return zh ? "需要大写命令" : "Expected an uppercase command";
+		case "command":
+			return zh ? `${error.command} 命令或参数无效` : `Invalid ${error.command} command or arguments`;
+		case "line":
+			return zh
+				? `第 ${error.line} 行：${formatTodoParseError(error.error, language)}`
+				: `Line ${error.line}: ${formatTodoParseError(error.error, language)}`;
+		default: {
+			const unreachable: never = error;
+			throw new Error(`Unexpected Todo parse error: ${String(unreachable)}`);
+		}
+	}
+}
 
 type Token = { kind: "string"; value: string } | { kind: "word"; value: string } | { kind: "minutes"; value: number };
-type Tokens = { kind: "ok"; tokens: Token[] } | { kind: "invalid"; message: string };
-type ParsedLine = { kind: "ok"; command: TodoCommand } | { kind: "invalid"; message: string };
+type Tokens = { kind: "ok"; tokens: Token[] } | { kind: "invalid"; error: TodoLineError };
+type ParsedLine = { kind: "ok"; command: TodoCommand } | { kind: "invalid"; error: TodoLineError };
 
 function tokenize(line: string): Tokens {
 	const tokens: Token[] = [];
@@ -61,7 +105,7 @@ function tokenize(line: string): Tokens {
 		const minutes = quoted || word ? undefined : /^[1-9][0-9]*/.exec(rest);
 		if (quoted) {
 			const value: unknown = JSON.parse(quoted[0]);
-			if (typeof value !== "string") return { kind: "invalid", message: "Expected a quoted JSON string" };
+			if (typeof value !== "string") return { kind: "invalid", error: { kind: "quoted-string" } };
 			tokens.push({ kind: "string", value });
 			offset += quoted[0].length;
 		} else if (word) {
@@ -69,15 +113,15 @@ function tokenize(line: string): Tokens {
 			offset += word[0].length;
 		} else if (minutes) {
 			const parsed = estimatedMinutesSchema.safeParse(Number(minutes[0]));
-			if (!parsed.success) return { kind: "invalid", message: "Estimate must be a supported positive integer minute value" };
+			if (!parsed.success) return { kind: "invalid", error: { kind: "estimate" } };
 			tokens.push({ kind: "minutes", value: parsed.data });
 			offset += minutes[0].length;
-		} else return { kind: "invalid", message: "Expected a command, selector, quoted JSON string, or positive integer estimate" };
+		} else return { kind: "invalid", error: { kind: "token" } };
 		if (offset === line.length) break;
 		const space = /^[ \t]+/.exec(line.slice(offset));
-		if (!space) return { kind: "invalid", message: "Separate arguments with spaces" };
+		if (!space) return { kind: "invalid", error: { kind: "argument-spacing" } };
 		offset += space[0].length;
-		if (offset === line.length) return { kind: "invalid", message: "Unexpected trailing whitespace" };
+		if (offset === line.length) return { kind: "invalid", error: { kind: "trailing-whitespace" } };
 	}
 	return { kind: "ok", tokens };
 }
@@ -127,7 +171,7 @@ function parseLine(line: string): ParsedLine {
 	const parsed = tokenize(line);
 	if (parsed.kind === "invalid") return parsed;
 	const [head, ...args] = parsed.tokens;
-	if (head?.kind !== "word") return { kind: "invalid", message: "Expected an uppercase command" };
+	if (head?.kind !== "word") return { kind: "invalid", error: { kind: "uppercase-command" } };
 	const strings = args.filter((token) => token.kind === "string").map((token) => token.value);
 	const onlyStrings = strings.length === args.length;
 	switch (head.value) {
@@ -200,7 +244,7 @@ function parseLine(line: string): ParsedLine {
 			if (args.length === 0) return { kind: "ok", command: { kind: "view" } };
 			break;
 	}
-	return { kind: "invalid", message: `Invalid ${head.value} command or arguments` };
+	return { kind: "invalid", error: { kind: "command", command: head.value } };
 }
 
 /** Pure display-only intent. Only newline-terminated commands are interpreted while generating. */
@@ -209,16 +253,17 @@ export function previewTodo(input: string): TodoPreview {
 	const pending = lines.pop() ?? "";
 	const commands: TodoCommand[] = [];
 	if (lines.length === 0) return { commands, pending, complete: false };
-	if (lines[0]?.replace(/\r$/, "") !== "*** Begin Todo") return { commands, pending, complete: false, error: "Expected *** Begin Todo" };
+	if (lines[0]?.replace(/\r$/, "") !== "*** Begin Todo") return { commands, pending, complete: false, error: { kind: "begin" } };
 	for (let index = 1; index < lines.length; index++) {
 		const line = lines[index]!.replace(/\r$/, "");
 		if (line === "*** End Todo") {
 			return index === lines.length - 1 && pending === ""
 				? { commands, pending: "", complete: true }
-				: { commands, pending, complete: false, error: "Unexpected text after *** End Todo" };
+				: { commands, pending, complete: false, error: { kind: "after-end" } };
 		}
 		const parsed = parseLine(line);
-		if (parsed.kind === "invalid") return { commands, pending, complete: false, error: `Line ${index + 1}: ${parsed.message}` };
+		if (parsed.kind === "invalid")
+			return { commands, pending, complete: false, error: { kind: "line", line: index + 1, error: parsed.error } };
 		commands.push(parsed.command);
 	}
 	return { commands, pending, complete: pending === "*** End Todo" };
@@ -227,7 +272,7 @@ export function previewTodo(input: string): TodoPreview {
 /** Final execution always reparses; an unfinished or invalid suffix rejects the whole call. */
 export function parseTodo(input: string): TodoProgram {
 	const preview = previewTodo(input);
-	if (preview.error) return { kind: "invalid", message: preview.error };
+	if (preview.error) return { kind: "invalid", message: formatTodoParseError(preview.error) };
 	if (!preview.complete) return { kind: "invalid", message: "Expected complete *** Begin Todo / *** End Todo document" };
 	if (preview.commands.length === 0) return { kind: "invalid", message: "Todo document needs at least one command" };
 	if (preview.commands.some((command) => command.kind === "view") && preview.commands.length !== 1) {

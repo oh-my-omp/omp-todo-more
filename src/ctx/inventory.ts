@@ -1,13 +1,22 @@
 import type { FileHandle } from "node:fs/promises";
 import { open, readFile } from "node:fs/promises";
 import * as path from "node:path";
-import { type AgentRef, AgentRegistry, type ExtensionAPI, type ExtensionContext, MAIN_AGENT_ID, z } from "@oh-my-pi/pi-coding-agent";
+import {
+	type AgentRef,
+	AgentRegistry,
+	type ExtensionAPI,
+	type ExtensionContext,
+	MAIN_AGENT_ID,
+	type ToolDefinition,
+	z,
+} from "@oh-my-pi/pi-coding-agent";
 import { type LocalProtocolOptions, resolveLocalRoot } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import type { GlobMatch, GrepMatch } from "@oh-my-pi/pi-natives";
 import { FileType, GrepOutputMode, glob, grep } from "@oh-my-pi/pi-natives";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { tr } from "../i18n.ts";
+import { ctxDocTopics } from "../topics.ts";
 import { parseTaskLogEvent, type TaskLogGoal, taskLogGoalLines, taskLogGoalSchema, taskLogPath } from "./task-log.ts";
 
 const COLLAPSE_THRESHOLD = 8;
@@ -1666,16 +1675,14 @@ export async function renderCtxShowText(inventory: Inventory, id?: string): Prom
 }
 
 export function registerCtxTool(pi: ExtensionAPI): void {
-	pi.registerTool({
+	const definition = {
 		name: "ctx",
 		label: tr("Context Directory", "上下文目录"),
 		description:
-			"Composed, read-only recall view of what prior contexts (this session and its subagents) did — never mutates a session or file. A different axis from `read history://<id>`, which returns the raw transcript verbatim: `ctx` stitches the current session, its subagent registry, transcripts, compaction sidecar summaries, and per-agent task logs into a shallow tree of status, handoff, and task counts.\n" +
-			'- `ctx list`: the current session and its `task` subagents as a shallow tree with status, one-line handoff, and todo progress (done / total / blocked); internal contexts (mentor/discuss/trace) are hidden by default. `ctx list all=true` includes them; `ctx list <id>` expands the subtree rooted at that context (large subtrees collapse with a `ctx list <id>` expand marker). Answer most "what did we already do?" questions here before opening any transcript.\n' +
-			"- `ctx show <id>`: one context's handoff, latest goal-set recorded in its task log (historical, not the current Todo projection), and a `## Tasks` timeline replayed from its todo log — each named task's final state (completed / open, with block reasons) and local timestamp. The handoff is the current branch's compaction summary for this session, or the adjacent sidecar summary for another context. Tasks only created by `init`/`append` and never touched by name do not appear. `<id>` is what `ctx list` prints, and what `agent://<id>` and `history://<id>` accept.\n" +
-			"- `read history://<id>` is the fallback, not the default: reach for the raw transcript only when `ctx show` is insufficient — exact wording, the concrete tool arguments issued, an elided message, or raw error text the task log did not capture. Transcripts are large and unindexed; opening one when `ctx` already answers is wasted effort.\n" +
-			"- Scope: this session and its descendants only. Sibling or unrelated sessions never surface here; if you already hold their id, address them directly via `history://<id>` or `agent://<id>`.\n" +
-			"- `todo` ops feed the timeline `ctx show` replays; update todo the moment state changes so this recall view stays worth consulting.",
+			"Composed, read-only recall view of what prior contexts (this session and its subagents) did — never mutates a session or file.\n\n" +
+			"Topics — read the one a call needs before making it:\n" +
+			"- `xd://ctx/recall` — before listing contexts, showing a handoff or task timeline, or falling back to raw transcripts",
+		docTopics: ctxDocTopics,
 		parameters: contextParams,
 		approval: "read",
 		loadMode: "essential",
@@ -1710,5 +1717,6 @@ export function registerCtxTool(pi: ExtensionAPI): void {
 			const knownIds = [...inventory.byId.keys()].join(", ") || "(none)";
 			throw new Error(`Unknown context "${requestedId}". Known ids: ${knownIds}`);
 		},
-	});
+	} satisfies ToolDefinition<typeof contextParams> & { docTopics(): Readonly<Record<string, string>> };
+	pi.registerTool(definition);
 }

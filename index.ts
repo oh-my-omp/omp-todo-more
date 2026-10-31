@@ -51,7 +51,7 @@
  * never reach omp.
  */
 import type { AgentTool, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { registerCtx } from "./src/ctx/index.ts";
@@ -66,6 +66,7 @@ import { renderTodoCall, renderTodoResult } from "./src/render.ts";
 import { registerReviewApi } from "./src/review-api.ts";
 import { initializeTernPlugin } from "./src/tern-plugin-install.ts";
 import { customFormat, DESCRIPTION, type ParentCwd, parametersSchema, runTodo, type TodoMoreDetails } from "./src/tool.ts";
+import { todoDocTopics } from "./src/topics.ts";
 import { registerUi } from "./src/ui.ts";
 
 const TOOL_NAME = "todo";
@@ -83,6 +84,7 @@ const TOOL_FIELDS = {
 	summary: "Write a structured todo list with a goal to track progress within a session",
 	description: DESCRIPTION,
 	parameters: parametersSchema,
+	docTopics: todoDocTopics,
 	customFormat,
 	approval: "read" as const,
 	loadMode: "discoverable" as const,
@@ -156,7 +158,7 @@ export const TODO_TOOL_DEFINITION = {
 		if (session === undefined) throw new Error(`todo: no session registered for agent ${ctx.agent.id}`);
 		return runTodo(session, params, parentCwdOf(ctx));
 	},
-};
+} satisfies ToolDefinition<typeof parametersSchema, TodoMoreDetails> & { docTopics(): Readonly<Record<string, string>> };
 
 export default async function todoMore(pi: ExtensionAPI): Promise<void> {
 	await initializeTernPlugin();

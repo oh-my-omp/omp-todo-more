@@ -38,6 +38,12 @@ Todo More 会本地化面向人的标签、卡片、提醒、编辑器和通知�
 
 模型每次调用发送一份 Todo 文档。支持 custom-tool 的 OMP provider 使用 edit 风格的 Lark grammar；普通 function-tool provider 发送 `{input: "<同一份文档>"}`，两者共用解析和执行路径。
 
+面向模型的详细调用说明以宿主原生工具 topic 随包提供：
+`xd://todo/protocol` 包含文档语法、选择器与完成提交；
+`xd://todo/lifecycle` 包含工作规划、阻塞和时间预算；
+`xd://ctx/recall` 包含上下文列表、handoff、任务时间线和原始 transcript 回退。
+`xd://todo` 与 `xd://ctx` 的工具说明列出相应指针，task agent 恢复安装的 Todo 也提供这些 topic。
+
 一次初始化全部阶段和任务：
 
 ```text
@@ -82,6 +88,8 @@ ADD "检查任务历史" "确认已接受操作的顺序" 5
 每个 ADD 必须由模型提供正整数分钟估计，不默认、不取整；最大为 `Math.floor(Number.MAX_SAFE_INTEGER / 60_000)`。缺失或非法估计拒绝整份文档。PHASE 只作用于紧随的 ADD，不限定状态命令；空阶段块无效。INIT 的首个 ADD 没有 PHASE 时使用 `"Tasks"`。任务 title 和初始化中的 phase 名必须唯一。`"ALL"` 是标题，裸 `ALL` 才是 selector。
 
 ANSI 与 native 调用卡片将完整命令行和未完成末行显示为未提交预览。卡片是这次调用的 pending 视图：执行结果返回后由结果视图替换它，因此一次调用只画一张卡片，预览不会叠在它所预览的列表之上。生成或取消前缀都不改变 Todo。执行读取当前分支，严格解析完整文档，在 working copy 按顺序应用逻辑操作，最后一次提交；语法、目标或规则错误拒绝整批。
+
+ANSI 与 native 卡片的解析诊断在渲染时使用当前界面语言；返回模型的执行错误仍使用英语。
 
 任务操作保留 progress normalize 和 `transitionTime`。同一接受批次中的状态转换共享一个墙钟锚点，只在 working copy 短暂 active 的任务不累计虚假的命令处理耗时；GOAL 与 VIEW 不 normalize 或改变任务时钟。
 
@@ -138,7 +146,7 @@ git 记录的提交信息在 message 之后，为提交方会话自上一次 tod
 
 每个会话独立持有列表。插件在 `before_agent_start` 恢复 `task:high/mid/low/free` 被宿主剥离的 todo；tool-restricted 会话通过宿主工具槽安装。保留 stop reminder、mid-run nudge、eager prelude、goal-mode context 与 request-only 用户提醒。人工中断不自动恢复。
 
-Todo 只属于工作阶段：请求会改动文件、配置、git 或外部状态。讨论、调查、解释与回答问题属于非工作阶段，不建 todo。工具说明、每条用户消息附带的空列表提醒与 `preferred` eager prelude 都按此划分；真正强制的只有 `edit` 守卫，因为 `edit` 就是工作。
+Todo 只属于工作阶段：请求会改动文件、配置、git 或外部状态。讨论、调查、解释与回答问题属于非工作阶段，不建 todo。Todo lifecycle topic、每条用户消息附带的空列表提醒与 `preferred` eager prelude 都按此划分；真正强制的只有 `edit` 守卫，因为 `edit` 就是工作。
 
 主会话在没有文本答复时中途停下（provider 错误、仍有未完成的 tool call、非人为的 abort），提醒在 10 秒宽限后发送；期间出现新一轮、排队消息或输入框草稿则不发。账户额度用尽的 429 改为等到额度重置后一分钟：错误带有重试提示时取 provider 给出的时间，否则取 omp 对该限额的估计（额度用尽为 30 分钟，并标明为估计）。等待期间输入框上方显示一行不抢焦点的提示，写明发送时间与原因；到点时输入框仍有草稿则等草稿清空后再发。`Ctrl+N` 或 `/todo-more-cancel` 取消待发提醒；提交消息、切换会话或分支、退出也会取消。待发提醒不跨进程保留。
 

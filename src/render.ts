@@ -1,8 +1,8 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type ToolRenderResultOptions, z } from "@oh-my-pi/pi-coding-agent";
 import { type Component, replaceTabs, Text, type Theme, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
-import { tr } from "./i18n.ts";
-import { previewTodo, type TodoCommand, type TodoPreview, type TodoTarget } from "./protocol.ts";
+import { language, tr } from "./i18n.ts";
+import { formatTodoParseError, previewTodo, type TodoCommand, type TodoPreview, type TodoTarget } from "./protocol.ts";
 import {
 	commitScopeSchema,
 	commitScopeText,
@@ -72,7 +72,7 @@ const callSchema = z.object({ input: z.string().optional() });
 type Call = TodoPreview;
 export function parseCall(args: unknown): Call {
 	const parsed = callSchema.safeParse(args);
-	if (!parsed.success) return { commands: [], pending: "", complete: false, error: tr("Expected Todo input text", "需要 Todo 输入文本") };
+	if (!parsed.success) return { commands: [], pending: "", complete: false, error: { kind: "input" } };
 	return previewTodo(parsed.data.input ?? "");
 }
 
@@ -152,7 +152,7 @@ export function callPreviewLines(call: Call): string[] {
 	const lines = [tr("Preview only — not committed.", "仅预览 — 未提交。")];
 	for (const command of call.commands) lines.push(...commandPreviewLines(command));
 	if (call.commands.length === 0) lines.push(tr("Waiting for complete command lines.", "等待完整命令行。"));
-	if (call.error) lines.push(`${tr("Invalid preview", "预览无效")}: ${call.error}`);
+	if (call.error) lines.push(`${tr("Invalid preview", "预览无效")}: ${formatTodoParseError(call.error, language())}`);
 	if (!call.complete && call.pending !== "")
 		lines.push(`${tr("Pending line — unfinished, not executable", "待处理行 — 未完成，无法执行")}: ${call.pending}`);
 	lines.push(

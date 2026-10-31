@@ -55,6 +55,13 @@ The model sends one Todo document per call. OMP providers with custom-tool
 support use an edit-style Lark grammar; function-tool providers send
 `{input: "<the same document>"}`. Both use the same parser and executor.
 
+Detailed model-facing calling instructions ship as native tool topics:
+`xd://todo/protocol` covers document grammar, selectors and completion commits;
+`xd://todo/lifecycle` covers work planning, blockers and time budgets;
+`xd://ctx/recall` covers context lists, handoffs, task timelines and transcript
+fallbacks. The descriptions at `xd://todo` and `xd://ctx` point to these topics,
+including when Todo is restored for a task agent.
+
 Initialize the entire plan in one call:
 
 ```text
@@ -113,6 +120,9 @@ prefix never writes Todo state. The executor reads the current branch, strictly
 validates the complete document, applies logical operations in order to a
 working copy, and commits once. A syntax, target or rule error rejects the
 entire batch.
+
+Preview parser diagnostics are rendered in the current UI language in both ANSI
+and native cards; model-facing execution errors stay English.
 
 Logical task operations retain progress normalization and `transitionTime`.
 All transitions in one accepted batch share one wall-clock anchor, so a task
@@ -263,7 +273,7 @@ reminders are kept. A human interruption is not resumed automatically.
 
 A todo belongs to the work phase only: a request that changes files, config,
 git or external state. Discussion, investigation, explanation and answering
-questions are the non-work phase and get no todo. The tool description, the
+questions are the non-work phase and get no todo. The Todo lifecycle topic, the
 empty-list reminder on each user message and the `preferred` eager prelude all
 carry this split; only the `edit` guard enforces it, since `edit` is work.
 
