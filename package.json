@@ -1,6 +1,6 @@
 {
 	"name": "omp-todo-more",
-	"version": "0.1.18",
+	"version": "0.1.19",
 	"description": "Branch-owned rich todos, reminders and native OMP/Tern editing",
 	"type": "module",
 	"repository": {
