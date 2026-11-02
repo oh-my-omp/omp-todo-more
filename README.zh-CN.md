@@ -42,7 +42,7 @@ Todo More 会本地化面向人的标签、卡片、提醒、编辑器和通知�
 `xd://todo/protocol` 包含文档语法、选择器与完成提交；
 `xd://todo/lifecycle` 包含工作规划、阻塞和时间预算；
 `xd://ctx/recall` 包含上下文列表、handoff、任务时间线和原始 transcript 回退。
-`xd://todo` 与 `xd://ctx` 的工具说明列出相应指针，编辑型子 agent 恢复安装的 Todo 也提供这些 topic。
+`xd://todo` 与 `xd://ctx` 的工具说明列出相应指针，编辑型子 agent 恢复安装的 Todo 也提供这些 topic。`todo` 的工具说明本身还写明会导致调用被拒或让 `DONE` 提交 git 的规则，不读 topic 也能写出合法文档；topic 负责展开说明。
 
 一次初始化全部阶段和任务：
 

@@ -60,7 +60,9 @@ Detailed model-facing calling instructions ship as native tool topics:
 `xd://todo/lifecycle` covers work planning, blockers and time budgets;
 `xd://ctx/recall` covers context lists, handoffs, task timelines and transcript
 fallbacks. The descriptions at `xd://todo` and `xd://ctx` point to these topics,
-including when Todo is restored for an editing subagent.
+including when Todo is restored for an editing subagent. The `todo` description
+also states, without a topic read, the rules that reject a call or make `DONE`
+commit; the topics elaborate on them.
 
 Initialize the entire plan in one call:
 

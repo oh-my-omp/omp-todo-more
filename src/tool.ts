@@ -32,6 +32,14 @@ import {
 
 export const DESCRIPTION = `Batch Todo initialization and edits in one document; do not call once per task.
 
+Any error rejects the whole document. The call fails unless:
+- Commands sit between \`*** Begin Todo\` and \`*** End Todo\`, one uppercase command per line, with JSON-quoted string arguments.
+- An empty list starts with INIT "objective" "measure" "doneWhen", followed by at least one ADD; INIT is first and appears once.
+- Every ADD is ADD "title" "explanation" <positive integer minutes>; outside INIT an ADD needs a preceding PHASE "name".
+- Status commands target an existing "title" or PHASE "name", matched exactly (DONE, DROP and RM also take ALL); never use IDs or guess a title.
+- VIEW is the only command in its document.
+- In a git checkout with uncommitted work, DONE carries a commit clause — DONE "title" "<message>" or DONE "title" "<paths>" "<message>" — and the tool runs git commit itself.
+
 Topics — read the one a call needs before making it:
 - \`xd://todo/protocol\` — before writing a Todo document, choosing selectors, or completing tasks with commits
 - \`xd://todo/lifecycle\` — before planning work, changing task state, handling blockers, or revising time budgets`;
