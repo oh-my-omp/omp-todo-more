@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- The factory registers `todo`, `ctx`, hooks and UI before the Tern initialization await, so a restart keeps the prompt cache; the review API subscribes after that await, so a factory rejected by Tern initialization leaves no event-bus listener behind.
 - UI language resolution no longer reads the agent-directory omomp file: `omomp-lang` sections in `omomp.{yml,yaml,json,toml}` are ignored, and language comes only from `OMOMP_LANG`, then `LC_ALL`/`LC_MESSAGES`/`LANG`, then English. The configuration-file lookup and its per-process cache are gone; explicit and locale behavior is unchanged.
 
 - The post-compaction `<post-compact-ctx>` block no longer arrives as a user message, which started a model turn of its own when idle and, queued as steer during a mid-turn compaction, landed after the final answer, so the model repeated that answer. A `context` hook now places it right after the compaction summary in every request of the main session; the snapshot is rendered on the first request after a compaction and recorded once as a `todo-more.post-compact-ctx` custom entry keyed by the compaction entry id, so later requests reuse it byte-for-byte until the next compaction and after resume.
