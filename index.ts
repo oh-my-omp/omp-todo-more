@@ -27,7 +27,7 @@
  * request-only; agent-attributed and synthetic messages are excluded).
  * Adds rich native tool descriptions, a live native progress widget, the
  * session-bound `/todo-more` editor, and synchronous `omp-todo-more:read` review
- * requests. The factory registers tools synchronously and awaits Tern owner-CLI asset initialization after registration.
+ * requests. The factory registers tools, hooks and UI synchronously, awaits Tern owner-CLI asset initialization, then subscribes the review API.
  *
  * State: the session branch is the authority (`src/state.ts`,
  * `readTodoMore`): each changing mutation appends a full snapshot entry
@@ -161,9 +161,10 @@ export default async function todoMore(pi: ExtensionAPI): Promise<void> {
 	registerReminders(pi);
 	registerOvertime(pi);
 	registerPlanning(pi);
-	registerReviewApi(pi);
 	registerUi(pi);
 	registerCtx(pi);
 	registerCtxTasklog(pi);
 	await initializeTernPlugin();
+	// Subscribed after the Tern await: a factory rejected by Tern initialization never reaches this line, so its event-bus listener cannot outlive the dropped plugin.
+	registerReviewApi(pi);
 }

@@ -447,8 +447,10 @@ the Tern plugin restores the original HUD. Tern's supported CSS has no
 `:has()` conditional, so there is no automatic native-HUD fallback when the
 OMP extension is absent.
 
-The async factory first awaits `initializeTernPlugin`, then registers the tool
-and UI. The asset directory is located relative to the module; the owner is
+The async factory registers the tool, hooks and UI synchronously, then awaits
+`initializeTernPlugin`, then subscribes the review API. A rejected Tern
+initialization still rejects the factory, so the machine gets no plugin. Tern's
+asset directory is located relative to the module; the owner is
 asked through the real `tern plugin dir/list/install --json`, and the catalog
 and the three-file normal copy are checked. A matching ready/disabled copy is
 not reinstalled; an update uses `install --force`, then re-checks identity,
