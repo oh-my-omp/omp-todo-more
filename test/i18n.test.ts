@@ -32,38 +32,19 @@ async function runLanguage(overrides: Record<string, string | undefined>, files:
 }
 
 describe("runtime UI language resolution", () => {
-	test("explicit OMOMP_LANG wins over the agent config and locale", async () => {
+	test("explicit OMOMP_LANG wins over the omomp file and locale", async () => {
 		expect(await runLanguage({ OMOMP_LANG: " EN ", LANG: "zh_CN.UTF-8" }, { "omomp.yml": "omomp-lang:\n  language: zh\n" })).toBe("en");
 	});
 
-	test("agent config wins after an invalid explicit value", async () => {
-		expect(await runLanguage({ OMOMP_LANG: "fr", LANG: "en_US.UTF-8" }, { "omomp.yml": "omomp-lang:\n  language: zh\n" })).toBe("zh");
+	test("the omomp file is ignored and resolution falls through to locale", async () => {
+		expect(await runLanguage({ LANG: "en_US.UTF-8" }, { "omomp.yml": "omomp-lang:\n  language: zh\n" })).toBe("en");
+		expect(await runLanguage({ LANG: "zh_CN.UTF-8" }, { "omomp.yml": "omomp-lang:\n  language: en\n" })).toBe("zh");
 	});
 
 	test("locale fallback uses the first non-empty locale", async () => {
 		expect(await runLanguage({ OMOMP_LANG: "invalid", LC_ALL: "", LC_MESSAGES: "zh_TW.UTF-8", LANG: "en_US.UTF-8" })).toBe("zh");
 	});
 
-	test("multiple agent config files provide no configured language", async () => {
-		expect(await runLanguage({ LANG: "zh_CN.UTF-8" }, { "omomp.yml": "omomp-lang:\n  language: en\n", "omomp.json": "{}" })).toBe("zh");
-	});
-
-	test("agent config requires an exact language enum and no extra section fields", async () => {
-		for (const section of [{ language: "ZH" }, { language: " zh " }, { language: "zh", extra: true }, { language: 1 }, {}, ["zh"]]) {
-			expect(await runLanguage({ LANG: "en_US.UTF-8" }, { "omomp.json": JSON.stringify({ "omomp-lang": section }) })).toBe("en");
-		}
-	});
-
-	test("each supported agent config format accepts the exact section", async () => {
-		for (const [name, content] of Object.entries({
-			"omomp.yml": "omomp-lang:\n  language: zh\n",
-			"omomp.yaml": "omomp-lang:\n  language: zh\n",
-			"omomp.json": '{"omomp-lang":{"language":"zh"}}',
-			"omomp.toml": '[omomp-lang]\nlanguage = "zh"\n',
-		})) {
-			expect(await runLanguage({ LANG: "en_US.UTF-8" }, { [name]: content })).toBe("zh");
-		}
-	});
 	test("missing values default to English", async () => {
 		expect(await runLanguage({ OMOMP_LANG: "", LC_ALL: "", LC_MESSAGES: "", LANG: "" })).toBe("en");
 	});
