@@ -1,9 +1,8 @@
 /**
- * Post-compaction hint: after a compaction boundary finishes, inject
- * the rendered `ctx list` output plus the current main session's
- * `ctx show` (handoff + goal + per-task timeline) directly into the session,
- * so the model sees pre-compaction context without spending tool
- * calls to fetch it.
+ * Post-compaction hint: after a compaction boundary, every model call of
+ * the main session carries the rendered `ctx list` output plus the main
+ * session's `ctx show` (handoff + goal + per-task timeline), so the model
+ * sees pre-compaction context without spending tool calls to fetch it.
  *
  * Rationale. Compaction replaces the working transcript with a short
  * digest. Per-context handoff, task log, and subagent history stay on
@@ -11,28 +10,33 @@
  * the model to call them costs round trips and is easy to skip; this
  * plugin builds one ctx inventory and renders it through the tool's own
  * helpers (`renderCtxListText`, `renderCtxShowText`), so list and show
- * describe the same snapshot, and delivers a single user message right
- * after the boundary. The show payload is the main session's own —
- * subagents' details still require an explicit `ctx show <id>` to keep
- * the injection bounded.
+ * describe the same snapshot.
+ *
+ * Delivery. The payload is context, not a message: sending it as a user
+ * message starts a model turn of its own (idle) or lands after the final
+ * answer (queued steer), and the model then repeats that answer. Instead
+ * the `context` hook places it right after the compaction summary in each
+ * request. The snapshot is rendered on the first request after a
+ * compaction and persisted as a custom session entry keyed by the
+ * compaction entry id, so the payload stays byte-identical for every later
+ * request until the next compaction, and survives resume.
  *
  * Scope. Main session only, mirroring tool-policy-nag: subagents run
  * short, decomposed slices and do not benefit from a post-compaction
- * ctx dump. Both `session_compact` and `auto_compaction_end` fire per
- * auto-compaction; a 5 s window keyed only on the last attempt dedupes
- * them. It is not tied to the compaction boundary: a failed attempt still
- * consumes the window, and two boundaries within 5 s inject once.
+ * ctx dump.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { type ExtensionAPI, type ExtensionContext, type SessionEntry, z } from "@oh-my-pi/pi-coding-agent";
 import { errorText } from "../errors.ts";
 import { buildInventory, renderCtxListText, renderCtxShowText } from "./inventory.ts";
 
-/**
- * Two events fire per compaction boundary. Any pair within this window
- * is treated as the same boundary; only the first triggers injection.
- */
-const DEDUP_WINDOW_MS = 5_000;
+/** Custom session entry holding one compaction's rendered snapshot; never sent to the model itself. */
+const SNAPSHOT_ENTRY_TYPE = "todo-more.post-compact-ctx";
+/** Custom message type of the payload placed into each request. */
+const CONTEXT_MESSAGE_TYPE = "todo-more.post-compact-ctx";
+
+const snapshotSchema = z.object({ compactionId: z.string(), text: z.string() });
 
 type MessagePayload = {
 	readonly listText: string;
@@ -63,61 +67,77 @@ const buildMessage = (payload: MessagePayload): string => {
 	return lines.join("\n");
 };
 
-export function registerPostCompactHint(pi: ExtensionAPI): void {
-	let lastSentAt = 0;
+/** The latest compaction on the branch and the snapshot recorded for it, if any. */
+type BoundaryState =
+	| { readonly kind: "none" }
+	| { readonly kind: "unrendered"; readonly compactionId: string }
+	| { readonly kind: "rendered"; readonly compactionId: string; readonly text: string };
 
-	const inject = async (reason: string, ctx: ExtensionContext): Promise<void> => {
-		if (ctx.agent.kind !== "main") return;
-		const now = Date.now();
-		if (now - lastSentAt < DEDUP_WINDOW_MS) {
-			pi.logger.info("Post-compaction ctx injection skipped (dedup window)", {
-				reason,
-				sinceLastMs: now - lastSentAt,
-				windowMs: DEDUP_WINDOW_MS,
-			});
-			return;
+function boundaryState(branch: readonly SessionEntry[]): BoundaryState {
+	let snapshot: { compactionId: string; text: string } | undefined;
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry === undefined) continue;
+		if (entry.type === "compaction") {
+			if (snapshot?.compactionId === entry.id) return { kind: "rendered", compactionId: entry.id, text: snapshot.text };
+			return { kind: "unrendered", compactionId: entry.id };
 		}
-		// Claim the window before the async render so a paired event
-		// arriving mid-flight cannot double-inject.
-		lastSentAt = now;
-		try {
-			const inventory = await buildInventory(ctx);
-			const list = await renderCtxListText(inventory);
-			const show = await renderCtxShowText(inventory);
-			if (!list) return;
-			pi.logger.info("Post-compaction ctx injected", {
-				reason,
-				total: list.total,
-				shown: list.shown,
-				hidden: list.hidden,
-				showId: show?.id,
-			});
-			pi.sendUserMessage(
-				buildMessage({
-					listText: list.text,
-					total: list.total,
-					showText: show?.text,
-					showId: show?.id,
-				}),
-				{ deliverAs: "steer", attribution: "agent" },
-			);
-		} catch (error) {
-			pi.logger.warn("Post-compaction ctx injection failed", {
-				reason,
-				error: errorText(error),
-			});
+		if (snapshot === undefined && entry.type === "custom" && entry.customType === SNAPSHOT_ENTRY_TYPE) {
+			const parsed = snapshotSchema.safeParse(entry.data);
+			if (parsed.success) snapshot = parsed.data;
 		}
+	}
+	return { kind: "none" };
+}
+
+async function renderSnapshot(ctx: ExtensionContext): Promise<{ text: string; total: number } | undefined> {
+	const inventory = await buildInventory(ctx);
+	const list = await renderCtxListText(inventory);
+	if (!list) return undefined;
+	const show = await renderCtxShowText(inventory);
+	const text = buildMessage({ listText: list.text, total: list.total, showText: show?.text, showId: show?.id });
+	return { text, total: list.total };
+}
+
+/** `messages` with the payload placed right after the last compaction summary (start of the list when none). */
+function withPayload(messages: AgentMessage[], text: string): AgentMessage[] {
+	const payload: AgentMessage = {
+		role: "custom",
+		customType: CONTEXT_MESSAGE_TYPE,
+		content: text,
+		display: false,
+		attribution: "agent",
+		timestamp: 0,
 	};
+	const at = messages.findLastIndex((message) => message.role === "compactionSummary") + 1;
+	return [...messages.slice(0, at), payload, ...messages.slice(at)];
+}
 
-	pi.on("session_compact", (_event, ctx) => {
-		void inject("session_compact", ctx);
-	});
-
-	pi.on("auto_compaction_end", (event, ctx) => {
-		// Skip aborted / skipped / result-less finishes: the summary
-		// was never produced, so there is nothing new to attach a
-		// fresh context tree to.
-		if (event.aborted || event.skipped === true || event.result === undefined) return;
-		void inject(`auto_compaction_end:${event.action}`, ctx);
+export function registerPostCompactHint(pi: ExtensionAPI): void {
+	pi.on("context", async (event, ctx) => {
+		if (ctx.agent.kind !== "main") return undefined;
+		try {
+			const state = boundaryState(ctx.sessionManager.getBranch());
+			switch (state.kind) {
+				case "none":
+					return undefined;
+				case "rendered":
+					return { messages: withPayload(event.messages, state.text) };
+				case "unrendered": {
+					const snapshot = await renderSnapshot(ctx);
+					if (snapshot === undefined) return undefined;
+					pi.appendEntry(SNAPSHOT_ENTRY_TYPE, { compactionId: state.compactionId, text: snapshot.text });
+					pi.logger.info("Post-compaction ctx attached", { compactionId: state.compactionId, total: snapshot.total });
+					return { messages: withPayload(event.messages, snapshot.text) };
+				}
+				default: {
+					const unreachable: never = state;
+					return unreachable;
+				}
+			}
+		} catch (error) {
+			pi.logger.warn("Post-compaction ctx attachment failed", { error: errorText(error) });
+			return undefined;
+		}
 	});
 }
