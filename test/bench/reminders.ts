@@ -1,17 +1,17 @@
 /**
- * Memory-audit bench for `src/reminders.ts` (oh-my-omp/omp-todo-more#31).
+ * Bench for the `context` hook in `src/reminders.ts` (oh-my-omp/omp-todo-more#31,
+ * #38).
  *
  * Drives the real extension entry points — the `context` handler captured from
  * `registerReminders(pi)` and the `agent_end` handler — over stubbed host
  * surfaces, with a real `SessionManager` (in-memory) answering branch reads.
  * Every scenario asserts behavior and, where the acceptance table asks for it,
- * counts allocations/branch reads. `--scenario scaling` measures the no-notice
- * path on the same load for the current implementation and the pre-change
- * implementation embedded verbatim below (`baseline*`), so one HEAD run yields
- * the same-load before/after pair §2 requires.
+ * counts message reads/copies and branch reads. `--scenario scaling` measures
+ * the goal-mode-off path on the same load for the current implementation and
+ * the pre-#31 implementation embedded verbatim below (`baseline*`).
  *
  * Usage: bun test/bench/reminders.ts --scenario <name>
- * Scenarios: no-notice | strip-notice | goal-mode | reminder-details | scaling | all
+ * Scenarios: no-goal | goal-mode | reminder-details | scaling | all
  * Exit code is non-zero when any assertion fails (ghc ev run records it).
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -352,40 +352,28 @@ function check(name: string, condition: boolean, detail = ""): void {
 // Scenarios
 // ---------------------------------------------------------------------------
 
-function scenarioNoNotice(): void {
-	const fixture = new Fixture(stubSession({}));
-	try {
-		const messages = Array.from({ length: 10_000 }, (_, index) => (index % 3 === 0 ? assistant(`a${index}`) : userMessage(`u${index}`)));
-		let result: AgentMessage[] | undefined;
-		const copies = countCopies(messages, () => {
-			result = fixture.context(messages);
-		});
-		check("no-notice returns undefined", result === undefined);
-		check("no-notice copies messages 0 times", copies === 0, `copies=${copies}`);
-		check("no-notice never reads the branch", fixture.branchCalls.getBranch === 0 && fixture.branchCalls.getBranchView === 0);
-		check("no handler errors", fixture.errors.length === 0, fixture.errors.join(";"));
-	} finally {
-		fixture.unregister();
-	}
+/** `messages` behind a proxy that counts element reads (numeric index gets). */
+function countingMessages(messages: AgentMessage[]): { messages: AgentMessage[]; reads: () => number } {
+	let reads = 0;
+	const proxy = new Proxy(messages, {
+		get(target, prop, receiver) {
+			if (typeof prop === "string" && /^\d+$/.test(prop)) reads++;
+			return Reflect.get(target, prop, receiver);
+		},
+	});
+	return { messages: proxy, reads: () => reads };
 }
 
-function scenarioStripNotice(): void {
-	const session = stubSession({});
-	const fixture = new Fixture(session);
+function scenarioNoGoal(): void {
+	const fixture = new Fixture(stubSession({}));
 	try {
-		const notice = customMessage(REMINDER_NOTICE_TYPE, "Todo reminder 1/5: 1 incomplete todo", {
-			items: [{ phase: "Delivery", title: "Ship it" }],
-			attempt: 1,
-			max: 5,
-		});
-		const messages: AgentMessage[] = [userMessage("u1"), notice, assistant("a1"), notice, userMessage("u2")];
-		let result: AgentMessage[] | undefined;
-		countCopies(messages, () => {
-			result = fixture.context(messages);
-		});
-		const baseline = baselineContextMessages(messages, session, () => fixture.manager.getBranch());
-		check("strip-notice drops both notices", result !== undefined && result.length === 3);
-		check("strip-notice output matches baseline item-for-item", Bun.deepEquals(result, baseline));
+		const counted = countingMessages(
+			Array.from({ length: 10_000 }, (_, index) => (index % 3 === 0 ? assistant(`a${index}`) : userMessage(`u${index}`))),
+		);
+		const result = fixture.context(counted.messages);
+		check("no-goal returns undefined", result === undefined);
+		check("no-goal reads 0 messages", counted.reads() === 0, `reads=${counted.reads()}`);
+		check("no-goal never reads the branch", fixture.branchCalls.getBranch === 0 && fixture.branchCalls.getBranchView === 0);
 		check("no handler errors", fixture.errors.length === 0, fixture.errors.join(";"));
 	} finally {
 		fixture.unregister();
@@ -541,8 +529,7 @@ function scenarioScaling(): void {
 }
 
 const scenarios: Record<string, () => void> = {
-	"no-notice": scenarioNoNotice,
-	"strip-notice": scenarioStripNotice,
+	"no-goal": scenarioNoGoal,
 	"goal-mode": scenarioGoalMode,
 	"reminder-details": scenarioReminderDetails,
 	scaling: scenarioScaling,

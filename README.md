@@ -381,10 +381,12 @@ sizing and typography rather than freezing theme colors or font metrics.
 
 `INIT` and `VIEW` tool cards display the full list; incremental CRUD tool cards
 display only the items or goal changed in that call while collapsed, and
-restore the full `details.more` snapshot when expanded. Stop reminder notices
-render only the reminder event header without listing todo items. Historical
-tool cards render their own `details.more`; neither tool cards nor reminders
-become an edit source or change when the current list is edited.
+restore the full `details.more` snapshot when expanded. A main-session stop
+reminder shows its event header (incomplete count and attempt) as an info
+notification and writes nothing to the session; a subagent's or cut-off
+reminder card renders only that header, without listing todo items.
+Historical tool cards render their own `details.more`; neither tool cards nor
+reminders become an edit source or change when the current list is edited.
 
 In Tern's main-session composer, `/todo` and `/todo edit` open the rich
 `/todo-more` editor. A focused child view keeps the host's slash-command
