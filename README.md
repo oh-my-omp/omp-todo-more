@@ -266,12 +266,16 @@ Every session holds its own list. The host strips the todo tool from
 subagents, and strips it again from every later extension-driven active-tool
 change, such as another plugin's per-turn tool sync. Before each model call of
 a subagent whose own enabled tools include `edit`, the plugin puts the tool
-back. This keeps the edit precondition satisfiable without depending on an
-agent's name, an explicit `todo` declaration or the order in which plugins run
-their hooks; default-tool `task:*` agents and custom editing agents use the same
-rule. Subagents without enabled `edit` do not receive a restored tool.
-Tool-restricted sessions get it through the host tool slot. Stop reminders,
-mid-run nudges, the eager prelude, goal-mode
+back, writing the whole active set in the canonical order the oh-my-omp
+plugins share (builtins in registry order, then every other name sorted).
+That order is a function of the set alone, so a forked or rebuilt session
+lists the tools identically and keeps the prompt cache. This keeps the edit
+precondition satisfiable
+without depending on an agent's name, an explicit `todo` declaration or the
+order in which plugins run their hooks; default-tool `task:*` agents and
+custom editing agents use the same rule. Subagents without enabled `edit` do
+not receive a restored tool. Tool-restricted sessions get it through the host
+tool slot. Stop reminders, mid-run nudges, the eager prelude, goal-mode
 context and request-only user reminders are kept. A human interruption is not
 resumed automatically.
 

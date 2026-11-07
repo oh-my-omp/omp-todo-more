@@ -140,7 +140,7 @@ git 记录的提交信息在 message 之后，为提交方会话自上一次 tod
 
 ## 子会话与提醒
 
-每个会话独立持有列表。宿主会从子 agent 剥离 todo 工具，之后每次由扩展发起的启用工具变更（例如其他插件按 turn 同步工具）也会再次剥离。对自身已启用工具包含 `edit` 的子 agent，插件在每次模型调用前把该工具放回，让 edit 前置条件可以由该 agent 自己满足，不依赖 agent 名称、显式的 `todo` 声明或各插件 hook 的执行顺序；默认工具集的 `task:*` 与自定义编辑型 agent 使用同一规则。未启用 `edit` 的子 agent 不会获得恢复的工具。tool-restricted 会话通过宿主工具槽安装。保留 stop reminder、mid-run nudge、eager prelude、goal-mode context 与 request-only 用户提醒。人工中断不自动恢复。
+每个会话独立持有列表。宿主会从子 agent 剥离 todo 工具，之后每次由扩展发起的启用工具变更（例如其他插件按 turn 同步工具）也会再次剥离。对自身已启用工具包含 `edit` 的子 agent，插件在每次模型调用前把该工具放回，并按 oh-my-omp 插件共用的规范顺序写入整个启用工具集（内置工具按注册表顺序在前，其余名称按字典序）。该顺序只由工具集合决定，因此 fork 或重建的会话列出相同顺序的工具、保持 prompt 缓存命中。这让 edit 前置条件可以由该 agent 自己满足，不依赖 agent 名称、显式的 `todo` 声明或各插件 hook 的执行顺序；默认工具集的 `task:*` 与自定义编辑型 agent 使用同一规则。未启用 `edit` 的子 agent 不会获得恢复的工具。tool-restricted 会话通过宿主工具槽安装。保留 stop reminder、mid-run nudge、eager prelude、goal-mode context 与 request-only 用户提醒。人工中断不自动恢复。
 
 Todo 只属于工作阶段：请求会改动文件、配置、git 或外部状态。讨论、调查、解释与回答问题属于非工作阶段，不建 todo。Todo lifecycle topic、每条用户消息附带的空列表提醒与 `preferred` eager prelude 都按此划分；真正强制的只有 `edit` 守卫，因为 `edit` 就是工作。
 

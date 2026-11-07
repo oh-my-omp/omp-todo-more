@@ -45,15 +45,18 @@
  * `before_agent_start` of a subagent session hooks the session's agent
  * (`addBeforeModelCallHook`): before each model call, a session whose enabled
  * tools include `edit` but not `todo` gets the tool back: the registered `todo`
- * is re-activated, or, in a tool-restricted session whose registry holds no
- * extension tools, installed as a host tool. Each session owns its own list.
+ * is re-activated with the whole set in canonical order (builtins in registry
+ * order, then the rest sorted), the order other plugins write and a forked or
+ * rebuilt session computes; or, in a
+ * tool-restricted session whose registry holds no extension tools, installed
+ * as a host tool. Each session owns its own list.
  *
  * Reads the agent registry and the session branch; writes session entries and
  * the TodoTracker projection. No config files. Hook failures are logged and
  * never reach omp.
  */
 import type { AgentTool, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition, ToolInfo } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { registerCtx } from "./src/ctx/index.ts";
@@ -107,13 +110,29 @@ const parentCwdOf =
 		return parentId === undefined ? undefined : AgentRegistry.global().get(parentId)?.session?.sessionManager.getCwd();
 	};
 
+/**
+ * The canonical active-tool order the oh-my-omp plugins share: requested builtins first in
+ * registry order, then every other name sorted by code point. A pure function of the set, so a
+ * forked or rebuilt session lists the same tools in the same order and keeps the prompt cache.
+ */
+function canonicalToolOrder(all: readonly ToolInfo[], names: Iterable<string>): string[] {
+	const requested = new Set(names);
+	const builtins = [
+		...new Set(all.filter((tool) => tool.sourceInfo.source === "builtin" && requested.has(tool.name)).map((tool) => tool.name)),
+	];
+	const builtinSet = new Set(builtins);
+	const others = [...requested].filter((name) => !builtinSet.has(name)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+	return [...builtins, ...others];
+}
+
 /** Editing subagent: put back the `todo` the host stripped, so its edit precondition stays satisfiable. */
 async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promise<void> {
 	const enabled = session.getEnabledToolNames();
 	if (!enabled.includes("edit") || enabled.includes(TOOL_NAME)) return;
 	if (session.getAllToolNames().includes(TOOL_NAME)) {
 		// Direct on the session: the executor's filter strips `todo` from extension-driven changes.
-		await session.setActiveToolsByName([...enabled, TOOL_NAME]);
+		// Canonical order: the order the other plugins write, so a forked or rebuilt session matches.
+		await session.setActiveToolsByName(canonicalToolOrder(session.getAllToolInfos(), [...enabled, TOOL_NAME]));
 		return;
 	}
 	const hostTool = {
