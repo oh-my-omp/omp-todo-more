@@ -9,7 +9,7 @@
  *
  * Registers the tool `todo` (tool.ts, rendered by render.ts) and the hooks of
  * reminders.ts (stop reminder, mid-run nudge, eager prelude, goal-mode
- * context), plus `before_agent_start` to give `task:*` subagents the tool.
+ * context), plus `before_agent_start` to keep the tool in editing subagents.
  * A completion commits the work it closes (src/git.ts) through the host's git
  * bindings: `DONE` carries the commit clause, a checkout with uncommitted work
  * refuses a completion without one, and each committed item keeps the sha. A
@@ -39,12 +39,14 @@
  * the host HUD, `/todo`, branch rehydration and eval persistence keep working.
  *
  * OMP drops `todo` from subagents that are not prewalk-armed: the executor
- * strips it at spawn and filters it out of extension-driven active-tool
- * changes (`task/executor.ts`, `isParentOwnedTool`). At every
- * `before_agent_start` of a `task:*` subagent the hook puts the tool back on
- * that session: it re-activates the registered `todo`, or, in a
- * tool-restricted session whose registry holds no extension tools, installs it
- * as a host tool. Each session owns its own list.
+ * strips it at spawn and filters it out of every extension-driven active-tool
+ * change (`task/executor.ts`, `isParentOwnedTool`), so another plugin's later
+ * `setActiveTools` (a per-turn sync) drops it again. The first
+ * `before_agent_start` of a subagent session hooks the session's agent
+ * (`addBeforeModelCallHook`): before each model call, a session whose enabled
+ * tools include `edit` but not `todo` gets the tool back: the registered `todo`
+ * is re-activated, or, in a tool-restricted session whose registry holds no
+ * extension tools, installed as a host tool. Each session owns its own list.
  *
  * Reads the agent registry and the session branch; writes session entries and
  * the TodoTracker projection. No config files. Hook failures are logged and
@@ -105,14 +107,11 @@ const parentCwdOf =
 		return parentId === undefined ? undefined : AgentRegistry.global().get(parentId)?.session?.sessionManager.getCwd();
 	};
 
-/** Editing subagent: restore `todo` so its edit precondition is satisfiable. */
-async function installForSubagent(ctx: ExtensionContext): Promise<void> {
-	if (ctx.agent.kind !== "sub") return;
-	const session = ownSession(ctx);
-	if (session === undefined || !session.getEnabledToolNames().includes("edit")) return;
+/** Editing subagent: put back the `todo` the host stripped, so its edit precondition stays satisfiable. */
+async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promise<void> {
+	const enabled = session.getEnabledToolNames();
+	if (!enabled.includes("edit") || enabled.includes(TOOL_NAME)) return;
 	if (session.getAllToolNames().includes(TOOL_NAME)) {
-		const enabled = session.getEnabledToolNames();
-		if (enabled.includes(TOOL_NAME)) return;
 		// Direct on the session: the executor's filter strips `todo` from extension-driven changes.
 		await session.setActiveToolsByName([...enabled, TOOL_NAME]);
 		return;
@@ -126,6 +125,28 @@ async function installForSubagent(ctx: ExtensionContext): Promise<void> {
 	};
 	// The host registry erases each tool's parameter schema; the tool validates its input itself.
 	await session.refreshRpcHostTools([hostTool as unknown as AgentTool]);
+}
+
+/** Subagent sessions whose agent already runs `restoreTodo` before each model call. */
+const guardedSessions = new WeakSet<AgentSession>();
+
+/**
+ * Hooks `restoreTodo` in front of every model call of a subagent session, once per session.
+ * Any later extension `setActiveTools` (another plugin's per-turn sync) passes the executor's
+ * filter and drops `todo` again; the hook puts it back before the request reads the tools.
+ */
+function guardSubagent(pi: ExtensionAPI, ctx: ExtensionContext): void {
+	if (ctx.agent.kind !== "sub") return;
+	const session = ownSession(ctx);
+	if (session === undefined || guardedSessions.has(session)) return;
+	guardedSessions.add(session);
+	session.agent.addBeforeModelCallHook(async () => {
+		try {
+			await restoreTodo(session, ctx);
+		} catch (error) {
+			pi.logger.warn("todo-more could not install todo", { error: errorText(error) });
+		}
+	});
 }
 
 /** The registered `todo` tool: shared fields, native describe hooks, ANSI renderers and the merge flag. */
@@ -150,11 +171,11 @@ export const TODO_TOOL_DEFINITION = {
 export default async function todoMore(pi: ExtensionAPI): Promise<void> {
 	pi.registerTool(TODO_TOOL_DEFINITION);
 
-	pi.on("before_agent_start", async (_event, ctx) => {
+	pi.on("before_agent_start", (_event, ctx) => {
 		try {
-			await installForSubagent(ctx);
+			guardSubagent(pi, ctx);
 		} catch (error) {
-			pi.logger.warn("todo-more could not install todo", { error: errorText(error) });
+			pi.logger.warn("todo-more could not guard todo", { error: errorText(error) });
 		}
 	});
 
