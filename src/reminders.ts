@@ -716,20 +716,33 @@ function withoutNativeTodoContext(message: AgentMessage): AgentMessage {
 	return changed ? { ...message, content } : message;
 }
 
-/** Model input for one request: the goal-mode message carrying the todo-more snapshot instead of the host's. Exported for the bench only. */
+const isGoalModeContext = (message: AgentMessage): boolean => message.role === "custom" && message.customType === GOAL_MODE_CONTEXT_TYPE;
+
+/**
+ * Model input for one request: every goal-mode message (the per-request one and
+ * goal-context asides persisted earlier) without the host's todo snapshot, and
+ * the latest one carrying todo-more's while goal mode is on. Exported for the bench only.
+ */
 export function contextMessages(
 	messages: AgentMessage[],
 	session: AgentSession | undefined,
 	state: () => TodoMoreState,
 ): AgentMessage[] | undefined {
-	if (session?.getGoalModeState()?.enabled !== true) return undefined;
-	const goalIndex = messages.findLastIndex((message) => message.role === "custom" && message.customType === GOAL_MODE_CONTEXT_TYPE);
-	const goalMessage = messages[goalIndex];
-	if (goalMessage === undefined) return undefined;
-	const ownMessage = withoutNativeTodoContext(goalMessage);
+	let stripped = false;
+	const own = messages.map((message) => {
+		if (!isGoalModeContext(message)) return message;
+		const without = withoutNativeTodoContext(message);
+		if (without !== message) stripped = true;
+		return without;
+	});
+	const base = stripped ? own : messages;
+	if (session?.getGoalModeState()?.enabled !== true) return stripped ? base : undefined;
+	const goalIndex = base.findLastIndex(isGoalModeContext);
+	const goalMessage = base[goalIndex];
+	if (goalMessage === undefined) return stripped ? base : undefined;
 	const todoContext = goalTodoContext(session, state());
-	if (todoContext === undefined) return ownMessage === goalMessage ? undefined : messages.with(goalIndex, ownMessage);
-	return messages.with(goalIndex, withAppendedText(ownMessage, todoContext));
+	if (todoContext === undefined) return stripped ? base : undefined;
+	return base.with(goalIndex, withAppendedText(goalMessage, todoContext));
 }
 
 /** A reminder renders only its event header in the transcript, never the todo list. */
@@ -1045,6 +1058,8 @@ export function registerReminders(pi: ExtensionAPI): void {
 			compacted = false;
 			const session = ownSession(ctx);
 			if (session === undefined) return undefined;
+			// Also here: a session that never emitted session_start must not run the native reminders beside these.
+			silenceNativeTodoAutomation(session);
 			await refreshSettings(ctx);
 			const prelude = eagerTodoPrelude(pi, session, settings, facts(ctx).state, afterCompaction ? undefined : event.prompt);
 			return prelude === undefined ? undefined : { message: prelude };
