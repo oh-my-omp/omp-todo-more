@@ -6,7 +6,17 @@
  * writers that bypass the tool (`/todo`, finished-subagent auto-complete) append
  * native-shaped `user_todo_edit` entries, and sessions from before todo-more
  * hold native `todo` tool results. `readTodoMore` is a pure read rule over
- * those records; nothing is cached.
+ * those records; nothing is cached across calls.
+ *
+ * Reading cost: an entry is discriminated by its cheap fields (`type`,
+ * `customType`, `role`, `toolName`) before any schema parse, so only entries
+ * that can define the list or an ask wait reach zod. `readTodoMore` walks back
+ * from the leaf to the newest snapshot and reads the ask waits at most once,
+ * only when a native record joins. A caller that needs the state and the ask
+ * waits together takes `readTodoMoreWithWaits`; one that needs the state at
+ * several branch positions takes `todoMoreHistory`. Both read the branch in a
+ * single forward pass, and an optional visitor lets the caller observe the
+ * same pass instead of walking the branch again.
  *
  * Copy markers: code taken from OMP is wrapped in
  * `// @upstream <verbatim|adapted> <package>@<version> <path>#<symbol>` …
@@ -93,28 +103,70 @@ const TOOL_EXECUTION_START = "tool_execution_start";
 const SESSION_EXIT = "session_exit";
 const toolStartSchema = z.object({ toolCallId: z.string(), toolName: z.string(), startedAt: z.string() });
 
-/** The ask waits on `entries` (a session branch, oldest first). */
-export function askWaits(entries: readonly SessionEntry[]): AskWait[] {
-	const open = new Map<string, number>();
-	const waits: AskWait[] = [];
-	for (const entry of entries) {
-		if (entry.type === "custom" && entry.customType === TOOL_EXECUTION_START) {
-			const parsed = toolStartSchema.safeParse(entry.data);
-			const start = parsed.success && parsed.data.toolName === "ask" ? Date.parse(parsed.data.startedAt) : Number.NaN;
-			if (parsed.success && Number.isFinite(start)) open.set(parsed.data.toolCallId, start);
-		} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "ask") {
-			const start = open.get(entry.message.toolCallId);
-			if (start === undefined) continue;
-			open.delete(entry.message.toolCallId);
-			waits.push({ start, end: entry.message.timestamp });
-		} else if (entry.type === "custom" && entry.customType === SESSION_EXIT) {
-			const end = Date.parse(entry.timestamp);
-			for (const start of open.values()) waits.push({ start, end });
-			open.clear();
+/** One ask-wait fact of the branch, in branch order. */
+type AskEvent =
+	| { readonly kind: "start"; readonly callId: string; readonly at: number }
+	| { readonly kind: "result"; readonly callId: string; readonly at: number }
+	| { readonly kind: "exit"; readonly at: number };
+
+/** Discriminants before zod: only `ask` starts parse. */
+function askEventOf(entry: SessionEntry): AskEvent | undefined {
+	if (entry.type === "custom") {
+		if (entry.customType === SESSION_EXIT) return { kind: "exit", at: Date.parse(entry.timestamp) };
+		if (entry.customType !== TOOL_EXECUTION_START) return undefined;
+		const data: unknown = entry.data;
+		if (typeof data !== "object" || data === null || !("toolName" in data) || data.toolName !== "ask") return undefined;
+		const parsed = toolStartSchema.safeParse(data);
+		const start = parsed.success ? Date.parse(parsed.data.startedAt) : Number.NaN;
+		return parsed.success && Number.isFinite(start) ? { kind: "start", callId: parsed.data.toolCallId, at: start } : undefined;
+	}
+	if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "ask") {
+		return { kind: "result", callId: entry.message.toolCallId, at: entry.message.timestamp };
+	}
+	return undefined;
+}
+
+/** Waits during a forward pass: `open` maps an ask call to its start, `closed` holds finished spans. */
+type WaitScan = { readonly open: Map<string, number>; readonly closed: AskWait[] };
+
+function stepWaits(scan: WaitScan, event: AskEvent): void {
+	switch (event.kind) {
+		case "start":
+			scan.open.set(event.callId, event.at);
+			return;
+		case "result": {
+			const start = scan.open.get(event.callId);
+			if (start === undefined) return;
+			scan.open.delete(event.callId);
+			scan.closed.push({ start, end: event.at });
+			return;
+		}
+		case "exit":
+			for (const start of scan.open.values()) scan.closed.push({ start, end: event.at });
+			scan.open.clear();
+			return;
+		default: {
+			const unreachable: never = event;
+			throw new Error(`Unexpected ask event: ${String(unreachable)}`);
 		}
 	}
-	for (const start of open.values()) waits.push({ start, end: null });
-	return waits;
+}
+
+/** Ends the scan: its finished spans, then the still-open ones. */
+function finishWaits(scan: WaitScan): AskWait[] {
+	for (const start of scan.open.values()) scan.closed.push({ start, end: null });
+	scan.open.clear();
+	return scan.closed;
+}
+
+/** The ask waits on `entries` (a session branch, oldest first). */
+export function askWaits(entries: readonly SessionEntry[]): AskWait[] {
+	const scan: WaitScan = { open: new Map(), closed: [] };
+	for (const entry of entries) {
+		const event = askEventOf(entry);
+		if (event !== undefined) stepWaits(scan, event);
+	}
+	return finishWaits(scan);
 }
 
 /** Milliseconds of [from, to) spent in `waits` (an open wait runs to `to`); overlapping waits count once. */
@@ -210,8 +262,6 @@ const nativeResultSchema = z
 	})
 	.passthrough();
 
-const markedDetailsSchema = z.object({ [TODO_MORE_RESULT_MARK]: z.literal(true) }).passthrough();
-
 export function itemCount(phases: readonly TodoPhase[]): number {
 	return phases.reduce((total, phase) => total + phase.items.length, 0);
 }
@@ -284,13 +334,26 @@ function recordOf(entry: SessionEntry): Record | undefined {
 		return undefined;
 	}
 	if (entry.type !== "message") return undefined;
-	const parsed = nativeResultSchema.safeParse(entry.message);
+	// Discriminants before zod: only the native `todo` tool's results can define the list,
+	// and todo-more's own results follow the entry that records them.
+	const message = entry.message;
+	if (message.role !== "toolResult" || message.toolName !== "todo" || isMarked(message.details)) return undefined;
+	const parsed = nativeResultSchema.safeParse(message);
 	if (!parsed.success || parsed.data.isError === true || parsed.data.details.op === "view") return undefined;
-	// todo-more's own results follow the entry that records them.
-	if (markedDetailsSchema.safeParse(parsed.data.details).success) return undefined;
 	return { kind: "native", phases: parsed.data.details.phases, at: Date.parse(entry.timestamp) };
 }
 // @upstream-end
+
+/** A todo-more tool result's details carry `TODO_MORE_RESULT_MARK: true`. */
+function isMarked(details: unknown): boolean {
+	return typeof details === "object" && details !== null && TODO_MORE_RESULT_MARK in details && details[TODO_MORE_RESULT_MARK] === true;
+}
+
+/** The entries `recordOf` may map to a record: the same discriminants, no parse. */
+function mayDefine(entry: SessionEntry): boolean {
+	if (entry.type === "custom") return entry.customType === TODO_MORE_ENTRY_TYPE || entry.customType === USER_TODO_EDIT_CUSTOM_TYPE;
+	return entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "todo";
+}
 
 /**
  * A native-shaped snapshot (host edit or pre-todo-more result) joined with the
@@ -317,21 +380,159 @@ function joinNative(phases: NativePhases, base: TodoMoreState, at: number, waits
 	return stateOf(base.kind === "list" ? base.goal : { kind: "missing" }, joined);
 }
 
-/** The todo-more state on `entries` (a session branch, oldest first). */
-export function readTodoMore(entries: readonly SessionEntry[]): TodoMoreState {
-	const pending: Extract<Record, { kind: "native" }>[] = [];
-	const join = (state: TodoMoreState, native: Extract<Record, { kind: "native" }>): TodoMoreState =>
-		joinNative(native.phases, state, native.at, askWaits(entries));
-	for (let index = entries.length - 1; index >= 0; index--) {
-		const entry = entries[index];
-		if (entry === undefined) continue;
-		const record = recordOf(entry);
+type NativeRecord = Extract<Record, { kind: "native" }>;
+
+/**
+ * The list from records newest first: `recordAt(k)` for `k` from `count - 1`
+ * down to 0. Native records after the newest rich one join onto it; `waits`
+ * is called at most once, and only when a native record joins.
+ */
+function foldRecords(count: number, recordAt: (k: number) => Record | undefined, waits: () => readonly AskWait[]): TodoMoreState {
+	const pending: NativeRecord[] = [];
+	let base: TodoMoreState = EMPTY;
+	for (let k = count - 1; k >= 0; k--) {
+		const record = recordAt(k);
 		if (record === undefined) continue;
-		if (record.kind === "rich") return pending.reduceRight<TodoMoreState>(join, record.state);
+		if (record.kind === "rich") {
+			base = record.state;
+			break;
+		}
 		pending.push(record);
 		if (record.phases.every((phase) => phase.tasks.length === 0)) break;
 	}
-	return pending.reduceRight<TodoMoreState>(join, EMPTY);
+	if (pending.length === 0) return base;
+	const known = waits();
+	return pending.reduceRight<TodoMoreState>((state, native) => joinNative(native.phases, state, native.at, known), base);
+}
+
+/** The todo-more state on `entries` (a session branch, oldest first). */
+export function readTodoMore(entries: readonly SessionEntry[]): TodoMoreState {
+	return foldRecords(
+		entries.length,
+		(index) => {
+			const entry = entries[index];
+			return entry === undefined ? undefined : recordOf(entry);
+		},
+		() => askWaits(entries),
+	);
+}
+
+/** Observes every entry of a reader's single pass, oldest first. */
+export type BranchVisitor = (entry: SessionEntry, index: number) => void;
+
+/** What one forward pass keeps: where the list may be defined, and the ask-wait facts with their positions. */
+type BranchScan = {
+	readonly candidates: number[];
+	readonly events: AskEvent[];
+	readonly eventAt: number[];
+};
+
+function scanBranch(entries: readonly SessionEntry[], visit: BranchVisitor | undefined): BranchScan {
+	const scan: BranchScan = { candidates: [], events: [], eventAt: [] };
+	for (let index = 0; index < entries.length; index++) {
+		const entry = entries[index];
+		if (entry === undefined) continue;
+		visit?.(entry, index);
+		if (mayDefine(entry)) scan.candidates.push(index);
+		const event = askEventOf(entry);
+		if (event === undefined) continue;
+		scan.events.push(event);
+		scan.eventAt.push(index);
+	}
+	return scan;
+}
+
+/** The ask waits from the scan's first `count` events. */
+function replayWaits(events: readonly AskEvent[], count: number): AskWait[] {
+	const scan: WaitScan = { open: new Map(), closed: [] };
+	for (let k = 0; k < count; k++) {
+		const event = events[k];
+		if (event !== undefined) stepWaits(scan, event);
+	}
+	return finishWaits(scan);
+}
+
+/** How many of the ascending `positions` are at or before `index`. */
+function countThrough(positions: readonly number[], index: number): number {
+	let low = 0;
+	let high = positions.length;
+	while (low < high) {
+		const middle = (low + high) >>> 1;
+		if ((positions[middle] ?? Number.POSITIVE_INFINITY) <= index) low = middle + 1;
+		else high = middle;
+	}
+	return low;
+}
+
+/** The state and the ask waits of one branch read. */
+export type TodoMoreRead = { readonly state: TodoMoreState; readonly waits: readonly AskWait[] };
+
+/**
+ * `readTodoMore(entries)` and `askWaits(entries)` from one forward pass over
+ * `entries`; `visit` sees every entry of that pass.
+ */
+export function readTodoMoreWithWaits(entries: readonly SessionEntry[], visit?: BranchVisitor): TodoMoreRead {
+	const scan = scanBranch(entries, visit);
+	const waits = replayWaits(scan.events, scan.events.length);
+	const state = foldRecords(
+		scan.candidates.length,
+		(k) => {
+			const entry = entries[scan.candidates[k] ?? -1];
+			return entry === undefined ? undefined : recordOf(entry);
+		},
+		() => waits,
+	);
+	return { state, waits };
+}
+
+/** The todo-more state at positions of one branch. */
+export type TodoMoreHistory = {
+	/** The state on `entries[0..index]`: equal to `readTodoMore(entries.slice(0, index + 1))`. */
+	at(index: number): TodoMoreState;
+};
+
+/**
+ * Positional state queries over `entries`, built in one forward pass (`visit`
+ * sees every entry of it). A query resolves only the records at or before its
+ * position; records parse once per build, and positions with the same records
+ * (and, when a native record joins, the same ask-wait facts) share one state
+ * object. The build holds nothing beyond its own lifetime.
+ */
+export function todoMoreHistory(entries: readonly SessionEntry[], visit?: BranchVisitor): TodoMoreHistory {
+	const scan = scanBranch(entries, visit);
+	const records: (Record | null | undefined)[] = [];
+	const recordAt = (k: number): Record | undefined => {
+		const known = records[k];
+		if (known !== undefined) return known ?? undefined;
+		const entry = entries[scan.candidates[k] ?? -1];
+		const record = entry === undefined ? undefined : recordOf(entry);
+		records[k] = record ?? null;
+		return record;
+	};
+	// Per count of records: the state when no native record joins, or the states per count of ask-wait facts.
+	const resolved: (
+		| { readonly kind: "plain"; readonly state: TodoMoreState }
+		| { readonly kind: "joined"; readonly states: Map<number, TodoMoreState> }
+	)[] = [];
+	return {
+		at(index: number): TodoMoreState {
+			const count = countThrough(scan.candidates, index);
+			const events = countThrough(scan.eventAt, index);
+			const known = resolved[count];
+			if (known?.kind === "plain") return known.state;
+			const memo = known?.states.get(events);
+			if (memo !== undefined) return memo;
+			let joined = false;
+			const state = foldRecords(count, recordAt, () => {
+				joined = true;
+				return replayWaits(scan.events, events);
+			});
+			if (!joined) resolved[count] = { kind: "plain", state };
+			else if (known === undefined) resolved[count] = { kind: "joined", states: new Map([[events, state]]) };
+			else known.states.set(events, state);
+			return state;
+		},
+	};
 }
 
 /** The host's view of the list: what `session.setTodoPhases`, the HUD and native tool-result consumers take. */
