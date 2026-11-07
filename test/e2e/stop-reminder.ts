@@ -61,6 +61,8 @@ async function runWith(model: string): Promise<Outcome> {
 	const cwd = mkdtempSync(path.join(tmpdir(), "todo-more-e2e-"));
 	const proc = Bun.spawn(["omp", "--mode", "rpc", "--no-extensions", "-e", EXTENSION, "--model", model], {
 		cwd,
+		// English UI text so the notification matches the asserted header.
+		env: { ...process.env, OMOMP_LANG: "en" },
 		stdin: "pipe",
 		stdout: "pipe",
 		stderr: "ignore",
