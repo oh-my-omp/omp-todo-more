@@ -79,8 +79,6 @@ import {
 
 /** Subagent stop reminder: model input and transcript notice in one message. */
 const REMINDER_TYPE = `${TODO_MORE_ENTRY_TYPE}.reminder`;
-/** Main stop reminder notice: transcript only, stripped from model input (the reminder itself is the host's continuation message). */
-const REMINDER_NOTICE_TYPE = `${TODO_MORE_ENTRY_TYPE}.reminder-notice`;
 const MID_RUN_NUDGE_TYPE = `${TODO_MORE_ENTRY_TYPE}.mid-run-nudge`;
 const EAGER_PRELUDE_TYPE = `${TODO_MORE_ENTRY_TYPE}.eager-prelude`;
 /** Native goal mode's per-prompt context message (`agent-session.ts#buildGoalModeMessage`). */
@@ -703,36 +701,18 @@ function withAppendedText(message: AgentMessage, text: string): AgentMessage {
 	return { ...message, content };
 }
 
-/** Model input for one request: main reminder notices dropped, the goal-mode message carrying the todo snapshot. Exported for the bench only. */
+/** Model input for one request: the goal-mode message carrying the todo snapshot. Exported for the bench only. */
 export function contextMessages(
 	messages: AgentMessage[],
 	session: AgentSession | undefined,
 	branch: () => readonly SessionEntry[],
 ): AgentMessage[] | undefined {
-	// Decide before copying: most requests have nothing to strip and nothing to splice.
-	let hasNotice = false;
-	for (const message of messages) {
-		if (message.role === "custom" && message.customType === REMINDER_NOTICE_TYPE) {
-			hasNotice = true;
-			break;
-		}
-	}
-	let goalIndex = -1;
-	let todoContext: string | undefined;
-	if (session?.getGoalModeState()?.enabled === true) {
-		goalIndex = messages.findLastIndex((message) => message.role === "custom" && message.customType === GOAL_MODE_CONTEXT_TYPE);
-		if (goalIndex >= 0) todoContext = goalTodoContext(session, readTodoMore(branch()));
-	}
-	if (!hasNotice && todoContext === undefined) return undefined;
-	const kept = messages.filter((message) => !(message.role === "custom" && message.customType === REMINDER_NOTICE_TYPE));
-	if (todoContext !== undefined) {
-		const goalMessage = messages[goalIndex];
-		if (goalMessage !== undefined) {
-			const keptIndex = kept.lastIndexOf(goalMessage);
-			if (keptIndex >= 0) kept[keptIndex] = withAppendedText(goalMessage, todoContext);
-		}
-	}
-	return kept;
+	if (session?.getGoalModeState()?.enabled !== true) return undefined;
+	const goalIndex = messages.findLastIndex((message) => message.role === "custom" && message.customType === GOAL_MODE_CONTEXT_TYPE);
+	const goalMessage = messages[goalIndex];
+	if (goalMessage === undefined) return undefined;
+	const todoContext = goalTodoContext(session, readTodoMore(branch()));
+	return todoContext === undefined ? undefined : messages.with(goalIndex, withAppendedText(goalMessage, todoContext));
 }
 
 /** A reminder renders only its event header in the transcript, never the todo list. */
@@ -750,15 +730,19 @@ class NativeReminderText extends Text {
 }
 
 // @upstream adapted @oh-my-pi/pi-tui@18.10.1 src/chat/todo-reminder.ts#TodoReminderComponent
-export const renderReminder: MessageRenderer = (message, _options, theme) => {
-	const parsed = reminderDetailsSchema.safeParse(message.details);
-	if (!parsed.success) return undefined;
-	const { items, attempt, max } = parsed.data;
+/** The reminder event header: the stop reminder's info notification and the `REMINDER_TYPE` card share it. */
+function reminderHeader({ items, attempt, max }: ReminderDetails): string {
 	const count = items.length;
-	const header = tr(
+	return tr(
 		`${count} incomplete ${count === 1 ? "todo" : "todos"} - reminder ${attempt}/${max}`,
 		`${count} 个待办未完成 - 提醒 ${attempt}/${max}`,
 	);
+}
+
+export const renderReminder: MessageRenderer = (message, _options, theme) => {
+	const parsed = reminderDetailsSchema.safeParse(message.details);
+	if (!parsed.success) return undefined;
+	const header = reminderHeader(parsed.data);
 	return new NativeReminderText(theme.fg("warning", `${theme.icon.warning} ${header}`), header);
 };
 // @upstream-end
@@ -770,7 +754,6 @@ export function registerReminders(pi: ExtensionAPI): void {
 	let compacted = false;
 
 	pi.registerMessageRenderer(REMINDER_TYPE, renderReminder);
-	pi.registerMessageRenderer(REMINDER_NOTICE_TYPE, renderReminder);
 
 	pi.on("session_stop", (event, ctx) => {
 		try {
@@ -1008,15 +991,9 @@ export function registerReminders(pi: ExtensionAPI): void {
 					break;
 				case "main":
 					if (event.prompt === own.text) {
-						return {
-							message: {
-								customType: REMINDER_NOTICE_TYPE,
-								content: `Todo reminder ${own.details.attempt}/${own.details.max}: ${own.details.items.length} incomplete ${own.details.items.length === 1 ? "todo" : "todos"}`,
-								display: true,
-								details: own.details,
-								attribution: "agent",
-							},
-						};
+						// Shown to the human only: the model already reads the host's continuation message.
+						ctx.ui.notify(reminderHeader(own.details), "info");
+						return undefined;
 					}
 					// The reminder never started its own turn: it does not count.
 					cycle.reminderCount = own.countBefore;

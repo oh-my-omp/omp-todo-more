@@ -183,7 +183,7 @@ Todo More 在 Tern 保留真正的原生 `checklist` HUD 作为药丸、进度�
 
 appearance、命名主题与对应 program palette 的切换通过原生 renderer 和继承变量即时生效，包括富内容已经展开时。插件不保存主题副本，保留原生药丸尺寸和字体，不冻结主题颜色或字体度量。
 
-`INIT` 与 `VIEW` 工具卡片展示完整列表；日常增删改工具卡片折叠时只展示当次变更的任务或 goal，展开时恢复当次完整 `details.more` 快照。主动提醒只显示提醒事件头部，不列出任何任务。历史工具卡片使用当次 `details.more`；工具卡片与提醒都不成为编辑源，也不随当前列表编辑而改变。
+`INIT` 与 `VIEW` 工具卡片展示完整列表；日常增删改工具卡片折叠时只展示当次变更的任务或 goal，展开时恢复当次完整 `details.more` 快照。主会话的 stop 提醒以 info 通知显示提醒事件头部（未完成数与第几次），不写入会话；子 agent 与中断续跑的提醒卡片只显示该事件头部，不列出任何任务。历史工具卡片使用当次 `details.more`；工具卡片与提醒都不成为编辑源，也不随当前列表编辑而改变。
 
 Tern 的主会话输入区中，`/todo` 与 `/todo edit` 打开富信息 `/todo-more` 编辑器。聚焦子会话时保留宿主的 slash-command 限制，可使用该子会话 popover 的 Edit 按钮进入其富编辑器。其余 `/todo` 子命令（包括 expand/collapse）保留宿主行为；Todo More 的原生 disclosure head 控制富信息展开。任务变更按前述规则按标题联结。普通 ANSI OMP 保留宿主命令和 HUD，替代 widget 不输出 ANSI 行。
 

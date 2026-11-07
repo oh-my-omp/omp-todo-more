@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- A main-session stop reminder now shows its event header (`N incomplete todos - reminder a/m`) as an info notification (`ctx.ui.notify`) instead of writing a `todo-more.reminder-notice` custom message into the session. The notice had no reader, yet it entered model input, so the `context` hook scanned every request's messages to strip it; that scan is gone, and with goal mode off the hook returns without reading the messages. Notices already written to older sessions are no longer stripped or specially rendered.
 - The factory registers `todo`, `ctx`, hooks and UI before the Tern initialization await, so a restart keeps the prompt cache; the review API subscribes after that await, so a factory rejected by Tern initialization leaves no event-bus listener behind.
 - UI language resolution no longer reads the agent-directory omomp file: `omomp-lang` sections in `omomp.{yml,yaml,json,toml}` are ignored, and language comes only from `OMOMP_LANG`, then `LC_ALL`/`LC_MESSAGES`/`LANG`, then English. The configuration-file lookup and its per-process cache are gone; explicit and locale behavior is unchanged.
 
