@@ -16,7 +16,8 @@
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { Theme, TUI } from "@oh-my-pi/pi-tui";
-import { readTodoMore, toSnapshot } from "../src/state.ts";
+import { readTodoMore } from "../src/branch.ts";
+import { toSnapshot } from "../src/state.ts";
 
 export const RICH_SNAPSHOT_TYPE = "mouriya.omp.todo-more";
 

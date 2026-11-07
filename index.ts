@@ -1,11 +1,18 @@
 /**
- * todo-more: independent replacement for OMP's native todo, which the host
- * configuration must switch off (`todo.enabled: false`). Built on the native implementation:
+ * todo-more: OMP's todo with a goal, explanations, time budgets and commits,
+ * running on top of the native todo (`todo.enabled` stays on). Built on the native implementation:
  * the tool, its reminders and its rendering are copies of OMP code, adapted to
  * a list that carries a goal ({objective, measure, doneWhen}) and items that
  * carry a title, explanation and model-estimated time budget. Copied code is marked
  * `// @upstream <verbatim|adapted> …` … `// @upstream-end` (see
  * `src/state.ts`).
+ *
+ * The registered `todo` shadows the built-in tool of the same name. The native
+ * stop reminder, mid-run nudge and eager prelude are switched off for the
+ * process with runtime (never persisted) overrides of `todo.reminders` and
+ * `todo.eager`; reminders.ts runs its own, configured by this plugin's
+ * settings (`reminders`, `remindersMax`, `eager`). Native goal mode's todo
+ * snapshot is replaced in the request by todo-more's richer one.
  *
  * Registers the tool `todo` (tool.ts, rendered by render.ts) and the hooks of
  * reminders.ts (stop reminder, mid-run nudge, eager prelude, goal-mode
@@ -29,10 +36,10 @@
  * session-bound `/todo-more` editor, and synchronous `omp-todo-more:read` review
  * requests. The factory registers tools, hooks and UI synchronously, awaits Tern owner-CLI asset initialization, then subscribes the review API.
  *
- * State: the session branch is the authority (`src/state.ts`,
- * `readTodoMore`): each changing mutation appends a full snapshot entry
- * `mouriya.omp.todo-more`; host writers that bypass the tool (`/todo`,
- * finished-subagent auto-complete) append `user_todo_edit`, which the reader
+ * State: the session branch is the authority (`src/state.ts` records,
+ * folded by `src/branch.ts`): each changing mutation appends a full snapshot entry
+ * `mouriya.omp.todo-more`; host writers that bypass the tool (`/todo`, RPC
+ * `set_todos`, finished-subagent auto-complete) append `user_todo_edit`, which the reader
  * joins by title, marking new titles as lacking an explanation. Every mutation
  * also pushes the host projection (title as content, status, blocker) into the
  * session's TodoTracker, and the result details carry the same projection, so
@@ -51,14 +58,14 @@
  * tool-restricted session whose registry holds no extension tools, installed
  * as a host tool. Each session owns its own list.
  *
- * Reads the agent registry and the session branch; writes session entries and
- * the TodoTracker projection. No config files. Hook failures are logged and
- * never reach omp.
+ * Reads the agent registry, the session branch and this plugin's settings;
+ * writes session entries, the TodoTracker projection and runtime overrides of
+ * the native todo automation settings. No config files. Hook failures are
+ * logged and never reach omp.
  */
 import type { AgentTool, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext, ToolDefinition, ToolInfo } from "@oh-my-pi/pi-coding-agent";
+import type { AgentSession, ExtensionAPI, ExtensionContext, ToolDefinition, ToolInfo } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { registerCtx } from "./src/ctx/index.ts";
 import { registerCtxTasklog } from "./src/ctx/tasklog.ts";
 import { errorText } from "./src/errors.ts";
@@ -69,6 +76,7 @@ import { registerPlanning } from "./src/planning.ts";
 import { registerReminders } from "./src/reminders.ts";
 import { renderTodoCall, renderTodoResult } from "./src/render.ts";
 import { registerReviewApi } from "./src/review-api.ts";
+import { sessionOf } from "./src/session.ts";
 import { initializeTernPlugin } from "./src/tern-plugin-install.ts";
 import { customFormat, DESCRIPTION, type ParentCwd, parametersSchema, runTodo, type TodoMoreDetails } from "./src/tool.ts";
 import { todoDocTopics } from "./src/topics.ts";
@@ -100,7 +108,7 @@ const TOOL_FIELDS = {
 };
 
 /** The AgentSession this extension instance serves, through the registry entry of its agent id. */
-const ownSession = (ctx: ExtensionContext): AgentSession | undefined => AgentRegistry.global().get(ctx.agent.id)?.session ?? undefined;
+const ownSession = (ctx: ExtensionContext): AgentSession | undefined => sessionOf(ctx.agent.id);
 
 /** The spawning agent's live session cwd, looked up at each call; absent for a top-level session or a released parent. */
 const parentCwdOf =

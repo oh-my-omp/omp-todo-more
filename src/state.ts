@@ -1,12 +1,12 @@
 /**
- * The todo-more domain and its branch reader.
+ * The todo-more domain and its branch records.
  *
  * Authority: the active session branch. `todo-more` appends a full snapshot
  * entry (`TODO_MORE_ENTRY_TYPE`) on changing mutations; the host's own
- * writers that bypass the tool (`/todo`, finished-subagent auto-complete) append
- * native-shaped `user_todo_edit` entries, and sessions from before todo-more
- * hold native `todo` tool results. `readTodoMore` is a pure read rule over
- * those records; nothing is cached.
+ * writers that bypass the tool (`/todo`, RPC `set_todos`, finished-subagent
+ * auto-complete) append native-shaped `user_todo_edit` entries, and sessions
+ * from before todo-more hold native `todo` tool results. `recordOf` and
+ * `joinNative` are the read rule over those records; `branch.ts` folds them.
  *
  * Copy markers: code taken from OMP is wrapped in
  * `// @upstream <verbatim|adapted> <package>@<version> <path>#<symbol>` …
@@ -24,6 +24,18 @@ export const TODO_MORE_ENTRY_TYPE = "mouriya.omp.todo-more";
 
 /** Set on todo-more's own tool result details, so the reader skips them (the entry before them is the record). */
 export const TODO_MORE_RESULT_MARK = "todoMore";
+
+/** Subagent and cut-off stop reminder: model input and transcript notice in one message. */
+export const REMINDER_TYPE = `${TODO_MORE_ENTRY_TYPE}.reminder`;
+
+/** The overtime warning; the delivered message is the notification fact, todo snapshots never copy it. */
+export const OVERTIME_TYPE = `${TODO_MORE_ENTRY_TYPE}.overtime`;
+export const overtimeDetailsSchema = z.object({
+	budgetId: z.string(),
+	title: z.string(),
+	estimatedMinutes: z.number(),
+	elapsedMs: z.number(),
+});
 
 export const TODO_STATUSES = ["pending", "in_progress", "completed", "abandoned", "blocked"] as const;
 export type TodoStatus = (typeof TODO_STATUSES)[number];
@@ -87,35 +99,6 @@ export type ItemTime = z.infer<typeof itemTimeSchema>;
  * was open. `end` is null while the ask is still open.
  */
 export type AskWait = { readonly start: number; readonly end: number | null };
-
-/** Host custom entry types (`pi-coding-agent` `session/exit-diagnostics.ts`). */
-const TOOL_EXECUTION_START = "tool_execution_start";
-const SESSION_EXIT = "session_exit";
-const toolStartSchema = z.object({ toolCallId: z.string(), toolName: z.string(), startedAt: z.string() });
-
-/** The ask waits on `entries` (a session branch, oldest first). */
-export function askWaits(entries: readonly SessionEntry[]): AskWait[] {
-	const open = new Map<string, number>();
-	const waits: AskWait[] = [];
-	for (const entry of entries) {
-		if (entry.type === "custom" && entry.customType === TOOL_EXECUTION_START) {
-			const parsed = toolStartSchema.safeParse(entry.data);
-			const start = parsed.success && parsed.data.toolName === "ask" ? Date.parse(parsed.data.startedAt) : Number.NaN;
-			if (parsed.success && Number.isFinite(start)) open.set(parsed.data.toolCallId, start);
-		} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "ask") {
-			const start = open.get(entry.message.toolCallId);
-			if (start === undefined) continue;
-			open.delete(entry.message.toolCallId);
-			waits.push({ start, end: entry.message.timestamp });
-		} else if (entry.type === "custom" && entry.customType === SESSION_EXIT) {
-			const end = Date.parse(entry.timestamp);
-			for (const start of open.values()) waits.push({ start, end });
-			open.clear();
-		}
-	}
-	for (const start of open.values()) waits.push({ start, end: null });
-	return waits;
-}
 
 /** Milliseconds of [from, to) spent in `waits` (an open wait runs to `to`); overlapping waits count once. */
 function waitedIn(waits: readonly AskWait[], from: number, to: number): number {
@@ -265,13 +248,14 @@ function fromSnapshot(snapshot: TodoMoreSnapshot): TodoMoreState {
 	return stateOf(goal, phases);
 }
 
-/** One branch record that defines the list, newest first. */
-type Record =
-	| { readonly kind: "rich"; readonly state: TodoMoreState }
-	| { readonly kind: "native"; readonly phases: NativePhases; readonly at: number };
+/** A native-shaped list record: a host edit or a pre-todo-more `todo` result. */
+export type NativeRecord = { readonly kind: "native"; readonly phases: NativePhases; readonly at: number };
+
+/** One branch record that defines the list. */
+export type ListRecord = { readonly kind: "rich"; readonly state: TodoMoreState } | NativeRecord;
 
 // @upstream adapted @oh-my-pi/pi-coding-agent@18.10.1 src/tools/todo.ts#canonicalTodoPhases
-function recordOf(entry: SessionEntry): Record | undefined {
+export function recordOf(entry: SessionEntry): ListRecord | undefined {
 	if (entry.type === "custom") {
 		if (entry.customType === TODO_MORE_ENTRY_TYPE) {
 			const parsed = todoMoreSnapshotSchema.safeParse(entry.data);
@@ -283,7 +267,8 @@ function recordOf(entry: SessionEntry): Record | undefined {
 		}
 		return undefined;
 	}
-	if (entry.type !== "message") return undefined;
+	// Discriminate before parsing: only a `todo` tool result can define the list.
+	if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.toolName !== "todo") return undefined;
 	const parsed = nativeResultSchema.safeParse(entry.message);
 	if (!parsed.success || parsed.data.isError === true || parsed.data.details.op === "view") return undefined;
 	// todo-more's own results follow the entry that records them.
@@ -294,10 +279,10 @@ function recordOf(entry: SessionEntry): Record | undefined {
 
 /**
  * A native-shaped snapshot (host edit or pre-todo-more result) joined with the
- * nearest earlier rich snapshot: titles keep their explanation, the goal carries
- * over, new titles are `missing`. An empty snapshot in between ends the join.
+ * list before it: titles keep their explanation, the goal carries over, new
+ * titles are `missing`. The caller passes `EMPTY` after an empty snapshot.
  */
-function joinNative(phases: NativePhases, base: TodoMoreState, at: number, waits: readonly AskWait[]): TodoMoreState {
+export function joinNative(phases: NativePhases, base: TodoMoreState, at: number, waits: readonly AskWait[]): TodoMoreState {
 	const known = new Map<string, TodoItem>();
 	if (base.kind === "list") for (const item of base.phases.flatMap((phase) => phase.items)) known.set(item.title, item);
 	const joined = phases.map((phase) => ({
@@ -315,23 +300,6 @@ function joinNative(phases: NativePhases, base: TodoMoreState, at: number, waits
 		}),
 	}));
 	return stateOf(base.kind === "list" ? base.goal : { kind: "missing" }, joined);
-}
-
-/** The todo-more state on `entries` (a session branch, oldest first). */
-export function readTodoMore(entries: readonly SessionEntry[]): TodoMoreState {
-	const pending: Extract<Record, { kind: "native" }>[] = [];
-	const join = (state: TodoMoreState, native: Extract<Record, { kind: "native" }>): TodoMoreState =>
-		joinNative(native.phases, state, native.at, askWaits(entries));
-	for (let index = entries.length - 1; index >= 0; index--) {
-		const entry = entries[index];
-		if (entry === undefined) continue;
-		const record = recordOf(entry);
-		if (record === undefined) continue;
-		if (record.kind === "rich") return pending.reduceRight<TodoMoreState>(join, record.state);
-		pending.push(record);
-		if (record.phases.every((phase) => phase.tasks.length === 0)) break;
-	}
-	return pending.reduceRight<TodoMoreState>(join, EMPTY);
 }
 
 /** The host's view of the list: what `session.setTodoPhases`, the HUD and native tool-result consumers take. */

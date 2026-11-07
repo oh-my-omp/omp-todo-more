@@ -12,38 +12,14 @@
  * message that issued this `DONE` asynchronously, so the branch may not hold it
  * yet when the commit runs.
  */
-import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
-import { TODO_MORE_ENTRY_TYPE, todoMoreSnapshotSchema } from "./state.ts";
+import type { BranchFacts } from "./branch.ts";
 
 /** A model as the trailer names it. */
 export type ModelRef = { readonly provider: string; readonly id: string };
 
-const modelText = (model: ModelRef): string => `${model.provider}/${model.id}`;
-
-/** Commit shas a todo-more snapshot entry records; empty for every other entry. */
-function commitShas(entry: SessionEntry): string[] {
-	if (entry.type !== "custom" || entry.customType !== TODO_MORE_ENTRY_TYPE) return [];
-	const parsed = todoMoreSnapshotSchema.safeParse(entry.data);
-	if (!parsed.success) return [];
-	return parsed.data.phases.flatMap((phase) => phase.items.flatMap((item) => (item.commit === undefined ? [] : [item.commit.sha])));
-}
-
 /** Distinct models since the session's previous todo commit, in order of first use, then the current one. */
-export function participatingModels(entries: readonly SessionEntry[], current: ModelRef | undefined): string[] {
-	const seen = new Set<string>();
-	let models: string[] = [];
-	for (const entry of entries) {
-		const shas = commitShas(entry);
-		if (shas.some((sha) => !seen.has(sha))) {
-			for (const sha of shas) seen.add(sha);
-			models = [];
-			continue;
-		}
-		// A failed request produced nothing; an aborted one may already have acted through its tool calls.
-		if (entry.type !== "message" || entry.message.role !== "assistant" || entry.message.stopReason === "error") continue;
-		models.push(modelText({ provider: entry.message.provider, id: entry.message.model }));
-	}
-	if (current !== undefined) models.push(modelText(current));
+export function participatingModels(facts: BranchFacts, current: ModelRef | undefined): string[] {
+	const models = current === undefined ? facts.modelsSinceCommit : [...facts.modelsSinceCommit, `${current.provider}/${current.id}`];
 	return [...new Set(models)];
 }
 

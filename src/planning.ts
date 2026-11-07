@@ -7,21 +7,14 @@
  * steering live.
  */
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { branchFacts, contextBranch, isHumanMessage, stateForHumanMessage } from "./branch.ts";
 import { errorText } from "./errors.ts";
-import { readTodoMore, type TodoMoreState, toSnapshot } from "./state.ts";
+import { sessionOf } from "./session.ts";
+import { type TodoMoreState, toSnapshot } from "./state.ts";
 
 const INIT_REMINDER =
 	'Todo is empty. Work phase (this request changes files, config, git or external state): before the first change, initialize with one complete Todo document: INIT "objective" "measure" "doneWhen", PHASE "name", and ADD "title" "explanation" minutes for every step, between *** Begin Todo and *** End Todo. Estimate each item yourself in positive integer minutes; no fractions or defaults. edit is blocked until the complete document succeeds and the list has items. Non-work phase (discussion, investigation, explanation, answering questions): no todo.';
-
-type HumanMessage = Extract<AgentMessage, { role: "user" | "custom" }>;
-
-/** Match OMP's user-authored queue predicate, excluding synthetic continuations. */
-function isHumanMessage(message: AgentMessage): message is HumanMessage {
-	if (message.role === "user") return message.attribution !== "agent" && !message.synthetic;
-	return message.role === "custom" && message.attribution === "user" && message.display !== false;
-}
 
 function reminder(state: TodoMoreState): string {
 	switch (state.kind) {
@@ -41,53 +34,18 @@ function reminder(state: TodoMoreState): string {
 	}
 }
 
-/**
- * Historical users get the state at their delivery, not today's list. Queued
- * users may not yet be persisted when `context` runs: for those, read the
- * current branch. No snapshot cache or cursor crosses requests or branches.
- */
-function stateForMessage(message: HumanMessage, branch: readonly SessionEntry[]): TodoMoreState {
-	if (message.role === "custom") {
-		// OMP can stamp the stored custom_message a millisecond after the live
-		// message. Use the first matching record at or after its emission, not
-		// exact equality or the newest matching text (which conflates repeats).
-		for (let index = 0; index < branch.length; index++) {
-			const entry = branch[index];
-			if (
-				entry?.type === "custom_message" &&
-				entry.attribution === "user" &&
-				entry.display !== false &&
-				entry.customType === message.customType &&
-				Date.parse(entry.timestamp) >= message.timestamp &&
-				Bun.deepEquals(entry.content, message.content)
-			) {
-				return readTodoMore(branch.slice(0, index + 1));
-			}
-		}
-		return readTodoMore(branch);
-	}
-	for (let index = branch.length - 1; index >= 0; index--) {
-		const entry = branch[index];
-		if (entry?.type !== "message" || !isHumanMessage(entry.message)) continue;
-		if (entry.message.timestamp === message.timestamp && Bun.deepEquals(entry.message.content, message.content)) {
-			return readTodoMore(branch.slice(0, index + 1));
-		}
-	}
-	return readTodoMore(branch);
-}
-
 export function registerPlanning(pi: ExtensionAPI): void {
 	// Installation identity, not todo state. A refreshed registry may supply a
 	// new edit tool; each tool instance receives exactly one execution wrapper.
 	const guarded = new WeakSet<AgentTool>();
 	const installEditGuard = (ctx: ExtensionContext): void => {
-		const session = AgentRegistry.global().get(ctx.agent.id)?.session;
+		const session = sessionOf(ctx.agent.id);
 		const tool = session?.getToolByName("edit");
-		if (session == null || tool === undefined || guarded.has(tool)) return;
+		if (session === undefined || tool === undefined || guarded.has(tool)) return;
 		const execute = tool.execute.bind(tool);
 		tool.execute = async (...args) => {
 			try {
-				if (readTodoMore(session.sessionManager.getBranch()).kind === "empty") {
+				if (branchFacts(session.sessionManager).state.kind === "empty") {
 					return { isError: true, content: [{ type: "text", text: INIT_REMINDER }] };
 				}
 			} catch (error) {
@@ -119,10 +77,10 @@ export function registerPlanning(pi: ExtensionAPI): void {
 
 	pi.on("context", (event, ctx) => {
 		try {
-			const branch = ctx.sessionManager.getBranch();
+			const facts = branchFacts(contextBranch(ctx));
 			const messages = event.messages.map((message): AgentMessage => {
 				if (!isHumanMessage(message)) return message;
-				const note = { type: "text" as const, text: reminder(stateForMessage(message, branch)) };
+				const note = { type: "text" as const, text: reminder(stateForHumanMessage(facts, message)) };
 				const content = typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content;
 				return { ...message, content: [...content, note] };
 			});

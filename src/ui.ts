@@ -1,6 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { AgentSession, ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import {
 	type Component,
 	Container,
@@ -19,11 +17,13 @@ import {
 	type TUI,
 } from "@oh-my-pi/pi-tui";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
+import { branchFacts } from "./branch.ts";
 import { saveTodoEdit, type TodoEdit } from "./edit.ts";
 import { errorText } from "./errors.ts";
 import { tr } from "./i18n.ts";
 import { describeSnapshot, describeTodoHud } from "./native.ts";
-import { type ItemTime, readTodoMore, type TodoGoal, type TodoMoreState, type TodoStatus, toSnapshot } from "./state.ts";
+import { sessionOf } from "./session.ts";
+import { type ItemTime, type TodoGoal, type TodoMoreState, type TodoStatus, toSnapshot } from "./state.ts";
 
 const FIELDS = ["objective", "measure", "doneWhen"] as const;
 type GoalField = (typeof FIELDS)[number];
@@ -93,20 +93,16 @@ type Mode =
 /**
  * One overlay owns its drafts; neither a historical tool card nor the opening snapshot can be saved.
  *
- * The only cross-call memory in this panel (contract §7) is `last`: where
- * the last branch read ended (leaf id + length) plus the TodoMoreState
- * derived at that position. When the branch has not grown the state is
- * reused without touching the branch; growth re-derives. UI-only changes
- * (selection, drafts, errors) clear `described` through `changed()` but keep this.
+ * The only cross-call memory in this panel (contract §7) is `last`: the
+ * TodoMoreState of the last branch read. The same state object keeps the
+ * described node; a new one drops it. UI-only changes (selection, drafts,
+ * errors) clear `described` through `changed()` but keep this.
  */
-type PanelRead = { leafId: string | null; length: number; state: TodoMoreState };
-
-/** One overlay owns its drafts; neither a historical tool card nor the opening snapshot can be saved. */
 export class TodoPanel implements Component {
 	private mode: Mode = { kind: "panel", selected: 0 };
 	private error: string | undefined;
 	private described: NativeNode | undefined;
-	private last: PanelRead | undefined;
+	private last: TodoMoreState | undefined;
 	private disposed = false;
 	focused = true;
 	readonly nativeOverlay = { role: "todo-more.panel", size: "lg" as const, anchor: "center" as const };
@@ -127,20 +123,15 @@ export class TodoPanel implements Component {
 
 	/**
 	 * The branch state for this panel, shared by `describe()`, `handleInput()`
-	 * and `render()`. Probes the zero-copy view (§6) for the end position;
-	 * unchanged end reuses the last state with no entry reads, growth
-	 * re-derives from the view and drops the cached node (the node depends
-	 * on the state). The view is consumed synchronously and held nowhere —
-	 * only the scalar end position and the derived state persist.
+	 * and `render()`, from the branch fold. A new state object drops the cached
+	 * node (the node depends on the state).
 	 */
 	private readState(): TodoMoreState {
-		const view = this.session.sessionManager.getBranchView();
-		const leafId = view.at(-1)?.id ?? null;
-		const previous = this.last;
-		if (previous !== undefined && view.length === previous.length && leafId === previous.leafId) return previous.state;
-		const state = readTodoMore(view);
-		this.last = { leafId, length: view.length, state };
-		this.described = undefined;
+		const state = branchFacts(this.session.sessionManager).state;
+		if (this.last !== state) {
+			this.last = state;
+			this.described = undefined;
+		}
 		return state;
 	}
 
@@ -287,7 +278,7 @@ export class TodoPanel implements Component {
 		// changes still hit the fast path below via `changed()`.
 		this.readState();
 		if (this.described) return this.described;
-		const state = this.last?.state ?? this.readState();
+		const state = this.last ?? this.readState();
 		const body: NativeChild[] = [];
 		let role: string;
 		let head: string;
@@ -514,19 +505,18 @@ function findPromptEditor(component: Component): CustomEditor | undefined {
 function viewedSession(tui: TUI, mainAgentId: string): AgentSession | undefined {
 	const editor = findPromptEditor(tui);
 	if (editor === undefined) return undefined;
-	const viewedAgentId = editor.composerState().viewing?.at(-1) ?? mainAgentId;
-	return AgentRegistry.global().get(viewedAgentId)?.session ?? undefined;
+	return sessionOf(editor.composerState().viewing?.at(-1) ?? mainAgentId);
 }
 type HudDisclosure = { kind: "closed" } | { kind: "open"; session: AgentSession; stopInput: () => void };
 
 /**
- * The only cross-call memory in this HUD (contract §7): where the last frame
- * read ended (session id + leaf id + length) plus the node derived at that
- * position. An unchanged end reuses the node with zero branch reads; growth
- * re-derives. Disclosure open/close is an invalidation event, not part of
- * the reuse key — it clears `last` like a branch change would.
+ * The only cross-call memory in this HUD (contract §7): the session and list
+ * state of the last frame plus the node derived from them. The same state
+ * reuses the node; a new one re-derives. Disclosure open/close is an
+ * invalidation event, not part of the reuse key — it clears `last` like a
+ * branch change would.
  */
-type HudRead = { sessionId: string; leafId: string | null; length: number; node: NativeNode | null };
+type HudRead = { sessionId: string; state: TodoMoreState; node: NativeNode | null };
 
 /** Native-only presentation; the branch remains its only Todo state. */
 export class TodoHud implements Component {
@@ -550,15 +540,12 @@ export class TodoHud implements Component {
 				this.last = undefined;
 			const expanded = this.disclosure.kind === "open";
 			if (session !== undefined) {
-				const view = session.sessionManager.getBranchView();
-				const leafId = view.at(-1)?.id ?? null;
+				const state = branchFacts(session.sessionManager).state;
 				const previous = this.last;
 				const sessionId = session.sessionManager.getSessionId();
-				if (previous !== undefined && previous.sessionId === sessionId && view.length === previous.length && leafId === previous.leafId) {
-					return previous.node;
-				}
-				const hud = describeTodoHud(toSnapshot(readTodoMore(view)), expanded);
-				this.last = { sessionId, leafId, length: view.length, node: hud };
+				if (previous !== undefined && previous.sessionId === sessionId && previous.state === state) return previous.node;
+				const hud = describeTodoHud(toSnapshot(state), expanded);
+				this.last = { sessionId, state, node: hud };
 				if (hud === null) this.closeDisclosure();
 				// Keep our own slot identifiable when empty, without showing a pill.
 				return hud ?? node("row", { role: "omp.hud.activity", aria: tr("Todo More progress", "Todo More 进度"), hidden: true });
@@ -671,11 +658,11 @@ export function registerUi(pi: ExtensionAPI): void {
 	};
 	const installHud = (ctx: ExtensionContext): void => {
 		if (!ctx.hasUI) return;
-		const session = AgentRegistry.global().get(ctx.agent.id)?.session;
+		const session = sessionOf(ctx.agent.id);
 		hudTui = undefined;
 		ctx.ui.setWidget(
 			HUD_WIDGET_KEY,
-			session == null
+			session === undefined
 				? undefined
 				: (tui) => {
 						hudTui = tui;

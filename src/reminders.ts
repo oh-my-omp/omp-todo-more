@@ -1,5 +1,5 @@
 /**
- * The native TodoTracker lifecycle that `todo.enabled: false` switches off
+ * The native TodoTracker lifecycle that settings.ts silences under todo-more
  * (`session/todo-tracker.ts` and its `agent-session.ts` call sites), rebuilt on
  * extension hooks over the todo-more list:
  *
@@ -36,7 +36,8 @@
  *   auto-compaction, the next prompt start re-asserts it (reminder only) when
  *   the list is empty.
  * - Native goal mode (`#buildGoalTodoContext`): the todo snapshot is appended
- *   to the latest `goal-mode-context` message of every model request.
+ *   to the latest `goal-mode-context` message of every model request, in place
+ *   of the native snapshot the host built over the projected list.
  * - A transcript renderer for the reminder messages (`TodoReminderComponent`).
  *
  * Cycle: native resets its per-cycle budgets on every admitted prompt
@@ -49,27 +50,28 @@
  * hidden, so the continuation's `before_agent_start` adds a displayed notice
  * message; the `context` hook strips it from model input.
  *
- * State: the todo list is read from the session branch on every use. The
- * per-cycle budgets and the pending own-continuation are this session's
+ * State: the todo list is read from the branch fold (`branch.ts`) on every use.
+ * The per-cycle budgets and the pending own-continuation are this session's
  * ephemeral counters (the extension factory runs once per session), as native
- * keeps them on its tracker.
+ * keeps them on its tracker. Settings (`settings.ts`) are re-read at session
+ * start and at every prompt start.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Model, TextContent, ToolChoice } from "@oh-my-pi/pi-ai";
-import { type ExtensionAPI, type ExtensionContext, type MessageRenderer, type SessionEntry, Text, z } from "@oh-my-pi/pi-coding-agent";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { cfgTodoEager, cfgTodoReminders, cfgTodoRemindersMax } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { type AgentSession, type ExtensionAPI, type ExtensionContext, type MessageRenderer, Text, z } from "@oh-my-pi/pi-coding-agent";
 import { type NativeNode, node, span } from "@oh-my-pi/pi-tui";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
+import { type BranchFacts, branchFacts, contextBranch } from "./branch.ts";
 import { errorText } from "./errors.ts";
 import { tr } from "./i18n.ts";
 import { type CutOffWait, cutOffWait, quotaDeadline, quotaNoticeLine } from "./quota-wait.ts";
+import { sessionOf } from "./session.ts";
+import { DEFAULT_REMINDER_SETTINGS, type ReminderSettings, readReminderSettings, silenceNativeTodoAutomation } from "./settings.ts";
 import {
 	actionableItems,
 	explanationText,
 	goalLines,
-	readTodoMore,
+	REMINDER_TYPE,
 	TODO_MORE_ENTRY_TYPE,
 	type TodoItem,
 	type TodoMoreState,
@@ -77,8 +79,6 @@ import {
 	unexplainedItems,
 } from "./state.ts";
 
-/** Subagent stop reminder: model input and transcript notice in one message. */
-const REMINDER_TYPE = `${TODO_MORE_ENTRY_TYPE}.reminder`;
 const MID_RUN_NUDGE_TYPE = `${TODO_MORE_ENTRY_TYPE}.mid-run-nudge`;
 const EAGER_PRELUDE_TYPE = `${TODO_MORE_ENTRY_TYPE}.eager-prelude`;
 /** Native goal mode's per-prompt context message (`agent-session.ts#buildGoalModeMessage`). */
@@ -220,18 +220,10 @@ type CutOffStep =
 
 const DROP: CutOffStep = { kind: "drop" };
 
-const ownSession = (ctx: ExtensionContext): AgentSession | undefined => AgentRegistry.global().get(ctx.agent.id)?.session ?? undefined;
+const ownSession = (ctx: ExtensionContext): AgentSession | undefined => sessionOf(ctx.agent.id);
 
-/**
- * The branch for read-only consumers (§6): the manager's zero-copy live view
- * instead of `getBranch()`'s defensive copy. Every call site below reads it
- * synchronously and holds it nowhere — `session_stop`, `agent_end`, `nextStep`,
- * `before_agent_start`, `turn_end` and the `context` thunk all consume the
- * entries inside one hook run. `ReadonlySessionManager`'s pick list predates
- * `getBranchView`; the runtime object is the full manager.
- */
-const branchView = (ctx: ExtensionContext): readonly SessionEntry[] =>
-	(ctx.sessionManager as AgentSession["sessionManager"]).getBranchView();
+/** The branch facts of the hook's own session. */
+const facts = (ctx: ExtensionContext): BranchFacts => branchFacts(contextBranch(ctx));
 
 // @upstream adapted @oh-my-pi/pi-coding-agent@18.10.1 src/session/todo-tracker.ts#TodoTracker.resetCycle
 /** Starts a new cycle; the main reminder count follows the `session_stop` chain instead. */
@@ -442,11 +434,18 @@ function reminderText(state: ListState, open: readonly OpenItem[], attempt: numb
  * The native guards after the user-force label, in native order. `count` is the
  * reminders already sent in this budget; the caller applies the outcome to it.
  */
-function checkCompletion(session: AgentSession, cycle: Cycle, count: number, message: AssistantMessage, state: TodoMoreState): Completion {
+function checkCompletion(
+	session: AgentSession,
+	settings: ReminderSettings,
+	cycle: Cycle,
+	count: number,
+	message: AssistantMessage,
+	state: TodoMoreState,
+): Completion {
 	if (session.getPlanModeState()?.enabled === true) return SILENT;
 	if (cycle.awaitingProgress) return SILENT;
-	if (!cfgTodoReminders.get(session.settings)) return RESET;
-	const max = cfgTodoRemindersMax.get(session.settings);
+	if (!settings.reminders) return RESET;
+	const max = settings.remindersMax;
 	if (count >= max) return SILENT;
 	if (state.kind === "empty") return RESET;
 	const open = actionableItems(state);
@@ -513,18 +512,6 @@ function cutOffAnswer(message: AgentMessage | undefined): AssistantMessage | und
 	return CUT_OFF_STOP_REASONS[message.stopReason] === true ? message : undefined;
 }
 
-/** Subagent budget: this module's reminders on the branch since the latest real user message. */
-function remindersSinceUserMessage(branch: readonly SessionEntry[]): number {
-	let count = 0;
-	for (let index = branch.length - 1; index >= 0; index--) {
-		const entry = branch[index];
-		if (entry === undefined) continue;
-		if (entry.type === "message" && entry.message.role === "user" && entry.message.synthetic !== true) break;
-		if (entry.type === "custom_message" && entry.customType === REMINDER_TYPE) count++;
-	}
-	return count;
-}
-
 // @upstream adapted @oh-my-pi/pi-coding-agent@18.10.1 src/prompts/system/eager-todo.md#*
 function eagerTodoText(todo: string, forced: boolean): string {
 	const body = forced
@@ -554,10 +541,11 @@ If you create the list, continue the request in the same turn and avoid re-calli
 function eagerTodoPrelude(
 	pi: ExtensionAPI,
 	session: AgentSession,
+	settings: ReminderSettings,
 	state: TodoMoreState,
 	promptText: string | undefined,
 ): { customType: string; content: string; display: false; attribution: "agent" } | undefined {
-	const mode = cfgTodoEager.get(session.settings);
+	const mode = settings.eager;
 	if (mode === "default") return undefined;
 	if (session.getPlanModeState()?.enabled === true || state.kind !== "empty") return undefined;
 	// An actionable prewalk drives todo creation in a plan-first-then-todo order;
@@ -599,12 +587,13 @@ function eagerTodoPrelude(
 // @upstream adapted @oh-my-pi/pi-coding-agent@18.10.1 src/session/todo-tracker.ts#TodoTracker.takeMidRunNudge
 function takeMidRunNudge(
 	session: AgentSession,
+	settings: ReminderSettings,
 	cycle: Cycle,
 	state: TodoMoreState,
 ): { customType: string; content: string; display: false; attribution: "agent" } | undefined {
 	if (cycle.mutationsSinceLastTouch < MID_RUN_NUDGE_MUTATION_THRESHOLD) return undefined;
 	if (cycle.midRunNudgeCount >= MID_RUN_NUDGE_MAX_PER_CYCLE) return undefined;
-	if (!cfgTodoReminders.get(session.settings)) return undefined;
+	if (!settings.reminders) return undefined;
 	if (session.getPlanModeState()?.enabled === true || !session.getActiveToolNames().includes(TODO_TOOL)) return undefined;
 	if (state.kind === "empty") return undefined;
 	const incomplete = actionableItems(state);
@@ -701,18 +690,59 @@ function withAppendedText(message: AgentMessage, text: string): AgentMessage {
 	return { ...message, content };
 }
 
-/** Model input for one request: the goal-mode message carrying the todo snapshot. Exported for the bench only. */
+/** Where the host's own `<todo_context>` block starts in a goal-mode text (`prompts/goals/goal-mode-context.md`). */
+const NATIVE_GOAL_TODO_CONTEXT = "\n<todo_context>\nPersisted todos:";
+
+function withoutNativeTodoText(text: string): string {
+	const index = text.indexOf(NATIVE_GOAL_TODO_CONTEXT, Math.max(0, text.lastIndexOf("</goal_context>")));
+	return index < 0 ? text : text.slice(0, index);
+}
+
+/** `message` without the host's todo snapshot, which it renders from the projected list. */
+function withoutNativeTodoContext(message: AgentMessage): AgentMessage {
+	if (message.role !== "custom") return message;
+	if (typeof message.content === "string") {
+		const content = withoutNativeTodoText(message.content);
+		return content === message.content ? message : { ...message, content };
+	}
+	let changed = false;
+	const content = message.content.map((part) => {
+		if (part.type !== "text") return part;
+		const text = withoutNativeTodoText(part.text);
+		if (text === part.text) return part;
+		changed = true;
+		return { ...part, text };
+	});
+	return changed ? { ...message, content } : message;
+}
+
+const isGoalModeContext = (message: AgentMessage): boolean => message.role === "custom" && message.customType === GOAL_MODE_CONTEXT_TYPE;
+
+/**
+ * Model input for one request: every goal-mode message (the per-request one and
+ * goal-context asides persisted earlier) without the host's todo snapshot, and
+ * the latest one carrying todo-more's while goal mode is on. Exported for the bench only.
+ */
 export function contextMessages(
 	messages: AgentMessage[],
 	session: AgentSession | undefined,
-	branch: () => readonly SessionEntry[],
+	state: () => TodoMoreState,
 ): AgentMessage[] | undefined {
-	if (session?.getGoalModeState()?.enabled !== true) return undefined;
-	const goalIndex = messages.findLastIndex((message) => message.role === "custom" && message.customType === GOAL_MODE_CONTEXT_TYPE);
-	const goalMessage = messages[goalIndex];
-	if (goalMessage === undefined) return undefined;
-	const todoContext = goalTodoContext(session, readTodoMore(branch()));
-	return todoContext === undefined ? undefined : messages.with(goalIndex, withAppendedText(goalMessage, todoContext));
+	let stripped = false;
+	const own = messages.map((message) => {
+		if (!isGoalModeContext(message)) return message;
+		const without = withoutNativeTodoContext(message);
+		if (without !== message) stripped = true;
+		return without;
+	});
+	const base = stripped ? own : messages;
+	if (session?.getGoalModeState()?.enabled !== true) return stripped ? base : undefined;
+	const goalIndex = base.findLastIndex(isGoalModeContext);
+	const goalMessage = base[goalIndex];
+	if (goalMessage === undefined) return stripped ? base : undefined;
+	const todoContext = goalTodoContext(session, state());
+	if (todoContext === undefined) return stripped ? base : undefined;
+	return base.with(goalIndex, withAppendedText(goalMessage, todoContext));
 }
 
 /** A reminder renders only its event header in the transcript, never the todo list. */
@@ -752,8 +782,25 @@ export function registerReminders(pi: ExtensionAPI): void {
 	let pending: PendingContinuation = NO_PENDING;
 	/** An auto-compaction finished; the next prompt start re-asserts the eager prelude. */
 	let compacted = false;
+	/** The last read of this plugin's settings; hooks and timers between reads use it. */
+	let settings: ReminderSettings = DEFAULT_REMINDER_SETTINGS;
+	const refreshSettings = async (ctx: ExtensionContext): Promise<void> => {
+		settings = await readReminderSettings(pi, ctx);
+	};
 
 	pi.registerMessageRenderer(REMINDER_TYPE, renderReminder);
+
+	const startSession = async (ctx: ExtensionContext): Promise<void> => {
+		try {
+			const session = ownSession(ctx);
+			if (session !== undefined) silenceNativeTodoAutomation(session);
+		} catch (error) {
+			pi.logger.warn("todo-more could not switch off the native todo reminders", { error: errorText(error) });
+		}
+		await refreshSettings(ctx);
+	};
+	pi.on("session_start", (_event, ctx) => startSession(ctx));
+	pi.on("session_switch", (_event, ctx) => startSession(ctx));
 
 	pi.on("session_stop", (event, ctx) => {
 		try {
@@ -762,7 +809,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 			const session = ownSession(ctx);
 			const message = terminalAnswer(event.last_assistant_message);
 			if (session === undefined || message === undefined) return undefined;
-			const completion = checkCompletion(session, cycle, cycle.reminderCount, message, readTodoMore(branchView(ctx)));
+			const completion = checkCompletion(session, settings, cycle, cycle.reminderCount, message, facts(ctx).state);
 			switch (completion.kind) {
 				case "silent":
 					return undefined;
@@ -816,7 +863,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 		// A draft being typed: the grace window yields to it, a quota wait keeps its
 		// notice until the draft clears (a submitted draft starts a turn and cancels).
 		if (ctx.hasUI && ctx.ui.getEditorText().trim() !== "") return wait.kind === "quota" ? { kind: "wait", ms: DRAFT_RECHECK_MS } : DROP;
-		const completion = checkCompletion(session, cycle, cycle.reminderCount, message, readTodoMore(branchView(ctx)));
+		const completion = checkCompletion(session, settings, cycle, cycle.reminderCount, message, facts(ctx).state);
 		return completion.kind === "remind" ? { kind: "remind", completion } : DROP;
 	};
 	const schedule = (plan: CutOffPlan, ms: number): void => {
@@ -929,8 +976,8 @@ export function registerReminders(pi: ExtensionAPI): void {
 			if (ctx.agent.kind === "sub") {
 				const message = terminalAnswer(last);
 				if (message === undefined) return;
-				const branch = branchView(ctx);
-				const completion = checkCompletion(session, cycle, remindersSinceUserMessage(branch), message, readTodoMore(branch));
+				const branch = facts(ctx);
+				const completion = checkCompletion(session, settings, cycle, branch.remindersSinceUserMessage, message, branch.state);
 				switch (completion.kind) {
 					case "silent":
 						return;
@@ -957,7 +1004,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 			// session — the stop the reminder exists to catch.
 			const cutOff = cutOffAnswer(last);
 			if (cutOff === undefined) return;
-			const completion = checkCompletion(session, cycle, cycle.reminderCount, cutOff, readTodoMore(branchView(ctx)));
+			const completion = checkCompletion(session, settings, cycle, cycle.reminderCount, cutOff, facts(ctx).state);
 			switch (completion.kind) {
 				case "silent":
 					return;
@@ -979,7 +1026,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("before_agent_start", (event, ctx) => {
+	pi.on("before_agent_start", async (event, ctx) => {
 		try {
 			const own = pending;
 			pending = NO_PENDING;
@@ -1011,7 +1058,10 @@ export function registerReminders(pi: ExtensionAPI): void {
 			compacted = false;
 			const session = ownSession(ctx);
 			if (session === undefined) return undefined;
-			const prelude = eagerTodoPrelude(pi, session, readTodoMore(branchView(ctx)), afterCompaction ? undefined : event.prompt);
+			// Also here: a session that never emitted session_start must not run the native reminders beside these.
+			silenceNativeTodoAutomation(session);
+			await refreshSettings(ctx);
+			const prelude = eagerTodoPrelude(pi, session, settings, facts(ctx).state, afterCompaction ? undefined : event.prompt);
 			return prelude === undefined ? undefined : { message: prelude };
 		} catch (error) {
 			pi.logger.warn("todo-more prompt start failed", { error: errorText(error) });
@@ -1038,7 +1088,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 			if (event.toolResults.length === 0) return;
 			const session = ownSession(ctx);
 			if (session === undefined) return;
-			const nudge = takeMidRunNudge(session, cycle, readTodoMore(branchView(ctx)));
+			const nudge = takeMidRunNudge(session, settings, cycle, facts(ctx).state);
 			if (nudge !== undefined) pi.sendMessage(nudge, { deliverAs: "aside" });
 		} catch (error) {
 			pi.logger.warn("todo-more mid-run nudge failed", { error: errorText(error) });
@@ -1047,7 +1097,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 
 	pi.on("context", (event, ctx) => {
 		try {
-			const messages = contextMessages(event.messages, ownSession(ctx), () => branchView(ctx));
+			const messages = contextMessages(event.messages, ownSession(ctx), () => facts(ctx).state);
 			return messages === undefined ? undefined : { messages };
 		} catch (error) {
 			pi.logger.warn("todo-more context failed", { error: errorText(error) });

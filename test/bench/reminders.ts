@@ -25,11 +25,11 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { Theme } from "@oh-my-pi/pi-tui/theme/theme";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
+import { readTodoMore } from "../../src/branch.ts";
 import { contextMessages, registerReminders, renderReminder } from "../../src/reminders.ts";
 import {
 	explanationText,
 	goalLines,
-	readTodoMore,
 	TODO_MORE_ENTRY_TYPE,
 	type TodoMoreSnapshot,
 	type TodoMoreState,
@@ -508,9 +508,10 @@ function scenarioScaling(): void {
 		};
 
 		const branch = () => fixture.ctx.sessionManager.getBranch();
-		const currentNs = measure(() => contextMessages(messages, undefined, branch));
+		const state = () => readTodoMore(branch());
+		const currentNs = measure(() => contextMessages(messages, undefined, state));
 		const baselineNs = measure(() => baselineContextMessages(messages, undefined, branch));
-		const currentCopies = countCopies(messages, () => contextMessages(messages, undefined, branch));
+		const currentCopies = countCopies(messages, () => contextMessages(messages, undefined, state));
 		const baselineCopies = countCopies(messages, () => baselineContextMessages(messages, undefined, branch));
 		const timeRatio = baselineNs / currentNs;
 		console.log(

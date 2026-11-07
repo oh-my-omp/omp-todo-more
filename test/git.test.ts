@@ -5,9 +5,10 @@ import { join } from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { readTodoMore } from "../src/branch.ts";
 import type { TodoSession } from "../src/commit.ts";
 import type { ModelRef } from "../src/models.ts";
-import { type CommitRecord, readTodoMore, type TodoMoreSnapshot, toSnapshot } from "../src/state.ts";
+import { type CommitRecord, type TodoMoreSnapshot, toSnapshot } from "../src/state.ts";
 import { type ParentCwd, runTodo, type TodoMoreDetails } from "../src/tool.ts";
 
 const goal = {

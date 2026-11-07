@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-OMP 的富信息 Todo 插件。替代原生 `todo`，保留标题寻址、阶段进度、提醒、planning 检查与编辑型子会话行为；列表包含 goal，以及每项 explanation 和模型预估耗时。
+OMP 的富信息 Todo 插件。运行在原生 todo 之上并接管其 `todo` 工具，保留标题寻址、阶段进度、提醒、planning 检查与编辑型子会话行为；列表包含 goal，以及每项 explanation 和模型预估耗时。
 
 ## 安装与启用
 
@@ -10,12 +10,17 @@ OMP 的富信息 Todo 插件。替代原生 `todo`，保留标题寻址、阶段
 omp install https://github.com/oh-my-omp/omp-todo-more
 ```
 
-插件入口是包根 `index.ts`，由 `package.json` 的 `omp.extensions` 声明。使用插件前在 OMP 配置中关闭原生 Todo：
+插件入口是包根 `index.ts`，由 `package.json` 的 `omp.extensions` 声明。保持原生 Todo 开启（`todo.enabled`，默认即开启）：原生 tracker 继续供给 HUD、`/todo`、分支恢复与 goal mode，插件的 `todo` 工具遮蔽同名内置工具。
 
-```yaml
-todo:
-  enabled: false
-```
+原生 stop reminder、mid-run nudge 与 eager prelude 会与插件自己的重复，因此插件在本进程内以运行时覆盖关闭 `todo.reminders` 与 `todo.eager`，从不写入配置。插件自己的提醒在 `/settings` → Plugins 或 `omp plugin config omp-todo-more` 中配置：
+
+| 设置 | 默认值 | 作用 |
+|---|---|---|
+| `reminders` | `true` | 仍有未完成项时的 stop reminder 与 mid-run nudge。 |
+| `remindersMax` | `3` | 每条停止链放弃前的 stop reminder 次数。 |
+| `eager` | `default` | `preferred` 在首个 prompt 要求建立列表；`always` 还强制调用 `todo`。 |
+
+会话开始时与每次 prompt 开始时读取这些设置。
 
 不要同时加载旧的本地 `extensions/todo-more/`。已在用 omp-config 的机器，旧模块在独立插件安装并通过运行验证后，由 omp-config 更新器执行受门禁保护的退休。
 
@@ -95,6 +100,8 @@ ANSI 与 native 卡片的解析诊断在渲染时使用当前界面语言；返�
 
 reader 按标题联结宿主 `user_todo_edit` 与旧原生工具结果：已知标题保留 explanation 和计时元数据，新标题缺少两者；原生空 snapshot 中断此前 goal、explanation 和计时元数据的继承。自有 marked 工具结果不重复作为状态记录读取。现有 reader 忽略格式无效的记录；本次迁移不更改这项兼容语义。
 
+所有读取按 session manager 对分支做一次前向折叠并保留结果：之后的读取只折叠新追加的条目；leaf 离开已折叠路径（branch、树导航、切换会话）时从根折叠新分支。不保留列表的其他副本。
+
 同步追加确认的是当前分支接受记录，不是磁盘 durable-write 确认。文件写入、flush 和磁盘失败处理属于 OMP SessionManager 生命周期；退出后 resume 是正常持久化路径的验证方式。
 
 ### 估时与超时警告
@@ -112,11 +119,11 @@ reader 按标题联结宿主 `user_todo_edit` 与旧原生工具结果：已知�
 
 只要持久状态仍为 `in_progress`，会话 idle 或进程停止期间也继续累计墙钟时间；这不是 CPU 时间统计。原生状态变化使用对应 session entry 的 timestamp 结算。在 `ask` 里等用户作答的时间不算工作时间，从每个 `in_progress` 区间中扣除：一次等待从宿主对该 `ask` 调用写下的 `tool_execution_start` 记录（`startedAt`）开始，到该调用的工具结果（`timestamp`）结束；进程在 ask 未结束时退出，则以宿主的 `session_exit` 记录为结束。这些都从分支读出。
 
-插件只保留距离最近的 active 预算 deadline 的一个单次 timeout；todo 相关 journal 写入、`ask` 调用的开始与结果、session/branch 变化时重新调度，`ask` 尚未结束时不运行任何 deadline。不进行周期轮询，也不在 end hook 检查 deadline。原生 `/todo`、延后持久化的 native 工具结果以及已接受的 rich commit 都在 journal 写入方法上被观察，即使宿主投影失败也不会漏掉变更。普通消息不触发分支读取，collaboration 所有的 append callback 保持不变。到点 callback 重新读取当前分支后请求注入；超长等待仅按平台 timeout 上限分段。
+插件只保留距离最近的 active 预算 deadline 的一个单次 timeout；自身 `todo` 结果、宿主在工具外的写入（`/todo`、RPC `set_todos` 与子会话自动完成，均经 `session.commitTodoPhases`）、原生 `todo` 结果、`ask` 调用的结果、turn 与 run 结束、prompt 开始以及 session/branch 变化时重新调度。`ask` 尚未结束时不运行任何 deadline：落在等待期间的 deadline 重新读取分支，看到未结束的 ask 后不告警，等它的结果重新调度。不进行周期轮询，也不改动 session manager 的写入方法和 collaboration callback：从 collaboration 宿主复制来的条目在下一个上述事件时被读取。到点 callback 重新读取当前分支后请求注入；超长等待仅按平台 timeout 上限分段。
 
 每个超时 active 预算在正常投递路径收到一次系统警告。修订后的新预算也有一次警告机会；如果保留的累计时间已经超过新预算，会再次告警。排队消息只是投递意图；实际 `mouriya.omp.todo-more.overtime` custom-message entry 才是通知事实，普通 compaction 保留分支 journal 中的这些记录。警告不复制进 item snapshot，重新加载时按分支重建 timeout。
 
-到点时，运行中的会话立即收到 aside 注入请求；宿主在下一个安全 step boundary 将警告提供给模型，不取消工具批次。检测和排队不等待 step 结束。idle 时警告立即追加到 transcript 和 context，但不启动模型 turn，因此不会撤销人工停止。shutdown 取消 timeout 并恢复被观察的 journal 方法；重新打开已超时的 active 项时重新检查。
+到点时，运行中的会话立即收到 aside 注入请求；宿主在下一个安全 step boundary 将警告提供给模型，不取消工具批次。检测和排队不等待 step 结束。idle 时警告立即追加到 transcript 和 context，但不启动模型 turn，因此不会撤销人工停止。shutdown 取消 timeout 并恢复 `session.commitTodoPhases`；重新打开已超时的 active 项时重新检查。
 
 警告指出任务、预计时间与已耗时间，并要求 agent 保持预期结果、验收标准和质量，核实超时原因、判断是否改变方针、继续推进完整任务。警告推荐与 subagent 讨论原因和方针；子会话可与 parent 沟通。插件不自动创建 agent、不改变任务 status、不降低 goal。估计是预测而非硬 deadline，agent 不得仅为掩盖超时而重建列表或抬高预算。
 
@@ -140,7 +147,7 @@ git 记录的提交信息在 message 之后，为提交方会话自上一次 tod
 
 ## 子会话与提醒
 
-每个会话独立持有列表。宿主会从子 agent 剥离 todo 工具，之后每次由扩展发起的启用工具变更（例如其他插件按 turn 同步工具）也会再次剥离。对自身已启用工具包含 `edit` 的子 agent，插件在每次模型调用前把该工具放回，并按 oh-my-omp 插件共用的规范顺序写入整个启用工具集（内置工具按注册表顺序在前，其余名称按字典序）。该顺序只由工具集合决定，因此 fork 或重建的会话列出相同顺序的工具、保持 prompt 缓存命中。这让 edit 前置条件可以由该 agent 自己满足，不依赖 agent 名称、显式的 `todo` 声明或各插件 hook 的执行顺序；默认工具集的 `task:*` 与自定义编辑型 agent 使用同一规则。未启用 `edit` 的子 agent 不会获得恢复的工具。tool-restricted 会话通过宿主工具槽安装。保留 stop reminder、mid-run nudge、eager prelude、goal-mode context 与 request-only 用户提醒。人工中断不自动恢复。
+每个会话独立持有列表。宿主会从子 agent 剥离 todo 工具，之后每次由扩展发起的启用工具变更（例如其他插件按 turn 同步工具）也会再次剥离。对自身已启用工具包含 `edit` 的子 agent，插件在每次模型调用前把该工具放回，并按 oh-my-omp 插件共用的规范顺序写入整个启用工具集（内置工具按注册表顺序在前，其余名称按字典序）。该顺序只由工具集合决定，因此 fork 或重建的会话列出相同顺序的工具、保持 prompt 缓存命中。这让 edit 前置条件可以由该 agent 自己满足，不依赖 agent 名称、显式的 `todo` 声明或各插件 hook 的执行顺序；默认工具集的 `task:*` 与自定义编辑型 agent 使用同一规则。未启用 `edit` 的子 agent 不会获得恢复的工具。tool-restricted 会话通过宿主工具槽安装。保留 stop reminder、mid-run nudge、eager prelude、goal-mode context 与 request-only 用户提醒。goal mode 下，请求中宿主自己的 todo 快照被替换为插件的快照，其中带有 goal、explanation 与预估。人工中断不自动恢复。
 
 Todo 只属于工作阶段：请求会改动文件、配置、git 或外部状态。讨论、调查、解释与回答问题属于非工作阶段，不建 todo。Todo lifecycle topic、每条用户消息附带的空列表提醒与 `preferred` eager prelude 都按此划分；真正强制的只有 `edit` 守卫，因为 `edit` 就是工作。
 
@@ -203,7 +210,7 @@ Tern 样式插件必须与 OMP 扩展成套启用。Tern 插件启用期间，�
 
 async 工厂先同步注册工具、hooks 和 UI，然后 await `initializeTernPlugin`，最后订阅 review API。Tern 初始化被拒绝时工厂同样被拒绝，机器不会得到本插件。资产目录从模块相对路径定位；通过真正的 `tern plugin dir/list/install --json` 请求 owner，校验 catalog 与三文件 normal copy。相同 ready/disabled 副本不重新安装；需要更新时使用 `install --force`，等待后复查身份、版本、destination、catalog 和文件内容。保留用户 disabled 设置，不执行 unlink 或自动 enable。
 
-本加载图只有一个初始化 Promise，prepared 子工厂复用它，但每个 session 仍独立注册工具、hooks 与 read listener。Tern 不在 PATH 时允许 ANSI OMP 使用，不代表 GUI 验收完成。Tern 存在时的 CLI、解析、安装、linked 冲突或复查失败会拒绝工厂初始化；原生 todo 已关闭的机器此时不会得到本插件工具，不能把 warning 当成成功。磁盘安装验收也不替代真实窗口的 CSS 和编辑路径验证。
+本加载图只有一个初始化 Promise，prepared 子工厂复用它，但每个 session 仍独立注册工具、hooks 与 read listener。Tern 不在 PATH 时允许 ANSI OMP 使用，不代表 GUI 验收完成。Tern 存在时的 CLI、解析、安装、linked 冲突或复查失败会拒绝工厂初始化；机器此时只运行原生 todo、没有本插件工具，不能把 warning 当成成功。磁盘安装验收也不替代真实窗口的 CSS 和编辑路径验证。
 
 Tern 的 headless `serve` 不自动加载已安装插件。原生 UI 验证需要通过隔离测试文档的 control endpoint 加载随包 stylesheet，或使用真实 Tern 窗口；必须核对实际进度卡片、popover 和编辑器，不能只检查 catalog。
 
