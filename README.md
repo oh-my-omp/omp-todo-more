@@ -196,9 +196,11 @@ process ended while the ask was open. All of it is read from the branch.
 The plugin maintains one one-shot timeout for the nearest active budget's
 deadline. Its own `todo` results, the host's writes outside the tool (`/todo`,
 RPC `set_todos` and subagent auto-complete, all through
-`session.commitTodoPhases`), native `todo` results, the start and result of an
-`ask` call, turn and run ends, prompt starts and session/branch changes re-arm
-it; while an `ask` is open no deadline runs. There is no periodic polling, and
+`session.commitTodoPhases`), native `todo` results, the result of an `ask`
+call, turn and run ends, prompt starts and session/branch changes re-arm it.
+While an `ask` is open no deadline runs: a deadline that falls inside the wait
+re-reads the branch, sees the open ask and stands down until its result
+re-arms the timer. There is no periodic polling, and
 the session manager's write methods and collaboration callback are untouched:
 an entry replicated from a collaboration host is picked up at the next of those
 events. At the deadline the callback re-reads the current branch before

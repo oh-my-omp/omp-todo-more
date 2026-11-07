@@ -9,9 +9,14 @@
  * only schedules the next check. Checks run when the list or an ask can have
  * changed: the session's start or switch, its own and the host's todo writes
  * (tool results, `session.commitTodoPhases` for `/todo`, RPC `set_todos` and
- * subagent auto-complete), ask starts and results, and turn and run ends.
- * A check that reads the branch before the host persisted a change is
- * corrected by the next one; a deadline check re-validates before warning.
+ * subagent auto-complete), ask results, and turn and run ends. An ask opening
+ * needs no check of its own: a deadline that falls inside it re-reads the
+ * branch, sees the open wait and stands down. A check that reads the branch
+ * before the host persisted a change is corrected by the next one.
+ *
+ * Only events baseline todo-more already handled are subscribed: the host
+ * awaits extension handlers per event type, so a new event type would shift
+ * the host's own persistence order (mode changes vs tool results).
  */
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
@@ -164,10 +169,7 @@ export function registerOvertime(pi: ExtensionAPI): void {
 		if (active?.session !== session) start(ctx);
 		else changed();
 	});
-	pi.on("tool_execution_start", (event) => {
-		if (event.toolName === "ask") changed();
-	});
-	pi.on("tool_execution_end", (event) => {
+	pi.on("tool_result", (event) => {
 		if (event.toolName === "ask" || event.toolName === "todo") changed();
 	});
 	pi.on("message_end", (event) => {

@@ -119,7 +119,7 @@ reader 按标题联结宿主 `user_todo_edit` 与旧原生工具结果：已知�
 
 只要持久状态仍为 `in_progress`，会话 idle 或进程停止期间也继续累计墙钟时间；这不是 CPU 时间统计。原生状态变化使用对应 session entry 的 timestamp 结算。在 `ask` 里等用户作答的时间不算工作时间，从每个 `in_progress` 区间中扣除：一次等待从宿主对该 `ask` 调用写下的 `tool_execution_start` 记录（`startedAt`）开始，到该调用的工具结果（`timestamp`）结束；进程在 ask 未结束时退出，则以宿主的 `session_exit` 记录为结束。这些都从分支读出。
 
-插件只保留距离最近的 active 预算 deadline 的一个单次 timeout；自身 `todo` 结果、宿主在工具外的写入（`/todo`、RPC `set_todos` 与子会话自动完成，均经 `session.commitTodoPhases`）、原生 `todo` 结果、`ask` 调用的开始与结果、turn 与 run 结束、prompt 开始以及 session/branch 变化时重新调度，`ask` 尚未结束时不运行任何 deadline。不进行周期轮询，也不改动 session manager 的写入方法和 collaboration callback：从 collaboration 宿主复制来的条目在下一个上述事件时被读取。到点 callback 重新读取当前分支后请求注入；超长等待仅按平台 timeout 上限分段。
+插件只保留距离最近的 active 预算 deadline 的一个单次 timeout；自身 `todo` 结果、宿主在工具外的写入（`/todo`、RPC `set_todos` 与子会话自动完成，均经 `session.commitTodoPhases`）、原生 `todo` 结果、`ask` 调用的结果、turn 与 run 结束、prompt 开始以及 session/branch 变化时重新调度。`ask` 尚未结束时不运行任何 deadline：落在等待期间的 deadline 重新读取分支，看到未结束的 ask 后不告警，等它的结果重新调度。不进行周期轮询，也不改动 session manager 的写入方法和 collaboration callback：从 collaboration 宿主复制来的条目在下一个上述事件时被读取。到点 callback 重新读取当前分支后请求注入；超长等待仅按平台 timeout 上限分段。
 
 每个超时 active 预算在正常投递路径收到一次系统警告。修订后的新预算也有一次警告机会；如果保留的累计时间已经超过新预算，会再次告警。排队消息只是投递意图；实际 `mouriya.omp.todo-more.overtime` custom-message entry 才是通知事实，普通 compaction 保留分支 journal 中的这些记录。警告不复制进 item snapshot，重新加载时按分支重建 timeout。
 

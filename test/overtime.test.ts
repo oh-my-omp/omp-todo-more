@@ -195,14 +195,22 @@ class SchedulerFixture {
 		await Promise.resolve();
 	}
 
-	/** A `todo` call: its snapshot entry, then the host's end-of-execution event. */
+	/** A `todo` call: its snapshot entry, then the host's tool-result event. */
 	async append(state: TodoMoreState): Promise<void> {
 		this.manager.appendCustomEntry(TODO_MORE_ENTRY_TYPE, toSnapshot(state));
 		await this.toolEnd("todo");
 	}
 
 	async toolEnd(toolName: string): Promise<void> {
-		await this.emit({ type: "tool_execution_end", toolCallId: crypto.randomUUID(), toolName, result: undefined, isError: false });
+		await this.emit({
+			type: "tool_result",
+			toolCallId: crypto.randomUUID(),
+			toolName,
+			input: {},
+			content: [],
+			details: undefined,
+			isError: false,
+		});
 	}
 
 	/** A host write outside the tool (`/todo`, RPC `set_todos`), or a native `todo` result with its message event. */
@@ -280,10 +288,11 @@ describe("overtime deadline scheduling", () => {
 			await fixture.append(estimatedState());
 			await fixture.clock.advanceTo(epoch + 20_000);
 			await fixture.askStart("ask-1");
-			// No deadline runs while the user is deciding.
-			expect(fixture.clock.deadlines).toEqual([]);
+			// The deadline armed before the ask falls inside it: it re-reads the branch,
+			// sees the open ask and stands down without warning.
 			await fixture.clock.advanceTo(epoch + 200_000);
 			expect(warnings(fixture.manager)).toEqual([]);
+			expect(fixture.clock.deadlines).toEqual([]);
 			await fixture.askAnswered("ask-1");
 			expect(elapsedTime(estimateOf(fixture.manager), fixture.clock.now, askWaits(fixture.manager.getBranch()))).toBe(20_000);
 			expect(fixture.clock.deadlines).toEqual([epoch + 240_000]);
