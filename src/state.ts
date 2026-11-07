@@ -267,7 +267,8 @@ export function recordOf(entry: SessionEntry): ListRecord | undefined {
 		}
 		return undefined;
 	}
-	if (entry.type !== "message") return undefined;
+	// Discriminate before parsing: only a `todo` tool result can define the list.
+	if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.toolName !== "todo") return undefined;
 	const parsed = nativeResultSchema.safeParse(entry.message);
 	if (!parsed.success || parsed.data.isError === true || parsed.data.details.op === "view") return undefined;
 	// todo-more's own results follow the entry that records them.

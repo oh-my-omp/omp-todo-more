@@ -24,14 +24,13 @@ import {
 	type AskWait,
 	EMPTY,
 	joinNative,
+	type ListRecord,
 	type NativeRecord,
 	OVERTIME_TYPE,
 	overtimeDetailsSchema,
 	REMINDER_TYPE,
 	recordOf,
-	TODO_MORE_ENTRY_TYPE,
 	type TodoMoreState,
-	todoMoreSnapshotSchema,
 } from "./state.ts";
 
 /** A real human message on the branch and the list as it stood when the message landed. */
@@ -141,8 +140,7 @@ function foldAsk(acc: Accumulator, entry: SessionEntry): void {
  * ask waits seen so far: a join only counts waits that started before it and
  * clips them at its own time, so later entries cannot change it.
  */
-function foldState(acc: Accumulator, entry: SessionEntry): void {
-	const record = recordOf(entry);
+function foldState(acc: Accumulator, record: ListRecord | undefined): void {
 	if (record === undefined) return;
 	switch (record.kind) {
 		case "rich":
@@ -163,15 +161,14 @@ function nativeBase(state: TodoMoreState, record: NativeRecord): TodoMoreState {
 	return record.phases.every((phase) => phase.tasks.length === 0) ? EMPTY : state;
 }
 
-function commitShasOf(entry: SessionEntry): string[] {
-	if (entry.type !== "custom" || entry.customType !== TODO_MORE_ENTRY_TYPE) return [];
-	const parsed = todoMoreSnapshotSchema.safeParse(entry.data);
-	if (!parsed.success) return [];
-	return parsed.data.phases.flatMap((phase) => phase.items.flatMap((item) => (item.commit === undefined ? [] : [item.commit.sha])));
+/** Commit shas recorded by a rich snapshot (the record `foldEntry` already parsed). */
+function commitShasOf(record: ListRecord | undefined): string[] {
+	if (record?.kind !== "rich" || record.state.kind !== "list") return [];
+	return record.state.phases.flatMap((phase) => phase.items.flatMap((item) => (item.commit === undefined ? [] : [item.commit.sha])));
 }
 
-function foldModels(acc: Accumulator, entry: SessionEntry): void {
-	const shas = commitShasOf(entry);
+function foldModels(acc: Accumulator, entry: SessionEntry, record: ListRecord | undefined): void {
+	const shas = commitShasOf(record);
 	if (shas.some((sha) => !acc.commitShas.has(sha))) {
 		for (const sha of shas) acc.commitShas.add(sha);
 		acc.modelsSinceCommit = [];
@@ -226,10 +223,12 @@ function foldCompaction(acc: Accumulator, entry: SessionEntry): void {
 }
 
 function foldEntry(acc: Accumulator, entry: SessionEntry): void {
+	// Parsed once: the list fold and the commit-sha fold read the same record.
+	const record = recordOf(entry);
 	foldAsk(acc, entry);
 	foldCompaction(acc, entry);
-	foldState(acc, entry);
-	foldModels(acc, entry);
+	foldState(acc, record);
+	foldModels(acc, entry, record);
 	foldMessages(acc, entry);
 }
 
