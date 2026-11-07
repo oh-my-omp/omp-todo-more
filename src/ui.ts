@@ -23,7 +23,7 @@ import { saveTodoEdit, type TodoEdit } from "./edit.ts";
 import { errorText } from "./errors.ts";
 import { tr } from "./i18n.ts";
 import { describeSnapshot, describeTodoHud } from "./native.ts";
-import { type ItemTime, readTodoMore, type TodoGoal, type TodoStatus, toSnapshot } from "./state.ts";
+import { type ItemTime, readTodoMore, type TodoGoal, type TodoMoreState, type TodoStatus, toSnapshot } from "./state.ts";
 
 const FIELDS = ["objective", "measure", "doneWhen"] as const;
 type GoalField = (typeof FIELDS)[number];
@@ -90,13 +90,23 @@ type Mode =
 	| { kind: "panel"; selected: number }
 	| { kind: "goal"; fields: Record<GoalField, DraftField>; active: GoalField }
 	| { kind: "explanation"; title: string; draft: DraftField };
+/**
+ * One overlay owns its drafts; neither a historical tool card nor the opening snapshot can be saved.
+ *
+ * The only cross-call memory in this panel (contract §7) is `last`: where
+ * the last branch read ended (leaf id + length) plus the TodoMoreState
+ * derived at that position. When the branch has not grown the state is
+ * reused without touching the branch; growth re-derives. UI-only changes
+ * (selection, drafts, errors) clear `described` through `changed()` but keep this.
+ */
+type PanelRead = { leafId: string | null; length: number; state: TodoMoreState };
 
 /** One overlay owns its drafts; neither a historical tool card nor the opening snapshot can be saved. */
-class TodoPanel implements Component {
+export class TodoPanel implements Component {
 	private mode: Mode = { kind: "panel", selected: 0 };
 	private error: string | undefined;
 	private described: NativeNode | undefined;
-	private leaf: string | undefined;
+	private last: PanelRead | undefined;
 	private disposed = false;
 	focused = true;
 	readonly nativeOverlay = { role: "todo-more.panel", size: "lg" as const, anchor: "center" as const };
@@ -113,6 +123,25 @@ class TodoPanel implements Component {
 	private changed(): void {
 		this.described = undefined;
 		this.requestRender();
+	}
+
+	/**
+	 * The branch state for this panel, shared by `describe()`, `handleInput()`
+	 * and `render()`. Probes the zero-copy view (§6) for the end position;
+	 * unchanged end reuses the last state with no entry reads, growth
+	 * re-derives from the view and drops the cached node (the node depends
+	 * on the state). The view is consumed synchronously and held nowhere —
+	 * only the scalar end position and the derived state persist.
+	 */
+	private readState(): TodoMoreState {
+		const view = this.session.sessionManager.getBranchView();
+		const leafId = view.at(-1)?.id ?? null;
+		const previous = this.last;
+		if (previous !== undefined && view.length === previous.length && leafId === previous.leafId) return previous.state;
+		const state = readTodoMore(view);
+		this.last = { leafId, length: view.length, state };
+		this.described = undefined;
+		return state;
 	}
 
 	private makeField(label: string, text: string): DraftField {
@@ -151,7 +180,7 @@ class TodoPanel implements Component {
 	}
 
 	private openGoal(): void {
-		const state = readTodoMore(this.session.sessionManager.getBranch());
+		const state = this.readState();
 		if (state.kind === "empty") {
 			this.error = tr("Todo list is empty.", "待办列表为空。");
 			this.changed();
@@ -173,7 +202,7 @@ class TodoPanel implements Component {
 	}
 
 	private openExplanation(title: string): void {
-		const state = readTodoMore(this.session.sessionManager.getBranch());
+		const state = this.readState();
 		if (state.kind === "empty") {
 			this.error = tr("Todo list is empty.", "待办列表为空。");
 			this.changed();
@@ -253,12 +282,12 @@ class TodoPanel implements Component {
 	}
 
 	describe(): NativeNode {
-		const branch = this.session.sessionManager.getBranch();
-		if (this.leaf !== branch.at(-1)?.id) {
-			this.leaf = branch.at(-1)?.id;
-			this.described = undefined;
-		}
+		// Probe the branch end first: growth clears `described` inside
+		// `readState()`, so a stale node is never returned (§7). UI-only
+		// changes still hit the fast path below via `changed()`.
+		this.readState();
 		if (this.described) return this.described;
+		const state = this.last?.state ?? this.readState();
 		const body: NativeChild[] = [];
 		let role: string;
 		let head: string;
@@ -267,7 +296,7 @@ class TodoPanel implements Component {
 			case "panel": {
 				role = "todo-more.panel";
 				head = tr("Todo More", "Todo More");
-				const snapshot = toSnapshot(readTodoMore(branch));
+				const snapshot = toSnapshot(state);
 				let count = 0;
 				let selectedTitle: string | undefined;
 				for (const phase of snapshot.phases)
@@ -370,7 +399,7 @@ class TodoPanel implements Component {
 			return;
 		}
 		if (this.mode.kind === "panel") {
-			const state = readTodoMore(this.session.sessionManager.getBranch());
+			const state = this.readState();
 			const titles = state.kind === "list" ? state.phases.flatMap((phase) => phase.items.map((item) => item.title)) : [];
 			if (matchesKey(data, "tab") || matchesKey(data, "down")) this.mode.selected = (this.mode.selected + 1) % (titles.length + 2);
 			else if (matchesKey(data, "shift+tab") || matchesKey(data, "up"))
@@ -409,7 +438,7 @@ class TodoPanel implements Component {
 		];
 		switch (this.mode.kind) {
 			case "panel": {
-				const state = readTodoMore(this.session.sessionManager.getBranch());
+				const state = this.readState();
 				const labels = [tr("Edit goal", "编辑目标")];
 				if (state.kind === "empty") lines.push(tr("Todo list is empty.", "待办列表为空。"));
 				else {
@@ -454,12 +483,14 @@ class TodoPanel implements Component {
 
 	invalidate(): void {
 		this.described = undefined;
+		this.last = undefined;
 	}
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.discardDraft();
 		this.described = undefined;
+		this.last = undefined;
 	}
 }
 
@@ -488,9 +519,19 @@ function viewedSession(tui: TUI, mainAgentId: string): AgentSession | undefined 
 }
 type HudDisclosure = { kind: "closed" } | { kind: "open"; session: AgentSession; stopInput: () => void };
 
+/**
+ * The only cross-call memory in this HUD (contract §7): where the last frame
+ * read ended (session id + leaf id + length) plus the node derived at that
+ * position. An unchanged end reuses the node with zero branch reads; growth
+ * re-derives. Disclosure open/close is an invalidation event, not part of
+ * the reuse key — it clears `last` like a branch change would.
+ */
+type HudRead = { sessionId: string; leafId: string | null; length: number; node: NativeNode | null };
+
 /** Native-only presentation; the branch remains its only Todo state. */
-class TodoHud implements Component {
+export class TodoHud implements Component {
 	private disclosure: HudDisclosure = { kind: "closed" };
+	private last: HudRead | undefined;
 
 	constructor(
 		private readonly pi: ExtensionAPI,
@@ -504,13 +545,27 @@ class TodoHud implements Component {
 		try {
 			const session = this.readSession();
 			if (this.disclosure.kind === "open" && this.disclosure.session !== session) this.closeDisclosure();
-			const described =
-				session === undefined
-					? null
-					: describeTodoHud(toSnapshot(readTodoMore(session.sessionManager.getBranch())), this.disclosure.kind === "open");
-			if (described === null) this.closeDisclosure();
+			const previousSession = this.last?.sessionId;
+			if (previousSession !== undefined && (session === undefined || session.sessionManager.getSessionId() !== previousSession))
+				this.last = undefined;
+			const expanded = this.disclosure.kind === "open";
+			if (session !== undefined) {
+				const view = session.sessionManager.getBranchView();
+				const leafId = view.at(-1)?.id ?? null;
+				const previous = this.last;
+				const sessionId = session.sessionManager.getSessionId();
+				if (previous !== undefined && previous.sessionId === sessionId && view.length === previous.length && leafId === previous.leafId) {
+					return previous.node;
+				}
+				const hud = describeTodoHud(toSnapshot(readTodoMore(view)), expanded);
+				this.last = { sessionId, leafId, length: view.length, node: hud };
+				if (hud === null) this.closeDisclosure();
+				// Keep our own slot identifiable when empty, without showing a pill.
+				return hud ?? node("row", { role: "omp.hud.activity", aria: tr("Todo More progress", "Todo More 进度"), hidden: true });
+			}
+			if (this.disclosure.kind === "open") this.closeDisclosure();
 			// Keep our own slot identifiable when empty, without showing a pill.
-			return described ?? node("row", { role: "omp.hud.activity", aria: tr("Todo More progress", "Todo More 进度"), hidden: true });
+			return node("row", { role: "omp.hud.activity", aria: tr("Todo More progress", "Todo More 进度"), hidden: true });
 		} catch (error) {
 			this.closeDisclosure();
 			this.pi.logger.warn("todo-more HUD could not read the current branch", { error: errorText(error) });
@@ -526,6 +581,7 @@ class TodoHud implements Component {
 		if (this.disclosure.kind === "closed") return;
 		this.disclosure.stopInput();
 		this.disclosure = { kind: "closed" };
+		this.last = undefined;
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
@@ -547,6 +603,7 @@ class TodoHud implements Component {
 					return { consume: true };
 				});
 				this.disclosure = { kind: "open", session, stopInput };
+				this.last = undefined;
 			}
 			this.tui.requestRender();
 		} else if (event.type === "action" && event.act === "todo-more.open") {
