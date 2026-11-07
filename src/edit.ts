@@ -1,9 +1,10 @@
 import { z } from "@oh-my-pi/pi-coding-agent";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { branchFacts } from "./branch.ts";
 import { commitTodoState, type TodoCommitResult } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { tr } from "./i18n.ts";
-import { readTodoMore, stateOf, type TodoGoal, type TodoMoreState, todoGoalSchema } from "./state.ts";
+import { stateOf, type TodoGoal, type TodoMoreState, todoGoalSchema } from "./state.ts";
 
 export type TodoEdit = { kind: "set_goal"; goal: TodoGoal } | { kind: "explain"; title: string; explanation: string };
 export type TodoEditResult = TodoCommitResult | { kind: "rejected"; message: string };
@@ -55,7 +56,7 @@ export function applyTodoEdit(state: TodoMoreState, edit: TodoEdit): AppliedEdit
 
 export function saveTodoEdit(session: AgentSession, edit: TodoEdit): TodoEditResult {
 	try {
-		const current = readTodoMore(session.sessionManager.getBranch());
+		const current = branchFacts(session.sessionManager).state;
 		const applied = applyTodoEdit(current, edit);
 		return applied.kind === "rejected" ? applied : commitTodoState(session, applied.state);
 	} catch (error) {

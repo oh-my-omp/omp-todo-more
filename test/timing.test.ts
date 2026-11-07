@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
-import { hasOvertimeWarning, OVERTIME_TYPE } from "../src/overtime.ts";
+import { foldBranch, readTodoMore } from "../src/branch.ts";
 import {
 	elapsedTime,
 	estimatedMinutesSchema,
 	type ItemTime,
-	readTodoMore,
+	OVERTIME_TYPE,
 	stateOf,
 	TODO_MORE_ENTRY_TYPE,
 	type TodoItem,
@@ -15,6 +15,8 @@ import {
 	toSnapshot,
 	transitionTime,
 } from "../src/state.ts";
+
+const hasOvertimeWarning = (branch: readonly SessionEntry[], budgetId: string): boolean => foldBranch(branch).overtimeWarned.has(budgetId);
 
 const epoch = Date.parse("2026-10-15T12:00:00.000Z");
 const title = "Build runtime";

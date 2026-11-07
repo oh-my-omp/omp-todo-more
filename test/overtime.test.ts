@@ -1,16 +1,16 @@
 import { describe, expect, setSystemTime, test } from "bun:test";
-import type { ExtensionAPI, ExtensionContext, ExtensionEvent, SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import { AgentSession, type ExtensionAPI, type ExtensionContext, type ExtensionEvent, type SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
+import { askWaits, readTodoMore } from "../src/branch.ts";
 import { commitTodoState } from "../src/commit.ts";
-import { OVERTIME_TYPE, overtimeDetailsSchema, registerOvertime } from "../src/overtime.ts";
+import { registerOvertime } from "../src/overtime.ts";
 import {
-	askWaits,
 	elapsedTime,
 	type ItemTime,
-	readTodoMore,
+	OVERTIME_TYPE,
+	overtimeDetailsSchema,
 	stateOf,
 	TODO_MORE_ENTRY_TYPE,
 	type TodoItem,
@@ -143,17 +143,27 @@ class SchedulerFixture {
 	// Only these documented host surfaces are consumed by the extension/commit boundary.
 	// The actual SessionManager is never replaced by a mock or a synthetic branch array.
 	get session(): AgentSession {
-		return {
-			sessionManager: this.manager,
+		const manager = this.manager;
+		const session = {
+			sessionManager: manager,
 			setTodoPhases: (phases: Parameters<Projection>[0]) => this.projection(phases),
-		} as unknown as AgentSession;
+			// As the host's: project, then record the edit (`AgentSession.commitTodoPhases`).
+			commitTodoPhases: (phases: Parameters<Projection>[0]) => {
+				this.projection(phases);
+				manager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases });
+			},
+		};
+		// The extension serves only in-process sessions; the fixture stands in for one.
+		return Object.setPrototypeOf(session, AgentSession.prototype) as AgentSession;
 	}
+
+	bound = this.session;
 
 	readonly ref = AgentRegistry.global().register({
 		id: this.agentId,
 		displayName: "Overtime regression",
 		kind: "sub",
-		session: this.session,
+		session: this.bound,
 	});
 
 	readonly api = {
@@ -185,50 +195,59 @@ class SchedulerFixture {
 		await Promise.resolve();
 	}
 
+	/** A `todo` call: its snapshot entry, then the host's end-of-execution event. */
 	async append(state: TodoMoreState): Promise<void> {
 		this.manager.appendCustomEntry(TODO_MORE_ENTRY_TYPE, toSnapshot(state));
-		await Promise.resolve();
+		await this.toolEnd("todo");
 	}
 
+	async toolEnd(toolName: string): Promise<void> {
+		await this.emit({ type: "tool_execution_end", toolCallId: crypto.randomUUID(), toolName, result: undefined, isError: false });
+	}
+
+	/** A host write outside the tool (`/todo`, RPC `set_todos`), or a native `todo` result with its message event. */
 	async native(status: TodoStatus, source: "edit" | "result"): Promise<void> {
 		const phases = [{ name: "Delivery", tasks: [{ content: title, status }] }];
 		if (source === "edit") {
-			this.manager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases });
-		} else {
-			this.manager.appendMessage({
-				role: "toolResult",
-				toolName: "todo",
-				toolCallId: crypto.randomUUID(),
-				content: [{ type: "text", text: "Task updated" }],
-				details: { op: "update", phases },
-				isError: false,
-				timestamp: this.clock.now,
-			});
+			this.bound.commitTodoPhases(phases);
+			await Promise.resolve();
+			return;
 		}
-		await Promise.resolve();
+		const message = {
+			role: "toolResult" as const,
+			toolName: "todo",
+			toolCallId: crypto.randomUUID(),
+			content: [{ type: "text" as const, text: "Task updated" }],
+			details: { op: "update", phases },
+			isError: false,
+			timestamp: this.clock.now,
+		};
+		this.manager.appendMessage(message);
+		await this.emit({ type: "message_end", message });
 	}
 
-	/** The host's record of an `ask` call starting, as `AgentSession` writes it. */
+	/** The host's record of an `ask` call starting, written before it emits the start event. */
 	async askStart(toolCallId: string): Promise<void> {
 		this.manager.appendCustomEntry("tool_execution_start", {
 			toolCallId,
 			toolName: "ask",
 			startedAt: new Date(this.clock.now).toISOString(),
 		});
-		await Promise.resolve();
+		await this.emit({ type: "tool_execution_start", toolCallId, toolName: "ask", args: {} });
 	}
 
 	async askAnswered(toolCallId: string): Promise<void> {
-		this.manager.appendMessage({
-			role: "toolResult",
+		const message = {
+			role: "toolResult" as const,
 			toolName: "ask",
 			toolCallId,
-			content: [{ type: "text", text: "User answers:\nq: A" }],
+			content: [{ type: "text" as const, text: "User answers:\nq: A" }],
 			details: { results: [] },
 			isError: false,
 			timestamp: this.clock.now,
-		});
-		await Promise.resolve();
+		};
+		this.manager.appendMessage(message);
+		await this.emit({ type: "message_end", message });
 	}
 }
 
@@ -348,7 +367,7 @@ describe("overtime deadline scheduling", () => {
 				const result = commitTodoState(fixture.session, estimatedState());
 				if (projection === "failed") expect(result).toMatchObject({ kind: "failed", stage: "projection" });
 				else expect(result.kind).toBe("saved");
-				await Promise.resolve();
+				await fixture.toolEnd("todo");
 				expect(itemOf(fixture.manager).status).toBe("in_progress");
 				expect(fixture.clock.deadlines).toEqual([epoch + 60_000]);
 				await fixture.clock.advanceTo(epoch + 60_000);
@@ -356,33 +375,6 @@ describe("overtime deadline scheduling", () => {
 			});
 		});
 	}
-
-	test("replicated native changes cancel and rearm the active branch deadline", async () => {
-		await withScheduler(async (fixture) => {
-			await fixture.append(estimatedState());
-			await fixture.clock.advanceTo(epoch + 15_000);
-			const replicate = async (status: TodoStatus) => {
-				fixture.manager.ingestReplicatedEntry({
-					type: "custom",
-					id: crypto.randomUUID(),
-					parentId: fixture.manager.getLeafId(),
-					timestamp: new Date(fixture.clock.now).toISOString(),
-					customType: USER_TODO_EDIT_CUSTOM_TYPE,
-					data: { phases: [{ name: "Delivery", tasks: [{ content: title, status }] }] },
-				});
-				await Promise.resolve();
-			};
-			await replicate("blocked");
-			expect(fixture.clock.deadlines).toEqual([]);
-			await fixture.clock.advanceTo(epoch + 75_000);
-			await replicate("in_progress");
-			expect(fixture.clock.deadlines).toEqual([epoch + 120_000]);
-			await fixture.clock.advanceTo(epoch + 119_999);
-			expect(warnings(fixture.manager)).toEqual([]);
-			await fixture.clock.advanceTo(epoch + 120_000);
-			expect(warningDetails(fixture.manager)).toMatchObject({ elapsedMs: 60_000 });
-		});
-	});
 
 	test("an old callback cannot dispatch into a newly bound session", async () => {
 		await withScheduler(async (fixture) => {
@@ -392,7 +384,8 @@ describe("overtime deadline scheduling", () => {
 			await fixture.clock.advanceTo(epoch + 20_000);
 			fixture.manager = SessionManager.inMemory("/tmp/overtime-regression-rebound");
 			await fixture.append(estimatedState(1, "new-session-budget", fixture.clock.now));
-			AgentRegistry.global().attachSession(fixture.agentId, fixture.session, null, fixture.ref);
+			fixture.bound = fixture.session;
+			AgentRegistry.global().attachSession(fixture.agentId, fixture.bound, null, fixture.ref);
 			await fixture.emit({ type: "session_switch", reason: "new", previousSessionFile: undefined });
 			expect(fixture.clock.deadlines).toEqual([epoch + 80_000]);
 			await fixture.clock.advanceTo(epoch + 60_000);

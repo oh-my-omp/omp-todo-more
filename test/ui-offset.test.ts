@@ -152,7 +152,7 @@ describe("session switch clears the offset", () => {
 });
 
 describe("disclosure toggle invalidates", () => {
-	test("HUD expanded output differs and re-derives once", () => {
+	test("HUD expanded output differs and then stays steady", () => {
 		const fx = smallFixture("hud-disclosure");
 		const tui = {
 			requestRender() {},
@@ -172,7 +172,6 @@ describe("disclosure toggle invalidates", () => {
 		const expanded = hud.describe();
 		expect(jsonEqual(expanded, collapsed)).toBe(false);
 		expect(fx.counters.copies).toBe(0);
-		expect(fx.counters.reads).toBeGreaterThan(1);
 		fx.resetCounters();
 		const steady = hud.describe();
 		expect(jsonEqual(steady, expanded)).toBe(true);

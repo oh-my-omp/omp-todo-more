@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { branchFacts } from "./branch.ts";
 import { errorText } from "./errors.ts";
-import { actionableItems, readTodoMore, type TodoGoal, type TodoMoreState, type TodoStatus } from "./state.ts";
+import { sessionOf } from "./session.ts";
+import { actionableItems, type TodoGoal, type TodoMoreState, type TodoStatus } from "./state.ts";
 
 /** Public wire projection; never exposes the plugin's domain representation. */
 type TodoMoreReadResponse =
@@ -39,10 +40,10 @@ export function registerReviewApi(pi: ExtensionAPI): void {
 		if (!isReadRequest(request)) return;
 		let response: TodoMoreReadResponse;
 		try {
-			const session = AgentRegistry.global().get(request.agentId)?.session;
-			if (session == null) response = { kind: "unavailable" };
+			const session = sessionOf(request.agentId);
+			if (session === undefined) response = { kind: "unavailable" };
 			else {
-				const state = readTodoMore(session.sessionManager.getBranch());
+				const state = branchFacts(session.sessionManager).state;
 				response = {
 					kind: "ok",
 					goal: state.kind === "list" && state.goal.kind === "set" ? state.goal.goal : null,

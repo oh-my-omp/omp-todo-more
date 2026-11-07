@@ -2,10 +2,10 @@
 
 English | [简体中文](README.zh-CN.md)
 
-A rich Todo plugin for OMP. It replaces the native `todo` while keeping
-title-based addressing, phase progress, reminders, planning checks and
-editing subagent behavior; the list carries a goal, an explanation and a
-model-estimated time budget per item.
+A rich Todo plugin for OMP. It runs on top of the native todo and takes over
+its `todo` tool while keeping title-based addressing, phase progress,
+reminders, planning checks and editing subagent behavior; the list carries a
+goal, an explanation and a model-estimated time budget per item.
 
 ## Install and enable
 
@@ -14,13 +14,23 @@ omp install https://github.com/oh-my-omp/omp-todo-more
 ```
 
 The plugin entry is the package-root `index.ts`, declared by `omp.extensions`
-in `package.json`. Turn off the native Todo in the OMP config before using the
-plugin:
+in `package.json`. Keep the native Todo on (`todo.enabled`, the default): the
+native tracker keeps the HUD, `/todo`, branch rehydration and goal mode fed,
+and the plugin's `todo` tool shadows the built-in one.
 
-```yaml
-todo:
-  enabled: false
-```
+The native stop reminder, mid-run nudge and eager prelude would repeat the
+plugin's own, so the plugin switches them off for its process with runtime
+overrides of `todo.reminders` and `todo.eager`; they are never written to the
+config. The plugin's own reminders are configured in `/settings` → Plugins or
+with `omp plugin config omp-todo-more`:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `reminders` | `true` | Stop reminders and mid-run nudges while items stay open. |
+| `remindersMax` | `3` | Stop reminders per stop chain before giving up. |
+| `eager` | `default` | `preferred` asks for a list on the first prompt; `always` also forces the `todo` call. |
+
+They are read when a session starts and at every prompt start.
 
 Do not load the old local `extensions/todo-more/` at the same time. Existing
 omp-config machines retire the old modules through the gated retirement in
@@ -148,6 +158,11 @@ plugin's own marked tool results are not read again as state records. The
 existing reader ignores malformed records; this migration does not change that
 compatibility behavior.
 
+Every reader folds the branch forward once per session manager and keeps the
+result: a later read folds only the entries appended since, and a leaf that
+moved off the folded path (branch, tree navigation, session switch) folds the
+new branch from its root. No other copy of the list is kept.
+
 A synchronous append confirms that the current branch accepted the record, not
 that it was durably written to disk. File writes, flushes and disk-failure
 handling belong to the OMP SessionManager lifecycle; resuming after an exit is
@@ -179,14 +194,16 @@ tool result (`timestamp`), or to the host's `session_exit` record when the
 process ended while the ask was open. All of it is read from the branch.
 
 The plugin maintains one one-shot timeout for the nearest active budget's
-deadline. Todo-related journal appends, the start and result of an `ask` call,
-and session/branch changes re-arm it; while an `ask` is open no deadline runs.
-There is no periodic polling and no end-hook deadline check. Native `/todo`,
-delayed native tool results and accepted rich commits are observed at their
-journal write methods, even when the host projection fails. Ordinary messages
-do not trigger branch reads, and the collaboration append callback is untouched.
-At the deadline the callback re-reads the current branch before requesting
-injection. Large delays are split only at the platform timeout limit.
+deadline. Its own `todo` results, the host's writes outside the tool (`/todo`,
+RPC `set_todos` and subagent auto-complete, all through
+`session.commitTodoPhases`), native `todo` results, the start and result of an
+`ask` call, turn and run ends, prompt starts and session/branch changes re-arm
+it; while an `ask` is open no deadline runs. There is no periodic polling, and
+the session manager's write methods and collaboration callback are untouched:
+an entry replicated from a collaboration host is picked up at the next of those
+events. At the deadline the callback re-reads the current branch before
+requesting injection. Large delays are split only at the platform timeout
+limit.
 
 Each overdue active budget receives one system warning in the normal delivery
 path. A changed estimate gets its own warning if its preserved elapsed time
@@ -200,8 +217,8 @@ host makes it available to the model at the next safe step boundary without
 cancelling the tool batch. Detection and enqueueing do not wait for the step
 to end. When idle, the warning is appended to the transcript and context without
 starting a model turn, so it does not undo a human stop. Shutdown cancels the
-timeout and restores the observed journal methods; reopening an overdue
-active item checks it again.
+timeout and restores `session.commitTodoPhases`; reopening an overdue active
+item checks it again.
 
 The warning identifies the item, estimate and elapsed time, and tells the agent
 to preserve the expected outcome, acceptance criteria and quality; verify the
@@ -276,8 +293,10 @@ order in which plugins run their hooks; default-tool `task:*` agents and
 custom editing agents use the same rule. Subagents without enabled `edit` do
 not receive a restored tool. Tool-restricted sessions get it through the host
 tool slot. Stop reminders, mid-run nudges, the eager prelude, goal-mode
-context and request-only user reminders are kept. A human interruption is not
-resumed automatically.
+context and request-only user reminders are kept. In goal mode the host's own
+todo snapshot is replaced in the request by the plugin's, which carries the
+goal, explanations and estimates. A human interruption is not resumed
+automatically.
 
 A todo belongs to the work phase only: a request that changes files, config,
 git or external state. Discussion, investigation, explanation and answering
@@ -470,8 +489,8 @@ This module graph has a single initialization promise that prepared child
 factories reuse, while every session still registers its own tool, hooks and
 read listener. When Tern is not on PATH, ANSI OMP may use the plugin, which
 does not mean the GUI is accepted. When Tern is present, a CLI, parse, install,
-linked-conflict or re-check failure rejects factory initialization; a machine
-with native todo turned off then gets no tool from this plugin, so a warning
+linked-conflict or re-check failure rejects factory initialization; the
+machine then runs the native todo without this plugin's tool, so a warning
 must not be taken as success. An on-disk install check also does not replace
 verifying the CSS and edit paths in a real window.
 

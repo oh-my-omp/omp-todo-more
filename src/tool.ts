@@ -1,11 +1,11 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
+import { branchFacts } from "./branch.ts";
 import { commitTodoState, type TodoSession } from "./commit.ts";
 import { commitCompletion, sharedWorktreeRoot, worktreeState } from "./git.ts";
 import { participatingModels } from "./models.ts";
 import { customFormat, parametersSchema, parseTodo, type TodoCommand, type TodoCommitClause, type TodoTarget } from "./protocol.ts";
 import {
-	askWaits,
 	type CommitRecord,
 	commitRecordText,
 	commitScopeText,
@@ -16,7 +16,6 @@ import {
 	goalLines,
 	hostPhases,
 	type ItemTime,
-	readTodoMore,
 	stateOf,
 	TODO_MORE_RESULT_MARK,
 	type TodoGoal,
@@ -625,7 +624,7 @@ async function completeWithCommit(
 		cwd,
 		clause.scope,
 		clause.message,
-		participatingModels(session.sessionManager.getBranch(), session.model),
+		participatingModels(branchFacts(session.sessionManager), session.model),
 	);
 	switch (outcome.kind) {
 		case "committed":
@@ -660,7 +659,7 @@ export async function runTodo(
 	raw: unknown,
 	parentCwd: ParentCwd = TOP_LEVEL,
 ): Promise<AgentToolResult<TodoMoreDetails>> {
-	const previous = readTodoMore(session.sessionManager.getBranch());
+	const previous = branchFacts(session.sessionManager).state;
 	const input = parametersSchema.safeParse(raw);
 	if (!input.success) return result(session, previous, `Invalid todo arguments: ${input.error.message}`, { isError: true });
 	const parsed = parseTodo(input.data.input);
@@ -678,7 +677,7 @@ export async function runTodo(
 	// All internal transitions belong to this one atomic mutation, not separate visible work intervals.
 	const now = Date.now();
 	// Time spent waiting on the user in `ask` is not work time.
-	const waits = askWaits(session.sessionManager.getBranch());
+	const waits = branchFacts(session.sessionManager).waits;
 	for (const params of batch.params) {
 		const errors = ruleErrors(params, next);
 		if (params.op === "goal" && next.kind === "empty") errors.push("GOAL requires a non-empty list; use INIT to create one");
@@ -718,7 +717,7 @@ export async function runTodo(
 	}
 	const committed = commitTodoState(session, next);
 	if (committed.kind === "failed") {
-		const current = readTodoMore(session.sessionManager.getBranch());
+		const current = branchFacts(session.sessionManager).state;
 		return result(session, current, formatSummary(current, [committed.message], true), { op, operations: ops, isError: true });
 	}
 	const summary = formatSummary(next, [], false);

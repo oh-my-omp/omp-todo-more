@@ -15,7 +15,32 @@
 	"omp": {
 		"extensions": [
 			"./index.ts"
-		]
+		],
+		"settings": {
+			"reminders": {
+				"type": "boolean",
+				"default": true,
+				"description": "Remind the agent when it stops with incomplete todo items, and nudge it mid-run when the list goes untouched"
+			},
+			"remindersMax": {
+				"type": "number",
+				"default": 3,
+				"min": 0,
+				"max": 100,
+				"step": 1,
+				"description": "Stop reminders per stop chain before giving up"
+			},
+			"eager": {
+				"type": "enum",
+				"values": [
+					"default",
+					"preferred",
+					"always"
+				],
+				"default": "default",
+				"description": "Ask for a todo list on the first prompt: preferred reminds, always forces the todo tool call"
+			}
+		}
 	},
 	"scripts": {
 		"check": "biome check . && tsc --noEmit",

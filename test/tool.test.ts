@@ -3,16 +3,9 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { readTodoMore } from "../src/branch.ts";
 import type { TodoSession } from "../src/commit.ts";
-import {
-	elapsedTime,
-	type ItemTime,
-	readTodoMore,
-	TODO_MORE_ENTRY_TYPE,
-	type TodoGoal,
-	type TodoMoreSnapshot,
-	toSnapshot,
-} from "../src/state.ts";
+import { elapsedTime, type ItemTime, TODO_MORE_ENTRY_TYPE, type TodoGoal, type TodoMoreSnapshot, toSnapshot } from "../src/state.ts";
 import { runTodo, type TodoMoreDetails } from "../src/tool.ts";
 
 const epoch = Date.parse("2026-10-15T12:00:00.000Z");
