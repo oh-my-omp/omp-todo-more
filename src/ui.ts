@@ -512,11 +512,12 @@ type HudDisclosure = { kind: "closed" } | { kind: "open"; session: AgentSession;
 /**
  * The only cross-call memory in this HUD (contract §7): the session and list
  * state of the last frame plus the node derived from them. The same state
- * reuses the node; a new one re-derives. Disclosure open/close is an
- * invalidation event, not part of the reuse key — it clears `last` like a
- * branch change would.
+ * reuses the node; a new one re-derives. An empty list caches the hidden
+ * placeholder like any other derived node, so a cache hit and a fresh
+ * derivation always agree. Disclosure open/close is an invalidation event,
+ * not part of the reuse key — it clears `last` like a branch change would.
  */
-type HudRead = { sessionId: string; state: TodoMoreState; node: NativeNode | null };
+type HudRead = { sessionId: string; state: TodoMoreState; node: NativeNode };
 
 /** Native-only presentation; the branch remains its only Todo state. */
 export class TodoHud implements Component {
@@ -545,10 +546,11 @@ export class TodoHud implements Component {
 				const sessionId = session.sessionManager.getSessionId();
 				if (previous !== undefined && previous.sessionId === sessionId && previous.state === state) return previous.node;
 				const hud = describeTodoHud(toSnapshot(state), expanded);
-				this.last = { sessionId, state, node: hud };
-				if (hud === null) this.closeDisclosure();
 				// Keep our own slot identifiable when empty, without showing a pill.
-				return hud ?? node("row", { role: "omp.hud.activity", aria: tr("Todo More progress", "Todo More 进度"), hidden: true });
+				const derived = hud ?? node("row", { role: "omp.hud.activity", aria: tr("Todo More progress", "Todo More 进度"), hidden: true });
+				this.last = { sessionId, state, node: derived };
+				if (hud === null) this.closeDisclosure();
+				return derived;
 			}
 			if (this.disclosure.kind === "open") this.closeDisclosure();
 			// Keep our own slot identifiable when empty, without showing a pill.

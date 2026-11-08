@@ -12,6 +12,10 @@
  * Each invalidation test also carries a mutation check: the offset update it
  * guards is temporarily broken, and the test must fail. This keeps the tests
  * from passing when the skip logic is removed or bypassed.
+ *
+ * The empty branch (oh-my-omp/omp-todo-more#43) is the same invariant at the
+ * edge: its cached node must be the hidden placeholder the miss path returns,
+ * so a hit never diverges from a fresh derivation.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -122,6 +126,46 @@ describe("growth re-derives", () => {
 		// re-derivation is broken because stale and fresh would coincide.
 		expect(jsonEqual(stale, fresh)).toBe(false);
 		expect(jsonEqual(hud.describe(), fresh)).toBe(true);
+	});
+});
+
+describe("empty branch keeps its placeholder", () => {
+	test("every describe() returns the hidden placeholder and agrees with a fresh HUD", () => {
+		const fx = fixture(`${DIR}/hud-empty-${process.pid}`);
+		const hud = makeHud(fx);
+		const first = hud.describe();
+		const second = hud.describe();
+		expect(JSON.stringify(first)).toContain('"hidden":true');
+		expect(JSON.stringify(second)).toContain('"hidden":true');
+		// Cached, not re-created: the empty list keeps the reuse benefit.
+		expect(second).toBe(first);
+		// A hit is indistinguishable from a fresh derivation.
+		expect(jsonEqual(second, makeHud(fx).describe())).toBe(true);
+	});
+
+	test("a plain message after the empty frame still yields the placeholder", () => {
+		const fx = fixture(`${DIR}/hud-empty-plain-${process.pid}`);
+		const hud = makeHud(fx);
+		hud.describe();
+		hud.describe();
+		messageEntry(fx.raw, 2);
+		const after = hud.describe();
+		expect(JSON.stringify(after)).toContain('"hidden":true');
+		expect(jsonEqual(after, makeHud(fx).describe())).toBe(true);
+	});
+
+	test("the first snapshot turns the cached placeholder into a visible pill", () => {
+		const fx = fixture(`${DIR}/hud-empty-grow-${process.pid}`);
+		const hud = makeHud(fx);
+		hud.describe();
+		hud.describe();
+		appendTodoChange(fx.raw, "First task");
+		const first = hud.describe();
+		const second = hud.describe();
+		expect(JSON.stringify(first)).not.toContain('"hidden":true');
+		expect(JSON.stringify(first)).toContain("First task");
+		expect(second).toBe(first);
+		expect(jsonEqual(second, makeHud(fx).describe())).toBe(true);
 	});
 });
 
