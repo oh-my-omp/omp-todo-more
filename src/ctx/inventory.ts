@@ -44,9 +44,18 @@ const HEADER_READ_CHUNK_BYTES = 64 * 1024;
 const HEADER_READ_CONCURRENCY = 16;
 
 const contextParams = z.object({
-	op: z.enum(["list", "show"]),
-	id: z.string().optional(),
-	all: z.boolean().optional(),
+	op: z
+		.enum(["list", "show"])
+		.describe(
+			"list: directory of this session and its task subagents as a shallow tree (status, handoff, todo progress); show: detail for one context (handoff, recorded goal, task timeline)",
+		),
+	id: z
+		.string()
+		.optional()
+		.describe(
+			"context id as printed by `ctx list`, also accepted by `agent://<id>` and `history://<id>`; show: required, the context to show; list: expands the subtree rooted at this context",
+		),
+	all: z.boolean().optional().describe("list only: also include internal contexts (mentor/discuss/trace), which are hidden by default"),
 });
 
 type ContextParams = z.infer<typeof contextParams>;
