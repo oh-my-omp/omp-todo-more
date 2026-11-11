@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
+
+### Changed
+
+- The plugin joins the omomp daily release channel: merges to `main` no longer change the version, and `.github/workflows/omomp-release.yml` promotes `## [Unreleased]` to a version section on the `release` branch with a tag and GitHub Release every day at 02:00 GMT+9. `package.json` declares `omomp.changelog`, ships `CHANGELOG.md` in `files`, and the install command uses `#release`.
+
+## [0.1.35] - 2026-11-12
+
 - An empty Todo branch keeps the HUD's hidden placeholder on every frame, not only the first: `TodoHud` now caches the node it returns, placeholder included, so a hit on an unchanged empty branch no longer returns `null` where a fresh derivation returns the hidden slot (the slot the host keeps identifiable while it shows no pill). Non-empty nodes keep their identity reuse and `describeTodoHud` still returns `null` for an empty snapshot.
 - An editing subagent keeps `todo` when another plugin re-applies the active tool set after the plugin restored it (omp-remote-build's per-turn sync in `before_agent_start`, for one). The host filters `todo` out of every extension-driven `setActiveTools` in a subagent, so whenever such a hook ran after this plugin's, the subagent lost the tool for the whole prompt while the `edit` guard still demanded a Todo document. The restore now runs before each model call of the subagent session (a before-model-call hook registered once per session at its first `before_agent_start`), so the tool is present whatever order plugins run their hooks in. It writes the whole set in the shared canonical order (builtins in registry order, then the rest sorted) instead of appending `todo`, so a forked or rebuilt session lists the same tools in the same order.
 - todo-more now runs on top of the native todo instead of replacing it: keep `todo.enabled` on (the default). The plugin's `todo` tool shadows the built-in one; the native stop reminder, mid-run nudge and eager prelude are switched off for the process with runtime overrides of `todo.reminders` and `todo.eager` (never persisted), and the plugin's own are configured by its plugin settings `reminders` (default `true`), `remindersMax` (default `3`) and `eager` (default `default`) instead of the host `todo.*` keys. In goal mode the host's own `<todo_context>` block is removed from the request and the plugin's richer one appended, so the model sees one snapshot.

@@ -7,8 +7,10 @@ OMP 的富信息 Todo 插件。运行在原生 todo 之上并接管其 `todo` �
 ## 安装与启用
 
 ```sh
-omp install https://github.com/oh-my-omp/omp-todo-more
+omp install https://github.com/oh-my-omp/omp-todo-more#release
 ```
+
+`#release` 是发布通道，每天 GMT+9 02:00 从这里切出发布版本。`main` 是开发集成分支，只在试用未发布改动时从 `main` 安装。
 
 插件入口是包根 `index.ts`，由 `package.json` 的 `omp.extensions` 声明。保持原生 Todo 开启（`todo.enabled`，默认即开启）：原生 tracker 继续供给 HUD、`/todo`、分支恢复与 goal mode，插件的 `todo` 工具遮蔽同名内置工具。
 
@@ -25,6 +27,10 @@ omp install https://github.com/oh-my-omp/omp-todo-more
 不要同时加载旧的本地 `extensions/todo-more/`。已在用 omp-config 的机器，旧模块在独立插件安装并通过运行验证后，由 omp-config 更新器执行受门禁保护的退休。
 
 本地开发使用 `omp plugin link <package-directory>`。运行验证应使用 `/tmp` 下无开发 `node_modules` 的源码副本；类型检查不能证明 OMP 二进制能加载 host imports。
+
+## 发布
+
+合并到 `main` 不是发布，也不改版本号。每个 PR 在 `CHANGELOG.md` 的 `## [Unreleased]` 下写条目；提交用 lgit（`git add`，然后 `uvx --from lgit-cli lgit`），由它为每处用户可见改动写一个顶层列表项。每天 GMT+9 02:00 的发布运行把 `## [Unreleased]` 变成版本段，同步 `package.json` 与 `tern/plugin.toml`，在 `main` 上提交 `chore: release X.Y.Z`，并把 `release` 分支、tag 与 GitHub Release 一起移到该提交。从 `#release` 安装的客户机下次更新时升到新版本。
 
 ## 界面语言
 
