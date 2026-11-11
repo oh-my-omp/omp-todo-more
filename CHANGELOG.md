@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.36] - 2026-11-12
+
 ### Changed
 
 - The plugin joins the omomp daily release channel: merges to `main` no longer change the version, and `.github/workflows/omomp-release.yml` promotes `## [Unreleased]` to a version section on the `release` branch with a tag and GitHub Release every day at 02:00 GMT+9. `package.json` declares `omomp.changelog`, ships `CHANGELOG.md` in `files`, and the install command uses `#release`.
