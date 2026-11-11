@@ -10,8 +10,12 @@
 	"files": [
 		"index.ts",
 		"src",
-		"tern"
+		"tern",
+		"CHANGELOG.md"
 	],
+	"omomp": {
+		"changelog": "CHANGELOG.md"
+	},
 	"omp": {
 		"extensions": [
 			"./index.ts"

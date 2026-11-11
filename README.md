@@ -10,8 +10,12 @@ goal, an explanation and a model-estimated time budget per item.
 ## Install and enable
 
 ```sh
-omp install https://github.com/oh-my-omp/omp-todo-more
+omp install https://github.com/oh-my-omp/omp-todo-more#release
 ```
+
+`#release` is the published channel; releases are cut from it every day at
+02:00 GMT+9. `main` is the development integration, so install from `main`
+only to try unreleased work.
 
 The plugin entry is the package-root `index.ts`, declared by `omp.extensions`
 in `package.json`. Keep the native Todo on (`todo.enabled`, the default): the
@@ -41,6 +45,17 @@ For local development use `omp plugin link <package-directory>`. Runtime
 verification should use a source copy under `/tmp` with no development
 `node_modules`; type-checking cannot prove that the OMP binary can load the
 host imports.
+
+## Release
+
+A merge to `main` is not a release and does not change the version. Every PR
+writes its entries under `## [Unreleased]` in `CHANGELOG.md`; commits are made
+with lgit (`git add`, then `uvx --from lgit-cli lgit`), which writes one
+top-level item per user-visible change. Once a day at 02:00 GMT+9 the release
+run moves `## [Unreleased]` to a version section, bumps `package.json` and
+`tern/plugin.toml`, commits `chore: release X.Y.Z` on `main`, and moves the
+`release` branch, the tag and the GitHub Release to that commit. Clients
+installed from `#release` pick the new version up on their next update.
 
 ## UI language
 
