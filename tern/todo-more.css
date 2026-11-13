@@ -1,4 +1,4 @@
-/* OMP's nativeDock has thirteen stable source slots (interactive-mode.ts).
+/* OMP's nativeDock has fourteen stable source slots (interactive-mode.ts).
  * Preserve every slot and its native sizing; overlay only Todo More's row in
  * the existing activity track. The original Todo remains an invisible layout
  * reference, not an emptied domain projection. Revalidate on dock changes.
@@ -8,7 +8,7 @@
 .sf-dock[data-surface="omp.session"] {
 	display: grid;
 	grid-template-columns: 100%;
-	grid-template-rows: repeat(13, auto);
+	grid-template-rows: repeat(14, auto);
 	row-gap: 0;
 	position: relative;
 }
@@ -46,24 +46,25 @@
 	> :nth-child(9):nth-child(n + 2 of :not(.sf-void):not(.sf-hidden)),
 .sf-dock[data-surface="omp.session"]:not(.sf-chat-spine)
 	> :nth-child(9):nth-child(n + 2 of :not(.sf-void):not(.sf-hidden))
-	+ * + * + * + :nth-child(13) > :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]) {
+	+ * + * + * + * + :nth-child(14) > :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]) {
 	margin-top: 4px;
 }
 .sf-dock[data-surface="omp.session"] > :nth-child(10) { grid-row: 10; }
 .sf-dock[data-surface="omp.session"] > :nth-child(11) { grid-row: 11; }
 .sf-dock[data-surface="omp.session"] > :nth-child(12) { grid-row: 12; }
-.sf-dock[data-surface="omp.session"] > :nth-child(13) {
-	grid-row: 13;
+.sf-dock[data-surface="omp.session"] > :nth-child(13) { grid-row: 13; }
+.sf-dock[data-surface="omp.session"] > :nth-child(14) {
+	grid-row: 14;
 	display: contents;
 	margin-top: 0;
 }
 /* Project the original below-widget column's centering into grid items. */
-.sf-dock[data-surface="omp.session"] > :nth-child(13) > * {
+.sf-dock[data-surface="omp.session"] > :nth-child(14) > * {
 	grid-column: 1;
 	justify-self: center;
 }
-	.sf-dock[data-surface="omp.session"] > :nth-child(13) > :first-child:not(:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"])),
-	.sf-dock[data-surface="omp.session"] > :nth-child(13) > :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]):first-child + * {
+	.sf-dock[data-surface="omp.session"] > :nth-child(14) > :first-child:not(:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"])),
+	.sf-dock[data-surface="omp.session"] > :nth-child(14) > :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]):first-child + * {
 	margin-top: 4px;
 }
 
@@ -99,23 +100,23 @@
 	.sf-chat-console.sf-dock[data-surface="omp.session"] :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]) {
 	justify-self: stretch;
 }
-	.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(13) > :not(:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"])) {
+	.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(14) > :not(:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"])) {
 	justify-self: stretch;
 	min-width: 0;
 	margin: 4px var(--sp-side) 0;
 }
-	.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(13) > :first-child:not(:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"])),
-	.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(13) > :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]):first-child + * {
+	.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(14) > :first-child:not(:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"])),
+	.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(14) > :is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]):first-child + * {
 	margin-top: var(--todo-more-below-top);
 }
-.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(13)
+.sf-chat-spine.sf-dock[data-surface="omp.session"] > :nth-child(14)
 	> :nth-last-child(1 of :not(:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]))) {
 	margin-bottom: var(--todo-more-below-bottom);
 }
 .sf-chat-spine.sf-dock[data-surface="omp.session"]::after {
 	content: "";
 	position: absolute;
-	grid-row: 13 / auto;
+	grid-row: 14 / auto;
 	grid-column: 1;
 	inset: 0;
 	z-index: -1;
@@ -123,7 +124,7 @@
 	box-shadow: inset 0 1px 0 var(--l2);
 	pointer-events: none;
 }
-.sf-chat-console.sf-dock[data-surface="omp.session"] > :nth-child(13) > :not([aria-label="Todo More progress"]) {
+.sf-chat-console.sf-dock[data-surface="omp.session"] > :nth-child(14) > :not([aria-label="Todo More progress"]) {
 	justify-self: stretch;
 }
 
@@ -197,7 +198,7 @@
 }
 /* Preserve omp-composer.css's conditional clearance across the dock adapter. */
 .sf-dock[data-surface="omp.session"] > .sf-row[data-role="omp.hud"]:not(.sf-hidden):not(.sf-void)
-	+ .sf-row[data-role="omp.hud.activity"] + * + * + * + :nth-child(13)
+	+ .sf-row[data-role="omp.hud.activity"] + * + * + * + * + :nth-child(14)
 	:is([aria-label="Todo More progress"], [aria-label="Todo More 进度"]) {
 	--todo-more-hud-clear: var(--sf-hud-clear, 34px);
 }

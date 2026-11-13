@@ -474,7 +474,7 @@ and creates no domain-state store or editor. The stylesheet only changes the
 `omp.session` surface. It makes the original Todo invisible but retains its
 layout box and real host projection.
 
-The current OMP native dock has thirteen source slots. A CSS grid adapter
+The current OMP native dock has fourteen source slots. A CSS grid adapter
 preserves those slots and places Todo More in the existing activity track;
 other below-editor widgets remain in normal order. The popover is an
 absolutely positioned sibling of the disclosure inside its native-sized
