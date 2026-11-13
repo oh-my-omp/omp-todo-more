@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.37] - 2026-11-14
+
 ### Fixed
 
 - Fixed Todo More dock placement and spacing against the fourteen-slot OMP native dock
