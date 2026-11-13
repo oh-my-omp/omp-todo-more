@@ -5,3 +5,4 @@ bun.lock
 *.db
 *.db-*
 logs/
+.omp/mcp.json
