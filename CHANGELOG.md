@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the shared copies of `context-delta.ts`, `todo-read.ts` to oh-my-omp/shared@80068ad.
+
 ## [0.2.2] - 2026-11-20
 
 ### Changed
