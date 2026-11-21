@@ -31,6 +31,10 @@
 
 - Updated the shared copies of `context-delta.ts`, `todo-read.ts` to oh-my-omp/shared@80068ad.
 
+### Fixed
+
+- In Tern on omp 19.0.1 the Todo More pill sits on omp's activity line again instead of a row of its own above it, and the Tern dock keeps its own flex layout, so a tall dock on a phone no longer pushes the composer under the key bar. The HUD widget now mounts above the editor, and the stylesheet no longer rebuilds the dock as a fourteen-slot grid ([oh-my-omp/omp-config#408](https://github.com/oh-my-omp/omp-config/issues/408))
+
 ## [0.2.2] - 2026-11-20
 
 ### Changed
