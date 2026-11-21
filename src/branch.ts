@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type ExtensionContext, type SessionEntry, type SessionManager, z } from "@oh-my-pi/pi-coding-agent";
+import { SESSION_EXIT_CUSTOM_TYPE, TOOL_EXECUTION_START_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import {
 	type AskWait,
@@ -70,8 +71,6 @@ function emptyAccumulator(): Accumulator {
 	};
 }
 
-const TOOL_EXECUTION_START = "tool_execution_start";
-const SESSION_EXIT = "session_exit";
 const toolStartSchema = z.object({ toolCallId: z.string(), toolName: z.string(), startedAt: z.string() });
 
 function waitsOf(acc: Accumulator): AskWait[] {
@@ -86,7 +85,7 @@ export function isHumanMessage(message: AgentMessage): message is Extract<AgentM
 }
 
 function foldAsk(acc: Accumulator, entry: SessionEntry): void {
-	if (entry.type === "custom" && entry.customType === TOOL_EXECUTION_START) {
+	if (entry.type === "custom" && entry.customType === TOOL_EXECUTION_START_CUSTOM_TYPE) {
 		const parsed = toolStartSchema.safeParse(entry.data);
 		const start = parsed.success && parsed.data.toolName === "ask" ? Date.parse(parsed.data.startedAt) : Number.NaN;
 		if (parsed.success && Number.isFinite(start)) acc.openAsks.set(parsed.data.toolCallId, start);
@@ -95,7 +94,7 @@ function foldAsk(acc: Accumulator, entry: SessionEntry): void {
 		if (start === undefined) return;
 		acc.openAsks.delete(entry.message.toolCallId);
 		acc.closedWaits.push({ start, end: entry.message.timestamp });
-	} else if (entry.type === "custom" && entry.customType === SESSION_EXIT) {
+	} else if (entry.type === "custom" && entry.customType === SESSION_EXIT_CUSTOM_TYPE) {
 		const end = Date.parse(entry.timestamp);
 		for (const start of acc.openAsks.values()) acc.closedWaits.push({ start, end });
 		acc.openAsks.clear();

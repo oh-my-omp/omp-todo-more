@@ -307,5 +307,5 @@ export function commitRecordText(commit: CommitRecord): string {
 }
 
 export function commitScopeText(scope: CommitScope): string {
-	return scope.kind === "all" ? "all changes" : scope.files.join(" ");
+	return scope.kind === "all" ? "this agent's changes" : scope.files.join(" ");
 }

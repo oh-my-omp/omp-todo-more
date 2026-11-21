@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { isTodoReadRequest, TODO_READ_EVENT, type TodoReadCounts, type TodoReadResponse } from "../omomp-shared/todo-read.ts";
-import { branchFacts } from "./branch.ts";
+import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { sessionOf } from "./session.ts";
 import { actionableItems, type TodoMoreState, type TodoStatus } from "./state.ts";
@@ -20,7 +20,7 @@ export function registerReviewApi(pi: ExtensionAPI): void {
 			const session = sessionOf(request.agentId);
 			if (session === undefined) response = { kind: "unavailable" };
 			else {
-				const state = branchFacts(session.sessionManager).state;
+				const state = liveState(session);
 				response = {
 					kind: "ok",
 					goal: state.kind === "list" && state.goal.kind === "set" ? state.goal.goal : null,

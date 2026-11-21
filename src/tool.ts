@@ -1,8 +1,9 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
-import { branchFacts } from "./branch.ts";
+import { type BranchFacts, branchFacts } from "./branch.ts";
 import { commitTodoState, liveState, type TodoSession } from "./commit.ts";
-import { commitCompletion, sharedWorktreeRoot, worktreeState } from "./git.ts";
+import { type AgentRef, commitCompletion, sharedWorktreeRoot, workState } from "./git.ts";
 import { participatingModels } from "./models.ts";
 import { customFormat, parametersSchema, parseTodo, type TodoCommand, type TodoCommitClause, type TodoTarget } from "./protocol.ts";
 import { DEFAULT_SETTINGS } from "./settings.ts";
@@ -40,7 +41,7 @@ Any error rejects the whole document. The call fails unless:
 - ESTIMATE cannot change the estimate of an item that already received an overtime warning; add its remaining work as new items with PHASE and ADD.
 - Status commands target an existing "title" or PHASE "name", matched exactly (DONE, DROP and RM also take ALL); never use IDs or guess a title.
 - VIEW is the only command in its document.
-- In a git checkout with uncommitted work, DONE carries a commit clause — DONE "title" "<message>" or DONE "title" "<paths>" "<message>" — and the tool runs git commit itself.
+- In a git checkout where this agent has uncommitted work, DONE carries a commit clause — DONE "title" "<message>" to commit this agent's changes or DONE "title" "<paths>" "<message>" to commit those paths — and the tool runs git commit itself.
 
 Topics — read the one a call needs before making it:
 - \`xd://todo/protocol\` — before writing a Todo document, choosing selectors, or completing tasks with commits
@@ -533,17 +534,81 @@ function operations(commands: TodoCommand[]): Operations {
 	return { kind: "ok", params };
 }
 
+function batchOf(raw: unknown): Operations {
+	const input = parametersSchema.safeParse(raw);
+	if (!input.success) return { kind: "invalid", message: `Invalid todo arguments: ${input.error.message}` };
+	const parsed = parseTodo(input.data.input);
+	if (parsed.kind === "invalid") return { kind: "invalid", message: parsed.message };
+	return operations(parsed.commands);
+}
+
+type Step = { kind: "rejected"; errors: string[] } | { kind: "applied"; phases: WorkPhase[] };
+
+/** The rule checks and the operation itself for one command of a batch; `phases` is edited in place. */
+function applyStep(phases: WorkPhase[], next: TodoMoreState, params: Params, rules: BudgetRules): Step {
+	const errors = ruleErrors(params, next, rules);
+	if (params.op === "goal" && next.kind === "empty") errors.push("GOAL requires a non-empty list; use INIT to create one");
+	const applied = errors.length === 0 ? applyOp(phases, params, errors) : phases;
+	return errors.length > 0 ? { kind: "rejected", errors } : { kind: "applied", phases: applied };
+}
+
+/** The state a batch has reached once `params` has been applied to `phases`. */
+function settleStep(phases: WorkPhase[], next: TodoMoreState, params: Params, waits: BranchFacts["waits"], now: number): TodoMoreState {
+	if (params.op !== "goal") {
+		normalizeInProgress(phases);
+		for (const phase of phases) {
+			for (const item of phase.items) item.time = transitionTime(item.time, item.status, now, waits);
+		}
+	}
+	const goal: GoalState =
+		params.goal !== undefined ? { kind: "set", goal: params.goal } : next.kind === "list" ? next.goal : { kind: "missing" };
+	return stateOf(goal, phases);
+}
+
+export type TodoPreview = { kind: "state"; state: TodoMoreState } | { kind: "rejected" };
+
+/**
+ * The state `raw` would leave behind `previous`, from the parse and rule checks `runTodo` runs and without executing its effects.
+ * `rejected` means `batchOf` or `applyStep` fails, so `runTodo` fails too. `state` does not promise that `runTodo` succeeds: the preview
+ * does not model `completeWithCommit` (a `DONE` that closes an item is refused while this agent has uncommitted work, or the session
+ * keeps no change record to tell, and the `DONE` carries no commit clause, or when its commit fails): that refusal leaves the list as it was.
+ */
+export function previewTodo(
+	facts: Pick<BranchFacts, "waits" | "overtimeWarned">,
+	previous: TodoMoreState,
+	raw: unknown,
+	leafMaxMinutes: number,
+): TodoPreview {
+	const batch = batchOf(raw);
+	if (batch.kind === "invalid") return { kind: "rejected" };
+	if (batch.params.length === 1 && batch.params[0]!.op === "view") return { kind: "state", state: previous };
+	const rules: BudgetRules = { leafMaxMinutes, overtimeWarned: facts.overtimeWarned };
+	const now = Date.now();
+	let phases = working(previous);
+	let next = previous;
+	for (const params of batch.params) {
+		const applied = applyStep(phases, next, params, rules);
+		if (applied.kind === "rejected") return { kind: "rejected" };
+		phases = applied.phases;
+		next = settleStep(phases, next, params, facts.waits, now);
+	}
+	return { kind: "state", state: next };
+}
+
 export type ParentCwd = () => string | undefined;
 
 const TOP_LEVEL: ParentCwd = () => undefined;
+const MAIN_AGENT: AgentRef = { id: MAIN_AGENT_ID, parentId: undefined };
 
 async function completeWithCommit(
 	session: TodoSession,
 	clause: TodoCommitClause | undefined,
 	closed: readonly WorkItem[],
 	parentCwd: ParentCwd,
+	agent: AgentRef,
 ): Promise<{ kind: "ok"; note?: string } | { kind: "refused"; message: string }> {
 	const cwd = session.sessionManager.getCwd();
+	const artifactsDir = session.sessionManager.getArtifactsDir();
 	const parent = parentCwd();
 	const shared = parent === undefined ? null : sharedWorktreeRoot(cwd, parent);
 	if (shared !== null) {
@@ -554,16 +619,34 @@ async function completeWithCommit(
 	}
 	const named = closed.length === 1 ? `Task ${JSON.stringify(closed[0]!.title)}` : `${closed.length} completed tasks`;
 	if (clause === undefined) {
-		const state = await worktreeState(cwd);
-		if (state.kind === "failed") return { kind: "refused", message: state.message };
-		if (state.kind !== "dirty") return { kind: "ok" };
-		return {
-			kind: "refused",
-			message: `${named} would leave uncommitted work in ${state.root}: re-issue DONE "title" "<message>" to commit every change, or DONE "title" "<paths>" "<message>" to commit a scope.`,
-		};
+		const state = await workState(cwd, artifactsDir, agent);
+		switch (state.kind) {
+			case "failed":
+				return { kind: "refused", message: state.message };
+			case "no-repository":
+			case "clean":
+			case "foreign":
+				return { kind: "ok" };
+			case "own":
+				return {
+					kind: "refused",
+					message: `${named} would leave this agent's uncommitted work in ${state.root}: re-issue DONE "title" "<message>" to commit this agent's changes, or DONE "title" "<paths>" "<message>" to commit a scope.`,
+				};
+			case "unattributed":
+				return {
+					kind: "refused",
+					message: `${named} would leave uncommitted work in ${state.root}, and this session keeps no change record to tell whose it is: re-issue DONE "title" "<paths>" "<message>" to commit named paths.`,
+				};
+			default: {
+				const unreachable: never = state;
+				throw new Error(`Unexpected work state: ${String(unreachable)}`);
+			}
+		}
 	}
 	const outcome = await commitCompletion(
 		cwd,
+		artifactsDir,
+		agent,
 		clause.scope,
 		clause.message,
 		participatingModels(branchFacts(session.sessionManager), session.model),
@@ -576,13 +659,7 @@ async function completeWithCommit(
 				note: `Committed ${commitRecordText(outcome.commit)} (${commitScopeText(outcome.commit.scope)}) in ${outcome.root}.`,
 			};
 		case "inert":
-			return {
-				kind: "ok",
-				note:
-					outcome.because === "no-repository"
-						? "No git repository here: the commit clause committed nothing."
-						: "Nothing to commit: the working tree is clean, so the commit clause committed nothing.",
-			};
+			return { kind: "ok", note: INERT_NOTES[outcome.because] };
 		case "failed":
 			return { kind: "refused", message: outcome.message };
 		default: {
@@ -592,19 +669,22 @@ async function completeWithCommit(
 	}
 }
 
+const INERT_NOTES = {
+	"no-repository": "No git repository here: the commit clause committed nothing.",
+	clean: "Nothing to commit: the working tree is clean, so the commit clause committed nothing.",
+	foreign: "Nothing to commit: none of the uncommitted changes are this agent's, so the commit clause committed nothing.",
+} as const;
+
 export async function runTodo(
 	session: TodoSession,
 	raw: unknown,
 	parentCwd: ParentCwd = TOP_LEVEL,
 	leafMaxMinutes: number = DEFAULT_SETTINGS.leafMaxMinutes,
+	agent: AgentRef = MAIN_AGENT,
 ): Promise<AgentToolResult<TodoMoreDetails>> {
 	const facts = branchFacts(session.sessionManager);
 	const previous = liveState(session);
-	const input = parametersSchema.safeParse(raw);
-	if (!input.success) return result(session, previous, `Invalid todo arguments: ${input.error.message}`, { isError: true });
-	const parsed = parseTodo(input.data.input);
-	if (parsed.kind === "invalid") return result(session, previous, parsed.message, { isError: true });
-	const batch = operations(parsed.commands);
+	const batch = batchOf(raw);
 	if (batch.kind === "invalid") return result(session, previous, batch.message, { isError: true });
 	const ops = batch.params.map((params) => params.op);
 	const op = ops.length === 1 ? ops[0]! : "batch";
@@ -618,8 +698,6 @@ export async function runTodo(
 	const waits = facts.waits;
 	const rules: BudgetRules = { leafMaxMinutes, overtimeWarned: facts.overtimeWarned };
 	for (const params of batch.params) {
-		const errors = ruleErrors(params, next, rules);
-		if (params.op === "goal" && next.kind === "empty") errors.push("GOAL requires a non-empty list; use INIT to create one");
 		const alreadyCompleted =
 			params.op === "done"
 				? new Set(
@@ -629,29 +707,24 @@ export async function runTodo(
 							.map((item) => item.title),
 					)
 				: undefined;
-		if (errors.length === 0) phases = applyOp(phases, params, errors);
-		if (errors.length > 0) return result(session, previous, formatSummary(previous, errors, true), { op, operations: ops, isError: true });
+		const applied = applyStep(phases, next, params, rules);
+		if (applied.kind === "rejected") {
+			return result(session, previous, formatSummary(previous, applied.errors, true), { op, operations: ops, isError: true });
+		}
+		phases = applied.phases;
 		if (alreadyCompleted !== undefined) {
 			const closed = phases
 				.flatMap((phase) => phase.items)
 				.filter((item) => item.status === "completed" && !alreadyCompleted.has(item.title));
 			if (closed.length > 0) {
-				const step = await completeWithCommit(session, params.commit, closed, parentCwd);
+				const step = await completeWithCommit(session, params.commit, closed, parentCwd, agent);
 				if (step.kind === "refused") {
 					return result(session, previous, formatSummary(previous, [step.message], true), { op, operations: ops, isError: true });
 				}
 				if (step.note !== undefined) notes.push(step.note);
 			}
 		}
-		if (params.op !== "goal") {
-			normalizeInProgress(phases);
-			for (const phase of phases) {
-				for (const item of phase.items) item.time = transitionTime(item.time, item.status, now, waits);
-			}
-		}
-		const goal: GoalState =
-			params.goal !== undefined ? { kind: "set", goal: params.goal } : next.kind === "list" ? next.goal : { kind: "missing" };
-		next = stateOf(goal, phases);
+		next = settleStep(phases, next, params, waits, now);
 	}
 	commitTodoState(session, next);
 	const summary = formatSummary(next, [], false);

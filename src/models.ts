@@ -8,7 +8,8 @@ export function participatingModels(facts: BranchFacts, current: ModelRef | unde
 	return [...new Set(models)];
 }
 
-export function withModelTrailers(message: string, models: readonly string[]): string {
-	if (models.length === 0) return message;
-	return `${message.trimEnd()}\n\n${models.map((model) => `Model: ${model}`).join("\n")}`;
+export function commitMessage(message: string, models: readonly string[]): { readonly subject: string; readonly body: string } {
+	const [subject = "", ...rest] = message.trim().split("\n");
+	const trailers = models.map((model) => `Model: ${model}`);
+	return { subject, body: [rest.join("\n").trim(), trailers.join("\n")].filter((part) => part.length > 0).join("\n\n") };
 }
