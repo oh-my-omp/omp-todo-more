@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The empty-list `edit` gate now blocks the call from the host's `tool_call` event instead of replacing the host `edit` tool's `execute`, so the plugin no longer touches the host tool object or re-installs it after tool-registry refreshes. An `edit` that follows a `todo` in the same assistant message runs only when that `todo` document passes `todo`'s own parse and rule checks and leaves a non-empty list; otherwise it is blocked with the init reminder.
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 - Todo items now have four statuses: `pending`, `in_progress`, `completed`, `abandoned`. Items saved as `blocked` by earlier versions load as `pending` without their blocker text, keeping their time; earlier todo results that contain `BLOCK`/`UNBLOCK` changes still load, without those changes.
 
