@@ -641,7 +641,7 @@ export function registerUi(pi: ExtensionAPI): void {
 						hud = widget;
 						return widget;
 					},
-			{ placement: "belowEditor" },
+			{ placement: "aboveEditor" },
 		);
 	};
 	pi.on("session_start", (_event, ctx) => installHud(ctx));
