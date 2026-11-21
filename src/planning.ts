@@ -1,10 +1,10 @@
-import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolCallEventResult } from "@oh-my-pi/pi-coding-agent";
 import { createDeltaStream, type Delta } from "../omomp-shared/context-delta.ts";
-import { branchFacts, contextBranch } from "./branch.ts";
+import { type BranchSource, branchFacts, contextBranch } from "./branch.ts";
 import { errorText } from "./errors.ts";
-import { sessionOf } from "./session.ts";
+import { readSettings } from "./settings.ts";
 import { type TodoMoreState, toSnapshot } from "./state.ts";
+import { previewTodo } from "./tool.ts";
 
 const INIT_REMINDER =
 	'Todo is empty. Work phase (this request changes files, config, git or external state): before the first change, initialize with one complete Todo document: INIT "objective" "measure" "doneWhen", PHASE "name", and ADD "title" "explanation" minutes for every step, between *** Begin Todo and *** End Todo. Estimate each item yourself in positive integer minutes; no fractions or defaults. edit is blocked until the complete document succeeds and the list has items. Non-work phase (discussion, investigation, explanation, answering questions): no todo.';
@@ -31,57 +31,60 @@ export function registerPlanning(pi: ExtensionAPI): void {
 		kind: "text",
 		body: reminderBody(branchFacts(contextBranch(ctx)).state),
 	});
-	const guarded = new WeakSet<AgentTool>();
-	const installEditGuard = (ctx: ExtensionContext): void => {
-		const session = sessionOf(ctx.agent.id);
-		const tool = session?.getToolByName("edit");
-		if (session === undefined || tool === undefined || guarded.has(tool)) return;
-		const execute = tool.execute.bind(tool);
-		tool.execute = async (...args) => {
-			try {
-				if (branchFacts(session.sessionManager).state.kind === "empty") {
-					return { isError: true, content: [{ type: "text", text: INIT_REMINDER }] };
-				}
-			} catch (error) {
-				pi.logger.warn("todo-more edit precondition failed", { error: errorText(error) });
-				return {
-					isError: true,
-					content: [{ type: "text", text: "Cannot read the todo list. Resolve the todo state before retrying edit." }],
-				};
-			}
-			return execute(...args);
-		};
-		guarded.add(tool);
+	// The host emits `tool_call` for every call of an assistant message before it executes any of them, so an `edit`
+	// that follows a `todo` in the same message sees the list as it was before that `todo`. `pending` holds the state
+	// the earlier `todo` calls of the message will leave, until the first of them executes.
+	const pending = new WeakMap<BranchSource, TodoMoreState>();
+	const settled = (ctx: ExtensionContext): void => {
+		pending.delete(contextBranch(ctx));
 	};
-	const installSafely = (ctx: ExtensionContext): void => {
-		try {
-			installEditGuard(ctx);
-		} catch (error) {
-			pi.logger.warn("todo-more could not install edit precondition", { error: errorText(error) });
-		}
+	const previewTodoCall = async (input: Record<string, unknown>, ctx: ExtensionContext): Promise<void> => {
+		const branch = contextBranch(ctx);
+		const facts = branchFacts(branch);
+		const settings = await readSettings(pi, ctx);
+		const preview = previewTodo(facts, pending.get(branch) ?? facts.state, input, settings.leafMaxMinutes);
+		if (preview.kind === "state") pending.set(branch, preview.state);
 	};
-	pi.on("session_start", (_event, ctx) => installSafely(ctx));
+	const guardEdit = (ctx: ExtensionContext): ToolCallEventResult | undefined => {
+		const branch = contextBranch(ctx);
+		return (pending.get(branch) ?? branchFacts(branch).state).kind === "empty" ? { block: true, reason: INIT_REMINDER } : undefined;
+	};
 	pi.on("before_agent_start", (event, ctx) => {
 		if (event.reason === "revive") return;
-		installSafely(ctx);
 		try {
 			return deltas.atPrompt(ctx, current(ctx));
 		} catch (error) {
 			pi.logger.warn("todo-more user-message reminder failed", { error: errorText(error) });
 		}
 	});
-	pi.on("tool_call", (event, ctx) => {
-		// Install
-		// here after registry refreshes, but read todo only inside execute so
-		// init/edit and rm/edit in one batch see their actual execution state.
-		if (event.toolName === "edit") installSafely(ctx);
+	pi.on("tool_call", async (event, ctx) => {
+		try {
+			switch (event.toolName) {
+				case "todo":
+					await previewTodoCall(event.input, ctx);
+					return undefined;
+				case "edit":
+					return guardEdit(ctx);
+				default:
+					return undefined;
+			}
+		} catch (error) {
+			pi.logger.warn("todo-more planning gate failed", { tool: event.toolName, error: errorText(error) });
+			if (event.toolName !== "edit") return undefined;
+			return { block: true, reason: "Cannot read the todo list. Resolve the todo state before retrying edit." };
+		}
 	});
 	pi.on("tool_result", (_event, ctx) => {
+		settled(ctx);
 		try {
 			return deltas.afterTools(ctx, current(ctx));
 		} catch (error) {
 			pi.logger.warn("todo-more todo snapshot reminder failed", { error: errorText(error) });
 		}
 	});
-	pi.on("turn_start", () => deltas.turnStarted());
+	pi.on("turn_start", (_event, ctx) => {
+		settled(ctx);
+		deltas.turnStarted();
+	});
+	pi.on("turn_end", (_event, ctx) => settled(ctx));
 }
