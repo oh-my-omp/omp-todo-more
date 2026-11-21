@@ -261,6 +261,10 @@ describe("overtime deadline scheduling", () => {
 				estimatedMinutes: 1,
 				elapsedMs: 60_000,
 			});
+			const warningText = String(warnings(fixture.manager)[0]?.content ?? "");
+			expect(warningText).toContain("Current time:");
+			expect(warningText).toContain("target completion time of");
+			expect(warningText).not.toContain("estimate 1 min");
 			originalCallback();
 			await fixture.append(readTodoMore(fixture.manager.getBranch()));
 			await fixture.emit({ type: "session_switch", reason: "resume", previousSessionFile: undefined });

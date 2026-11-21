@@ -18,16 +18,17 @@ import { tr } from "../omomp-shared/i18n.ts";
 import { type BranchFacts, type BranchSource, branchFacts, contextBranch, foldBranch } from "./branch.ts";
 import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
+import { currentTimeLine, itemTimeSummary } from "./format.ts";
 import { type CutOffWait, cutOffWait, quotaDeadline, quotaNoticeLine } from "./quota-wait.ts";
 import { sessionOf } from "./session.ts";
 import {
+	type AskWait,
 	actionableItems,
 	explanationText,
 	goalLines,
 	REMINDER_TYPE,
 	type TodoItem,
 	type TodoMoreState,
-	timeEstimateText,
 	unexplainedItems,
 } from "./state.ts";
 
@@ -124,15 +125,28 @@ function byPhase(open: readonly OpenItem[]): { readonly name: string; readonly i
 	return groups;
 }
 
-function reminderText(state: ListState, open: readonly OpenItem[], attempt: number, max: number): string {
+function reminderText(
+	state: ListState,
+	open: readonly OpenItem[],
+	attempt: number,
+	max: number,
+	now: number,
+	waits: readonly AskWait[],
+): string {
 	const todoList = byPhase(open)
 		.map(
 			(phase) =>
-				`- ${phase.name}\n${phase.items.map((item) => `  - ${item.title}\n    ${explanationText(item).replaceAll("\n", "\n    ")}\n    ${timeEstimateText(item.time)}`).join("\n")}`,
+				`- ${phase.name}\n${phase.items
+					.map((item) => {
+						const time = itemTimeSummary(item, now, waits, "inline");
+						return `  - ${item.title}\n    ${explanationText(item).replaceAll("\n", "\n    ")}${time === undefined ? "" : `\n    ${time}`}`;
+					})
+					.join("\n")}`,
 		)
 		.join("\n");
 	return (
 		`<system-reminder>\n` +
+		`${currentTimeLine(now)}\n` +
 		`You stopped with ${open.length} incomplete todo item(s):\n${todoList}\n\n` +
 		`${[...goalBlock(state), ...unexplainedLines(state)].join("\n")}\n\n` +
 		`Please continue working on these tasks or mark them complete if finished.\n` +
@@ -145,7 +159,7 @@ function reminderDetails(open: readonly OpenItem[], attempt: number, max: number
 	return { items: open.map(({ phase, item }) => ({ phase, title: item.title })), attempt, max };
 }
 
-function eagerTodoText(todo: string, forced: boolean): string {
+function eagerTodoText(todo: string, forced: boolean, now: number): string {
 	const body = forced
 		? `Before substantive work, create a phased todo.
 
@@ -160,17 +174,22 @@ NEVER call \`${todo}\` again unless task state has materially changed.`
 		: `If this request is work (it changes files, config, git or external state), call \`${todo}\` first to lay out a phased plan in one complete Todo document; discussion, investigation, explanation and questions need no todo. Cover the whole request — investigation through implementation and verification — not just the next step.
 Use INIT "objective" "measure" "doneWhen", PHASE "name", and ADD "title" "explanation" minutes between *** Begin Todo and *** End Todo. Use JSON-quoted strings, specific titles, complete explanations and your own positive integer minute estimates; no fractions or defaults.
 If you create the list, continue the request in the same turn and avoid re-calling \`${todo}\` unless task state materially changes.`;
-	return `<system-reminder>\n${body}\n</system-reminder>\n`;
+	return `<system-reminder>\n${currentTimeLine(now)}\n${body}\n</system-reminder>\n`;
 }
 
-function midRunNudgeText(todo: string, incompleteCount: number, state: ListState): string {
+function midRunNudgeText(todo: string, incompleteCount: number, state: ListState, now: number, waits: readonly AskWait[]): string {
 	const goal =
 		state.goal.kind === "set"
 			? `Goal objective: ${state.goal.goal.objective}`
 			: `The list has no goal yet: put GOAL first in the next \`${todo}\` document.`;
+	const active = state.phases.flatMap((phase) => phase.items).find((item) => item.status === "in_progress");
+	const activeTime = active === undefined ? undefined : itemTimeSummary(active, now, waits, "inline");
+	const activeLine =
+		active === undefined ? "" : `\nActive item: ${JSON.stringify(active.title)}${activeTime === undefined ? "" : ` (${activeTime})`}`;
 	return `<system-reminder>
+${currentTimeLine(now)}
 ${incompleteCount} todo item${incompleteCount !== 1 ? "s" : ""} still open. If you finished a task since last \`${todo}\` update, mark it done now so progress stays visible; otherwise keep working.
-${goal}
+${goal}${activeLine}
 </system-reminder>
 `;
 }
@@ -187,7 +206,7 @@ function sanitizeGoalTodoText(text: string): string {
 	);
 }
 
-function goalTodoContext(session: AgentSession, state: TodoMoreState): string | undefined {
+function goalTodoContext(session: AgentSession, state: TodoMoreState, now: number, waits: readonly AskWait[]): string | undefined {
 	const canCallTodoTool = session.getActiveToolNames().includes(TODO_TOOL);
 	if (!canCallTodoTool) return undefined;
 	if (state.kind === "empty") return undefined;
@@ -206,7 +225,9 @@ function goalTodoContext(session: AgentSession, state: TodoMoreState): string | 
 			} else {
 				open++;
 			}
-			return `  - [${item.status}] ${sanitizeGoalTodoText(item.title)}: ${sanitizeGoalTodoText(explanationText(item))}; ${sanitizeGoalTodoText(timeEstimateText(item.time))}`;
+			const time = itemTimeSummary(item, now, waits, "inline");
+			const timeSuffix = time === undefined ? "" : `; ${sanitizeGoalTodoText(time)}`;
+			return `  - [${item.status}] ${sanitizeGoalTodoText(item.title)}: ${sanitizeGoalTodoText(explanationText(item))}${timeSuffix}`;
 		}),
 	]);
 	const goal =
@@ -215,6 +236,7 @@ function goalTodoContext(session: AgentSession, state: TodoMoreState): string | 
 			: [`Goal: none yet — put GOAL first in the next \`${todoToolRef(session)}\` document.`];
 
 	return `<todo_context>
+${currentTimeLine(now)}
 Persisted todos: live progress state for current goal, not old transcript decoration; goal continuations lack visible user nudge → treat as live state.
 Before substantial work: compare next action with todos. If item stale, already finished, or no longer active pointer, call \`${todoToolRef(session)}\` first: mark done or rewrite list. Do not leave stale in_progress while working on later phases.
 
@@ -278,45 +300,53 @@ function entryIndexOf(entries: readonly SessionEntry[], message: AgentMessage): 
 	);
 }
 
-/** An entry's state is fixed by the entry, so each one is folded once per session manager. */
-const statesAtEntries = new WeakMap<BranchSource, Map<string, TodoMoreState>>();
+/** An entry's state and waits are fixed by the entry, so each one is folded once per session manager. */
+const factsAtEntries = new WeakMap<BranchSource, Map<string, Pick<BranchFacts, "state" | "waits">>>();
 
-function stateAtEntry(manager: BranchSource, entries: readonly SessionEntry[], index: number): TodoMoreState {
+function factsAtEntry(manager: BranchSource, entries: readonly SessionEntry[], index: number): Pick<BranchFacts, "state" | "waits"> {
 	const entry = entries[index];
 	if (entry === undefined) throw new Error(`No branch entry at ${index}`);
-	let byId = statesAtEntries.get(manager);
+	let byId = factsAtEntries.get(manager);
 	if (byId === undefined) {
 		byId = new Map();
-		statesAtEntries.set(manager, byId);
+		factsAtEntries.set(manager, byId);
 	}
-	let state = byId.get(entry.id);
-	if (state === undefined) {
-		state = foldBranch(entries.slice(0, index + 1)).state;
-		byId.set(entry.id, state);
+	let entryFacts = byId.get(entry.id);
+	if (entryFacts === undefined) {
+		const folded = foldBranch(entries.slice(0, index + 1));
+		entryFacts = { state: folded.state, waits: folded.waits };
+		byId.set(entry.id, entryFacts);
 	}
-	return state;
+	return entryFacts;
 }
 
 /** What the host put into `message` becomes the plugin's content for the same moment in the branch. */
-function pluginContent(reminder: HostReminder, message: AgentMessage, session: AgentSession, state: TodoMoreState): string | undefined {
+function pluginContent(
+	reminder: HostReminder,
+	message: AgentMessage,
+	session: AgentSession,
+	state: TodoMoreState,
+	waits: readonly AskWait[],
+	now: number,
+): string | undefined {
 	switch (reminder.kind) {
 		case "eager":
-			return eagerTodoText(todoToolRef(session), reminder.forced);
+			return eagerTodoText(todoToolRef(session), reminder.forced, now);
 		case "stop": {
 			if (state.kind === "empty") return undefined;
 			const open = actionableItems(state);
-			return open.length === 0 ? undefined : reminderText(state, open, reminder.attempt, reminder.max);
+			return open.length === 0 ? undefined : reminderText(state, open, reminder.attempt, reminder.max, now, waits);
 		}
 		case "nudge": {
 			if (state.kind === "empty") return undefined;
 			const open = actionableItems(state);
-			return open.length === 0 ? undefined : midRunNudgeText(todoToolRef(session), open.length, state);
+			return open.length === 0 ? undefined : midRunNudgeText(todoToolRef(session), open.length, state, now, waits);
 		}
 		case "goal": {
 			if (message.role !== "custom") return undefined;
 			const text = textOf(message.content);
 			const index = text.indexOf(HOST_GOAL_TODO_CONTEXT, Math.max(0, text.lastIndexOf("</goal_context>")));
-			const block = goalTodoContext(session, state);
+			const block = goalTodoContext(session, state, now, waits);
 			return index < 0 || block === undefined ? undefined : `${text.slice(0, index)}\n${block}`;
 		}
 		default: {
@@ -344,15 +374,27 @@ export function contextMessages(
 	if (session === undefined) return undefined;
 	let entries: readonly SessionEntry[] | undefined;
 	let current: TodoMoreState | undefined;
+	let currentWaits: readonly AskWait[] | undefined;
 	let rewritten: AgentMessage[] | undefined;
 	for (const [index, message] of messages.entries()) {
 		const reminder = hostReminderOf(message);
 		if (reminder === undefined) continue;
 		entries ??= manager.getBranchView();
 		const at = entryIndexOf(entries, message);
-		current ??= liveState(session);
-		const state = at < 0 ? current : stateAtEntry(manager, entries, at);
-		const text = pluginContent(reminder, message, session, state);
+		let state: TodoMoreState;
+		let waits: readonly AskWait[];
+		if (at < 0) {
+			current ??= liveState(session);
+			currentWaits ??= branchFacts(manager).waits;
+			state = current;
+			waits = currentWaits;
+		} else {
+			const entryFacts = factsAtEntry(manager, entries, at);
+			state = entryFacts.state;
+			waits = entryFacts.waits;
+		}
+		const now = "timestamp" in message && typeof message.timestamp === "number" && message.timestamp > 0 ? message.timestamp : Date.now();
+		const text = pluginContent(reminder, message, session, state, waits, now);
 		if (text === undefined) continue;
 		rewritten ??= [...messages];
 		rewritten[index] = withContent(message, text);
@@ -419,7 +461,11 @@ export function continuation(
 	if (open.length === 0) return SILENT;
 	if (session.wakeSources !== undefined) return SILENT;
 	const attempt = branch.remindersSinceUserMessage + 1;
-	return { kind: "remind", text: reminderText(state, open, attempt, max), details: reminderDetails(open, attempt, max) };
+	return {
+		kind: "remind",
+		text: reminderText(state, open, attempt, max, Date.now(), branch.waits),
+		details: reminderDetails(open, attempt, max),
+	};
 }
 
 export function registerReminders(pi: ExtensionAPI): void {

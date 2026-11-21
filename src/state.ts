@@ -60,6 +60,15 @@ export const itemTimeSchema = z.union([
 ]);
 export type ItemTime = z.infer<typeof itemTimeSchema>;
 
+export const itemTimestampsSchema = z.object({
+	startedAt: timestampSchema.optional(),
+	pausedAt: timestampSchema.optional(),
+	completedAt: timestampSchema.optional(),
+	abandonedAt: timestampSchema.optional(),
+	statusChangedAt: timestampSchema.optional(),
+});
+export type ItemTimestamps = z.infer<typeof itemTimestampsSchema>;
+
 export type AskWait = { readonly start: number; readonly end: number | null };
 
 function waitedIn(waits: readonly AskWait[], from: number, to: number): number {
@@ -88,8 +97,49 @@ export function elapsedTime(time: Extract<ItemTime, { kind: "estimated" }>, now:
 	return time.elapsedMs + Math.max(0, now - time.runningSince - waitedIn(waits, time.runningSince, now));
 }
 
-export function timeEstimateText(time: ItemTime): string {
-	return time.kind === "estimated" ? `Estimate: ${time.minutes} min` : "(no time estimate yet: add one with ESTIMATE)";
+export function dueAtTime(time: Extract<ItemTime, { kind: "estimated" }>, now: number, waits: readonly AskWait[] = []): number | undefined {
+	if (time.runningSince === null) return undefined;
+	return now + (time.minutes * 60_000 - elapsedTime(time, now, waits));
+}
+
+export function transitionTimestamps(
+	previousStatus: TodoStatus | undefined,
+	nextStatus: TodoStatus,
+	timestamps: ItemTimestamps | undefined,
+	now: number,
+	fallbackStartedAt?: number,
+): ItemTimestamps | undefined {
+	if (previousStatus === nextStatus) return timestamps;
+	const startedAt = timestamps?.startedAt ?? fallbackStartedAt;
+	switch (nextStatus) {
+		case "in_progress":
+			return { startedAt: startedAt ?? now, statusChangedAt: now };
+		case "pending":
+			if (previousStatus === "in_progress") {
+				return {
+					...(startedAt === undefined ? {} : { startedAt }),
+					pausedAt: now,
+					statusChangedAt: now,
+				};
+			}
+			return { ...(startedAt === undefined ? {} : { startedAt }), statusChangedAt: now };
+		case "completed":
+			return {
+				...(startedAt === undefined ? {} : { startedAt }),
+				completedAt: now,
+				statusChangedAt: now,
+			};
+		case "abandoned":
+			return {
+				...(startedAt === undefined ? {} : { startedAt }),
+				abandonedAt: now,
+				statusChangedAt: now,
+			};
+		default: {
+			const unreachable: never = nextStatus;
+			throw new Error(`Unexpected todo status: ${String(unreachable)}`);
+		}
+	}
 }
 
 export type TodoItem = {
@@ -97,6 +147,7 @@ export type TodoItem = {
 	readonly explanation: Explanation;
 	readonly status: TodoStatus;
 	readonly time: ItemTime;
+	readonly timestamps?: ItemTimestamps;
 	readonly commit?: CommitRecord;
 };
 
@@ -123,6 +174,7 @@ const itemSnapshotSchema = z.object({
 	status: persistedStatusSchema,
 	commit: commitRecordSchema.optional(),
 	time: itemTimeSchema.default(() => ({ kind: "missing" })),
+	timestamps: itemTimestampsSchema.optional(),
 });
 
 export const todoMoreSnapshotSchema = z.object({
@@ -136,6 +188,7 @@ const itemNoteSchema = z.object({
 	title: z.string(),
 	explanation: z.string().nullable(),
 	time: itemTimeSchema,
+	timestamps: itemTimestampsSchema.optional(),
 	commit: commitRecordSchema.optional(),
 });
 
@@ -183,6 +236,7 @@ export function toSnapshot(state: TodoMoreState): TodoMoreSnapshot {
 						explanation: item.explanation.kind === "explained" ? item.explanation.text : null,
 						status: item.status,
 						time: item.time,
+						...(item.timestamps === undefined ? {} : { timestamps: item.timestamps }),
 						...(item.commit === undefined ? {} : { commit: item.commit }),
 					})),
 				})),
@@ -192,6 +246,23 @@ export function toSnapshot(state: TodoMoreState): TodoMoreSnapshot {
 			throw new Error(`Unexpected todo-more state: ${String(unreachable)}`);
 		}
 	}
+}
+
+export function snapshotToState(snapshot: TodoMoreSnapshot): TodoMoreState {
+	const phases: TodoPhase[] = snapshot.phases.map((phase) => ({
+		name: phase.name,
+		items: phase.items.map(
+			(item): TodoItem => ({
+				title: item.title,
+				explanation: item.explanation === null ? { kind: "missing" } : { kind: "explained", text: item.explanation },
+				status: item.status,
+				time: item.time,
+				...(item.timestamps === undefined ? {} : { timestamps: item.timestamps }),
+				...(item.commit === undefined ? {} : { commit: item.commit }),
+			}),
+		),
+	}));
+	return stateOf(snapshot.goal === null ? { kind: "missing" } : { kind: "set", goal: snapshot.goal }, phases);
 }
 
 /** One record the list is read from: the plugin's notes, or the host list a `todo` result carried. */
@@ -226,6 +297,7 @@ export function joinHost(phases: readonly HostTodoPhase[], notes: TodoNotes): To
 				explanation: note?.explanation == null ? { kind: "missing" } : { kind: "explained", text: note.explanation },
 				time: note?.time ?? { kind: "missing" },
 				status: task.status,
+				...(note?.timestamps === undefined ? {} : { timestamps: note.timestamps }),
 				...(note?.commit === undefined ? {} : { commit: note.commit }),
 			};
 		}),
@@ -246,6 +318,7 @@ export function toNotes(state: TodoMoreState): TodoNotes {
 						title: item.title,
 						explanation: item.explanation.kind === "explained" ? item.explanation.text : null,
 						time: item.time,
+						...(item.timestamps === undefined ? {} : { timestamps: item.timestamps }),
 						...(item.commit === undefined ? {} : { commit: item.commit }),
 					})),
 				),

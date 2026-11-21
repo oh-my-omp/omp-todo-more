@@ -163,7 +163,10 @@ if (outcome.kind === "reminded") {
 		"reminder lists the open item with its explanation",
 		first.includes("Write hello.txt") && first.includes("Create the file with the word hello"),
 	);
-	check("reminder carries the plugin's estimate", first.includes("Estimate: 5 min"));
+	check(
+		"reminder carries current time and converted target completion time",
+		first.includes("Current time:") && first.includes("due by ") && !first.includes("Estimate:"),
+	);
 	check("reminder carries the goal", first.includes("Objective: Stop reminder e2e"));
 	check("reminder is numbered by the host's cap", new RegExp(`\\(Reminder 1/${reminder.maxAttempts}\\)`).test(first), first.slice(-80));
 } else {

@@ -16,6 +16,7 @@ export const customFormat = {
     | "DONE" SP done LF
     | ("DROP" | "RM") SP target LF
     | "VIEW" LF
+    | "VIEW" SP target LF
 ?done: target | target SP string | target SP string SP string
 ?target: string | "PHASE" SP string | "ALL"
 string: /"(?:[^"\\\x00-\x1f]|\\(?:["\\\/bfnrt]|u[0-9a-fA-F]{4}))*"/
@@ -35,7 +36,7 @@ export type TodoCommand =
 	| { kind: "estimate"; title: string; estimatedMinutes: number }
 	| { kind: "done"; target: TodoTarget; commit?: TodoCommitClause }
 	| { kind: "drop" | "rm"; target: TodoTarget }
-	| { kind: "view" };
+	| { kind: "view"; target?: TodoTarget };
 export type TodoProgram = { kind: "ok"; commands: TodoCommand[] } | { kind: "invalid"; message: string };
 type TodoLineError =
 	| { kind: "quoted-string" | "estimate" | "token" | "argument-spacing" | "trailing-whitespace" | "uppercase-command" }
@@ -213,9 +214,12 @@ function parseLine(line: string): ParsedLine {
 			}
 			break;
 		}
-		case "VIEW":
+		case "VIEW": {
 			if (args.length === 0) return { kind: "ok", command: { kind: "view" } };
+			const target = targetOf(args);
+			if (target) return { kind: "ok", command: { kind: "view", target } };
 			break;
+		}
 	}
 	return { kind: "invalid", error: { kind: "command", command: head.value } };
 }

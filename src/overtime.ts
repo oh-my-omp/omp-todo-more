@@ -9,8 +9,9 @@ import { createDeltaStream } from "../omomp-shared/context-delta.ts";
 import { branchFacts } from "./branch.ts";
 import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
+import { currentTimeLine, formatClock } from "./format.ts";
 import { sessionOf } from "./session.ts";
-import { elapsedTime, OVERTIME_TYPE } from "./state.ts";
+import { dueAtTime, elapsedTime, OVERTIME_TYPE } from "./state.ts";
 
 type DeadlineBinding = {
 	readonly ctx: ExtensionContext;
@@ -20,8 +21,9 @@ type DeadlineBinding = {
 
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
-function overtimeBody(title: string, phase: string, minutes: number, elapsedMs: number): string {
-	return `SERIOUS: todo item "${escapeXmlText(title)}" has exceeded its estimated time: estimate ${minutes} min; elapsed ${(elapsedMs / 60_000).toFixed(2)} min of in_progress wall time. An overrun means the plan or the approach is wrong; treat it as a serious problem, not a note to acknowledge and move past.
+function overtimeBody(title: string, phase: string, dueAt: number, now: number): string {
+	return `${currentTimeLine(now)}
+SERIOUS: todo item "${escapeXmlText(title)}" is past its target completion time of ${formatClock(dueAt, now)} (overdue as of ${formatClock(now, now)}). An overrun means the plan or the approach is wrong; treat it as a serious problem, not a note to acknowledge and move past.
 Before any other step on this task, investigate why it overran:
 1. Check the evidence: what this item's work actually took, what is still missing, and what blocked, slowed or expanded it.
 2. Decide whether the approach must change. If the cause is unclear, discuss it with a subagent; if you are a subagent, raise it with your parent.
@@ -70,11 +72,12 @@ export function registerOvertime(pi: ExtensionAPI): void {
 							if (nextDeadline === undefined || deadline < nextDeadline) nextDeadline = deadline;
 							continue;
 						}
+						const dueAt = dueAtTime(time, now, facts.waits) ?? now;
 						const details = { budgetId: time.budgetId, title: item.title, estimatedMinutes: time.minutes, elapsedMs };
 						try {
 							const notice = deltas.atPrompt(binding.ctx, {
 								kind: "text",
-								body: overtimeBody(item.title, phase.name, time.minutes, elapsedMs),
+								body: overtimeBody(item.title, phase.name, dueAt, now),
 							});
 							if (notice === undefined) continue;
 							pending.add(time.budgetId);

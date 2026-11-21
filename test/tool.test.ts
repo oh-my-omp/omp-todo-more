@@ -5,6 +5,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { branchFacts, readTodoMore } from "../src/branch.ts";
 import type { TodoSession } from "../src/commit.ts";
+import { formatClock, formatDateTime } from "../src/format.ts";
 import { DEFAULT_SETTINGS } from "../src/settings.ts";
 import {
 	elapsedTime,
@@ -65,6 +66,7 @@ function notesOf(snapshot: TodoMoreSnapshot): TodoNotes {
 				title: item.title,
 				explanation: item.explanation,
 				time: item.time,
+				...(item.timestamps === undefined ? {} : { timestamps: item.timestamps }),
 				...(item.commit === undefined ? {} : { commit: item.commit }),
 			})),
 		),
@@ -233,8 +235,20 @@ describe("atomic Todo document execution", () => {
 					{
 						name: "Tasks",
 						items: [
-							{ title: "Implement", explanation: "Consume the text document", status: "in_progress", time: implement },
-							{ title: "Review", explanation: "Check all fields", status: "pending", time: review },
+							{
+								title: "Implement",
+								explanation: "Consume the text document",
+								status: "in_progress",
+								time: implement,
+								timestamps: { startedAt: epoch, statusChangedAt: epoch },
+							},
+							{
+								title: "Review",
+								explanation: "Check all fields",
+								status: "pending",
+								time: review,
+								timestamps: { statusChangedAt: epoch },
+							},
 						],
 					},
 				],
@@ -278,7 +292,15 @@ describe("atomic Todo document execution", () => {
 				phases: [
 					{
 						name: "Tasks",
-						items: [{ title, explanation: "Accepted explanation", status: "completed", time: createdTime(harness, title, 10, null) }],
+						items: [
+							{
+								title,
+								explanation: "Accepted explanation",
+								status: "completed",
+								time: createdTime(harness, title, 10, null),
+								timestamps: { completedAt: epoch, statusChangedAt: epoch },
+							},
+						],
 					},
 				],
 			},
@@ -324,14 +346,27 @@ describe("atomic Todo document execution", () => {
 								explanation: "Build the behavior",
 								status: "in_progress",
 								time: createdTime(harness, "Implement", 10, epoch),
+								timestamps: { startedAt: epoch, statusChangedAt: epoch },
 							},
-							{ title: "Review", explanation: "Inspect changes", status: "pending", time: createdTime(harness, "Review", 20, null) },
+							{
+								title: "Review",
+								explanation: "Inspect changes",
+								status: "pending",
+								time: createdTime(harness, "Review", 20, null),
+								timestamps: { statusChangedAt: epoch },
+							},
 						],
 					},
 					{
 						name: "Verification",
 						items: [
-							{ title: "Runtime", explanation: "Exercise the host", status: "pending", time: createdTime(harness, "Runtime", 30, null) },
+							{
+								title: "Runtime",
+								explanation: "Exercise the host",
+								status: "pending",
+								time: createdTime(harness, "Runtime", 30, null),
+								timestamps: { statusChangedAt: epoch },
+							},
 						],
 					},
 				],
@@ -361,13 +396,26 @@ describe("atomic Todo document execution", () => {
 					{
 						name: "Delivery",
 						items: [
-							{ title: "Implement", explanation: "Consume complete commands", status: "completed", time: { kind: "missing" } },
-							{ title: "Review", explanation: "Inspect the final accepted fields", status: "in_progress", time: { kind: "missing" } },
+							{
+								title: "Implement",
+								explanation: "Consume complete commands",
+								status: "completed",
+								time: { kind: "missing" },
+								timestamps: { completedAt: epoch, statusChangedAt: epoch },
+							},
+							{
+								title: "Review",
+								explanation: "Inspect the final accepted fields",
+								status: "in_progress",
+								time: { kind: "missing" },
+								timestamps: { startedAt: epoch, statusChangedAt: epoch },
+							},
 							{
 								title: "Polish",
 								explanation: "Finish the existing phase",
 								status: "pending",
 								time: createdTime(harness, "Polish", 7, null),
+								timestamps: { statusChangedAt: epoch },
 							},
 						],
 					},
@@ -380,6 +428,7 @@ describe("atomic Todo document execution", () => {
 								explanation: "Deliver the accepted result",
 								status: "pending",
 								time: createdTime(harness, "Publish", 12, null),
+								timestamps: { statusChangedAt: epoch },
 							},
 						],
 					},
@@ -430,8 +479,8 @@ describe("atomic Todo document execution", () => {
 	test("completion promotes the earliest pending task", async () => {
 		const harness = fixture(populated());
 		const expected = populated();
-		itemOf(expected, "Implement").status = "completed";
-		itemOf(expected, "Review").status = "in_progress";
+		Object.assign(itemOf(expected, "Implement"), { status: "completed", timestamps: { completedAt: epoch, statusChangedAt: epoch } });
+		Object.assign(itemOf(expected, "Review"), { status: "in_progress", timestamps: { startedAt: epoch, statusChangedAt: epoch } });
 		expectSaved(harness, await harness.call('DONE "Implement"'), expected, 0);
 	});
 
@@ -485,28 +534,39 @@ describe("atomic Todo document execution", () => {
 		};
 		const harness = fixture(initial);
 		const selected = structuredClone(initial);
-		itemOf(selected, "ALL").status = "completed";
-		itemOf(selected, "Other").status = "in_progress";
+		Object.assign(itemOf(selected, "ALL"), { status: "completed", timestamps: { completedAt: epoch, statusChangedAt: epoch } });
+		Object.assign(itemOf(selected, "Other"), { status: "in_progress", timestamps: { startedAt: epoch, statusChangedAt: epoch } });
 		expectSaved(harness, await harness.call('DONE "ALL"'), selected, 0);
-		expectSaved(
-			harness,
-			await harness.call("DONE ALL"),
-			{
-				goal,
-				phases: selected.phases.map((phase) => ({ ...phase, items: phase.items.map((item) => ({ ...item, status: "completed" })) })),
-			},
-			1,
-		);
+		const allCompleted = structuredClone(selected);
+		Object.assign(itemOf(allCompleted, "Other"), {
+			status: "completed",
+			timestamps: { startedAt: epoch, completedAt: epoch, statusChangedAt: epoch },
+		});
+		Object.assign(itemOf(allCompleted, "Last"), {
+			status: "completed",
+			timestamps: { completedAt: epoch, statusChangedAt: epoch },
+		});
+		expectSaved(harness, await harness.call("DONE ALL"), allCompleted, 1);
 	});
 
 	test("DROP PHASE and RM PHASE affect only the selected phase", async () => {
 		const initial = populated();
 		const harness = fixture(initial);
 		const verification = structuredClone(initial.phases[1]!);
-		verification.items[0]!.status = "in_progress";
+		Object.assign(verification.items[0]!, { status: "in_progress", timestamps: { startedAt: epoch, statusChangedAt: epoch } });
 		const dropped: TodoMoreSnapshot = {
 			goal,
-			phases: [{ ...initial.phases[0]!, items: initial.phases[0]!.items.map((item) => ({ ...item, status: "abandoned" })) }, verification],
+			phases: [
+				{
+					...initial.phases[0]!,
+					items: initial.phases[0]!.items.map((item) => ({
+						...item,
+						status: "abandoned",
+						timestamps: { abandonedAt: epoch, statusChangedAt: epoch },
+					})),
+				},
+				verification,
+			],
 		};
 		expectSaved(harness, await harness.call('DROP PHASE "Delivery"'), dropped, 0);
 		expectSaved(harness, await harness.call('RM PHASE "Delivery"'), { goal, phases: [{ name: "Delivery", items: [] }, verification] }, 1);
@@ -542,6 +602,7 @@ describe("atomic Todo document execution", () => {
 									explanation: "New list with its own goal",
 									status: "in_progress",
 									time: createdTime(harness, "Replacement", 10, epoch),
+									timestamps: { startedAt: epoch, statusChangedAt: epoch },
 								},
 							],
 						},
@@ -682,9 +743,27 @@ describe("atomic batch timing through the authority branch", () => {
 					{
 						name: "Tasks",
 						items: [
-							{ title: "First", explanation: "Complete within the batch", status: "completed", time: first },
-							{ title: "Second", explanation: "Pause within the batch", status: "abandoned", time: second },
-							{ title: "Third", explanation: "Accepted active explanation", status: "in_progress", time: third },
+							{
+								title: "First",
+								explanation: "Complete within the batch",
+								status: "completed",
+								time: first,
+								timestamps: { completedAt: anchor, statusChangedAt: anchor },
+							},
+							{
+								title: "Second",
+								explanation: "Pause within the batch",
+								status: "abandoned",
+								time: second,
+								timestamps: { abandonedAt: anchor, statusChangedAt: anchor },
+							},
+							{
+								title: "Third",
+								explanation: "Accepted active explanation",
+								status: "in_progress",
+								time: third,
+								timestamps: { startedAt: anchor, statusChangedAt: anchor },
+							},
 						],
 					},
 				],
@@ -707,11 +786,16 @@ describe("atomic batch timing through the authority branch", () => {
 			1_000,
 		);
 		const expected = timed();
-		Object.assign(itemOf(expected, "Implement"), { status: "pending", time: time("implement-budget", 10, 7_250) });
+		Object.assign(itemOf(expected, "Implement"), {
+			status: "pending",
+			time: time("implement-budget", 10, 7_250),
+			timestamps: { startedAt: epoch, pausedAt: anchor, statusChangedAt: anchor },
+		});
 		Object.assign(itemOf(expected, "Review"), {
 			status: "in_progress",
 			explanation: "Continue with review",
 			time: time("review-budget", 20, 500, anchor),
+			timestamps: { startedAt: anchor, statusChangedAt: anchor },
 		});
 		expectSaved(harness, result, expected, 0);
 	});
@@ -725,12 +809,19 @@ describe("atomic batch timing through the authority branch", () => {
 				{
 					name: "Delivery",
 					items: [
-						{ title: "Implement", explanation: "Consume complete commands", status: "pending", time: time("implement-budget", 10, 7_250) },
+						{
+							title: "Implement",
+							explanation: "Consume complete commands",
+							status: "pending",
+							time: time("implement-budget", 10, 7_250),
+							timestamps: { startedAt: epoch, pausedAt: epoch + 6_000, statusChangedAt: epoch + 6_000 },
+						},
 						{
 							title: "Review",
 							explanation: "Review original behavior",
 							status: "in_progress",
 							time: time("review-budget", 20, 500, epoch + 6_000),
+							timestamps: { startedAt: epoch + 6_000, statusChangedAt: epoch + 6_000 },
 						},
 					],
 				},
@@ -756,8 +847,16 @@ describe("atomic batch timing through the authority branch", () => {
 		expect(harness.projections.at(-1)).toStrictEqual(projected(changed));
 
 		const resumed = structuredClone(changed);
-		Object.assign(itemOf(resumed, "Implement"), { status: "in_progress", time: time(changedBudget.budgetId, 12, 7_250, epoch + 30_000) });
-		Object.assign(itemOf(resumed, "Review"), { status: "pending", time: time("review-budget", 20, 24_500) });
+		Object.assign(itemOf(resumed, "Implement"), {
+			status: "in_progress",
+			time: time(changedBudget.budgetId, 12, 7_250, epoch + 30_000),
+			timestamps: { startedAt: epoch, statusChangedAt: epoch + 30_000 },
+		});
+		Object.assign(itemOf(resumed, "Review"), {
+			status: "pending",
+			time: time("review-budget", 20, 24_500),
+			timestamps: { startedAt: epoch + 6_000, pausedAt: epoch + 30_000, statusChangedAt: epoch + 30_000 },
+		});
 		expectSaved(harness, await harness.callAt(epoch + 30_000, 'START "Implement"'), resumed, 3);
 		expect(elapsedTime(estimateOf(harness.snapshot(), "Implement"), epoch + 35_000)).toBe(12_250);
 
@@ -770,8 +869,16 @@ describe("atomic batch timing through the authority branch", () => {
 		expectSaved(harness, activeEstimate, active, 4);
 
 		const final = structuredClone(active);
-		Object.assign(itemOf(final, "Implement"), { status: "completed", time: time(activeBudget.budgetId, 15, 12_250) });
-		Object.assign(itemOf(final, "Review"), { status: "in_progress", time: time("review-budget", 20, 24_500, epoch + 35_000) });
+		Object.assign(itemOf(final, "Implement"), {
+			status: "completed",
+			time: time(activeBudget.budgetId, 15, 12_250),
+			timestamps: { startedAt: epoch, completedAt: epoch + 35_000, statusChangedAt: epoch + 35_000 },
+		});
+		Object.assign(itemOf(final, "Review"), {
+			status: "in_progress",
+			time: time("review-budget", 20, 24_500, epoch + 35_000),
+			timestamps: { startedAt: epoch + 6_000, statusChangedAt: epoch + 35_000 },
+		});
 		expectSaved(harness, await harness.callAt(epoch + 35_000, 'DONE "Implement"'), final, 5);
 	});
 
@@ -928,4 +1035,149 @@ describe("atomic batch timing through the authority branch", () => {
 			expect(harness.projections).toHaveLength(0);
 		});
 	}
+});
+
+describe("compact mutation output, scoped VIEW queries and clock-time conversion", () => {
+	test("mutation returns current time, active due-by clock, omits pending explanations and closed items, and never prints Estimate: N min", async () => {
+		const harness = fixture();
+		const t0 = epoch;
+		const initResult = await harness.callAt(
+			t0,
+			init,
+			'PHASE "Build"',
+			'ADD "Alpha" "Detailed alpha acceptance criteria" 30',
+			'ADD "Beta" "Detailed beta acceptance criteria" 20',
+			'PHASE "Verify"',
+			'ADD "Gamma" "Detailed gamma acceptance criteria" 15',
+		);
+		const initText = resultText(initResult);
+		expect(initText).toContain(`Current time: ${formatDateTime(t0)}`);
+		expect(initText).toContain(`started ${formatClock(t0, t0)}, due by ${formatClock(t0 + 30 * 60_000, t0)}`);
+		expect(initText).toContain("Detailed alpha acceptance criteria");
+		expect(initText).toContain('"Beta"');
+		expect(initText).not.toContain("Detailed beta acceptance criteria");
+		expect(initText).not.toContain("Detailed gamma acceptance criteria");
+		expect(initText).not.toContain("Estimate:");
+		// Unstarted pending items must not receive a converted due-by deadline.
+		expect(initText.match(/due by /g)).toHaveLength(1);
+
+		const t1 = t0 + 10 * 60_000;
+		const doneResult = await harness.callAt(t1, 'DONE "Alpha"');
+		const doneText = resultText(doneResult);
+		expect(doneText).toContain(`Current time: ${formatDateTime(t1)}`);
+		expect(doneText).not.toContain('"Alpha"');
+		expect(doneText).toContain(`started ${formatClock(t1, t1)}, due by ${formatClock(t1 + 20 * 60_000, t1)}`);
+		expect(doneText).toContain("Detailed beta acceptance criteria");
+		expect(doneText).toContain("Omitted: closed items and pending explanations.");
+		expect(doneText).not.toContain("Estimate:");
+	});
+
+	test("skipped, paused, dropped and out-of-order completed todos record exact timestamps and convert deadlines only while active", async () => {
+		const harness = fixture();
+		const t0 = epoch;
+		await harness.callAt(
+			t0,
+			init,
+			'PHASE "Work"',
+			'ADD "First" "First task" 30',
+			'ADD "Second" "Second task" 20',
+			'ADD "Third" "Third task" 15',
+			'ADD "Fourth" "Fourth task" 10',
+		);
+
+		// At t0 + 10m, skip Second and jump straight to Third: First pauses (10m used, 20m left), Second stays unstarted, Third starts.
+		const t1 = t0 + 10 * 60_000;
+		const jumped = await harness.callAt(t1, 'START "Third"');
+		expect(itemOf(harness.snapshot(), "First").timestamps).toEqual({ startedAt: t0, pausedAt: t1, statusChangedAt: t1 });
+		expect(itemOf(harness.snapshot(), "Second").timestamps).toEqual({ statusChangedAt: t0 });
+		expect(itemOf(harness.snapshot(), "Third").timestamps).toEqual({ startedAt: t1, statusChangedAt: t1 });
+		const jumpText = resultText(jumped);
+		expect(jumpText).toContain(`"First" (paused ${formatClock(t1, t1)})`);
+		expect(jumpText).toContain(`"Third" (started ${formatClock(t1, t1)}, due by ${formatClock(t1 + 15 * 60_000, t1)})`);
+		expect(jumpText.match(/due by /g)).toHaveLength(1);
+
+		// Complete Fourth out-of-order while unstarted, and drop Second while unstarted.
+		const t2 = t1 + 5 * 60_000;
+		await harness.callAt(t2, 'DONE "Fourth"', 'DROP "Second"');
+		expect(itemOf(harness.snapshot(), "Fourth").timestamps).toEqual({ completedAt: t2, statusChangedAt: t2 });
+		expect(itemOf(harness.snapshot(), "Second").timestamps).toEqual({ abandonedAt: t2, statusChangedAt: t2 });
+
+		// Finish Third at t3: auto-advances back to paused First, converting its REMAINING 20m from t3 into t3 + 20m.
+		const t3 = t2 + 5 * 60_000;
+		const resumed = await harness.callAt(t3, 'DONE "Third"');
+		expect(itemOf(harness.snapshot(), "Third").timestamps).toEqual({ startedAt: t1, completedAt: t3, statusChangedAt: t3 });
+		expect(itemOf(harness.snapshot(), "First").timestamps).toEqual({ startedAt: t0, statusChangedAt: t3 });
+		const resumeText = resultText(resumed);
+		expect(resumeText).toContain(`started ${formatClock(t0, t3)}, due by ${formatClock(t3 + 20 * 60_000, t3)}`);
+	});
+
+	test("atomic DONE + START skips an intermediate pending task without falsely starting or pausing it", async () => {
+		const harness = fixture();
+		const t0 = epoch;
+		await harness.callAt(t0, init, 'ADD "A" "Task A" 10', 'ADD "B" "Task B" 20', 'ADD "C" "Task C" 15');
+		const t1 = t0 + 4 * 60_000;
+		await harness.callAt(t1, 'DONE "A"', 'START "C"');
+		expect(itemOf(harness.snapshot(), "A").timestamps).toEqual({ startedAt: t0, completedAt: t1, statusChangedAt: t1 });
+		expect(itemOf(harness.snapshot(), "B").timestamps).toEqual({ statusChangedAt: t0 });
+		expect(itemOf(harness.snapshot(), "C").timestamps).toEqual({ startedAt: t1, statusChangedAt: t1 });
+	});
+
+	test("VIEW, VIEW ALL, VIEW PHASE and VIEW title return the exact requested scope with Current time and no Estimate: N min", async () => {
+		const harness = fixture();
+		const t0 = epoch;
+		await harness.callAt(
+			t0,
+			init,
+			'PHASE "Setup"',
+			'ADD "Init repo" "Create git repo" 10',
+			'PHASE "Build"',
+			'ADD "Write code" "Implement core module" 30',
+			'ADD "Write tests" "Cover edge cases" 20',
+		);
+		const t1 = t0 + 5 * 60_000;
+		await harness.callAt(t1, 'DONE "Init repo"');
+
+		const t2 = t1 + 5 * 60_000;
+		const viewOpen = resultText(await harness.callAt(t2, "VIEW"));
+		expect(viewOpen).toContain(`Current time: ${formatDateTime(t2)}`);
+		expect(viewOpen).toContain('Closed phases: "Setup" (1/1)');
+		expect(viewOpen).toContain("Implement core module");
+		expect(viewOpen).toContain("Cover edge cases");
+		expect(viewOpen).toContain("not started (deadline set on START)");
+		expect(viewOpen).not.toContain("Create git repo");
+		expect(viewOpen).not.toContain("Estimate:");
+
+		const viewAll = resultText(await harness.callAt(t2, "VIEW ALL"));
+		expect(viewAll).toContain(`Current time: ${formatDateTime(t2)}`);
+		expect(viewAll).toContain('"Init repo"');
+		expect(viewAll).toContain("Create git repo");
+		expect(viewAll).toContain(`started ${formatClock(t0, t2)}, completed ${formatClock(t1, t2)}`);
+		expect(viewAll).toContain("Implement core module");
+		expect(viewAll).toContain("Cover edge cases");
+		expect(viewAll).not.toContain("Estimate:");
+
+		const viewPhase = resultText(await harness.callAt(t2, 'VIEW PHASE "Setup"'));
+		expect(viewPhase).toContain(`Current time: ${formatDateTime(t2)}`);
+		expect(viewPhase).toContain('Phase "Setup" (1/1 done, 0 open):');
+		expect(viewPhase).toContain("Create git repo");
+		expect(viewPhase).not.toContain("Write code");
+
+		const viewItem = resultText(await harness.callAt(t2, 'VIEW "Write code"'));
+		expect(viewItem).toContain(`Current time: ${formatDateTime(t2)}`);
+		expect(viewItem).toContain("Phase: Build");
+		expect(viewItem).toContain("Title: Write code");
+		expect(viewItem).toContain("Status: in_progress");
+		expect(viewItem).toContain(`due by ${formatClock(t1 + 30 * 60_000, t2)}`);
+		expect(viewItem).toContain("Explanation: Implement core module");
+
+		const missingPhase = await harness.callAt(t2, 'VIEW PHASE "Nope"');
+		expect(missingPhase.isError).toBe(true);
+		expect(resultText(missingPhase)).toContain('Phase "Nope" not found');
+		expect(resultText(missingPhase)).toContain(`Current time: ${formatDateTime(t2)}`);
+
+		const missingTask = await harness.callAt(t2, 'VIEW "Nope"');
+		expect(missingTask.isError).toBe(true);
+		expect(resultText(missingTask)).toContain('Task "Nope" not found');
+		expect(resultText(missingTask)).toContain(`Current time: ${formatDateTime(t2)}`);
+	});
 });

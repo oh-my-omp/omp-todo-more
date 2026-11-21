@@ -3,6 +3,7 @@ import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
 import { type BranchFacts, branchFacts } from "./branch.ts";
 import { commitTodoState, liveState, type TodoSession } from "./commit.ts";
+import { currentTimeLine, formatCompactView, formatFullView, formatItemView, formatOpenView, formatPhaseView } from "./format.ts";
 import { type AgentRef, commitCompletion, sharedWorktreeRoot, workState } from "./git.ts";
 import { participatingModels } from "./models.ts";
 import { customFormat, parametersSchema, parseTodo, type TodoCommand, type TodoCommitClause, type TodoTarget } from "./protocol.ts";
@@ -13,22 +14,20 @@ import {
 	commitScopeText,
 	type Explanation,
 	estimatedMinutesSchema,
-	explanationText,
 	type GoalState,
-	goalLines,
 	hostPhases,
 	type ItemTime,
+	type ItemTimestamps,
 	stateOf,
 	TODO_MORE_RESULT_MARK,
 	type TodoGoal,
 	type TodoMoreSnapshot,
 	type TodoMoreState,
 	type TodoStatus,
-	timeEstimateText,
 	todoGoalSchema,
 	toSnapshot,
 	transitionTime,
-	unexplainedItems,
+	transitionTimestamps,
 } from "./state.ts";
 
 export const DESCRIPTION = `Batch Todo initialization and edits in one document; do not call once per task.
@@ -40,7 +39,7 @@ Any error rejects the whole document. The call fails unless:
 - No ADD or ESTIMATE gives one item more than the per-item limit (the leafMaxMinutes setting, 60 minutes by default); split longer work into several items.
 - ESTIMATE cannot change the estimate of an item that already received an overtime warning; add its remaining work as new items with PHASE and ADD.
 - Status commands target an existing "title" or PHASE "name", matched exactly (DONE, DROP and RM also take ALL); never use IDs or guess a title.
-- VIEW is the only command in its document.
+- VIEW is the only command in its document: VIEW (all open items), VIEW ALL (full list incl. closed and commits), VIEW PHASE "name", or VIEW "title".
 - In a git checkout where this agent has uncommitted work, DONE carries a commit clause — DONE "title" "<message>" to commit this agent's changes or DONE "title" "<paths>" "<message>" to commit those paths — and the tool runs git commit itself.
 
 Topics — read the one a call needs before making it:
@@ -63,12 +62,14 @@ type Params = {
 	readonly explanation?: string;
 	readonly estimatedMinutes?: number;
 	readonly commit?: TodoCommitClause;
+	readonly viewTarget?: TodoTarget;
 };
 
 type WorkItem = {
 	title: string;
 	explanation: Explanation;
 	time: ItemTime;
+	timestamps?: ItemTimestamps;
 	status: TodoStatus;
 	commit?: CommitRecord;
 };
@@ -365,63 +366,76 @@ function ruleErrors(params: Params, previous: TodoMoreState, rules: BudgetRules)
 	return errors;
 }
 
-const isOpen = (status: TodoStatus): boolean => status === "pending" || status === "in_progress";
+type PriorItem = { readonly status: TodoStatus; readonly runningSince: number | null };
 
-function formatSummary(state: TodoMoreState, errors: readonly string[], readOnly: boolean): string {
-	const lines: string[] = [];
-	if (errors.length > 0) lines.push(`Errors: ${errors.join("; ")}`);
-	if (state.kind === "empty") {
-		if (errors.length === 0) lines.push(readOnly ? "Todo list is empty." : "Todo list cleared.");
-		return lines.join("\n");
-	}
-	const { phases } = state;
-	if (state.goal.kind === "set") lines.push("Goal:", ...goalLines(state.goal.goal).map((line) => `  ${line}`));
-	else lines.push("Goal: none yet — put GOAL first in the next Todo document.");
-	const remaining = phases.flatMap((phase) =>
-		phase.items.filter((item) => isOpen(item.status)).map((item) => ({ item, phase: phase.name })),
-	);
-	if (remaining.length === 0) {
-		lines.push("Remaining items: none.");
-	} else {
-		lines.push(`Remaining items (${remaining.length}):`);
-		for (const { item, phase } of remaining) lines.push(`  - ${item.title} [${item.status}] (${phase})`);
-	}
-	const items = phases.flatMap((phase) => phase.items);
-	const closed = (status: TodoStatus): boolean => status === "completed" || status === "abandoned";
-	let currentIndex = phases.findIndex((phase) => phase.items.some((item) => isOpen(item.status)));
-	if (currentIndex === -1) currentIndex = phases.length - 1;
-	const current = phases[currentIndex];
-	const closedAll = items.filter((item) => closed(item.status)).length;
-	const workedAhead = phases.some((phase, index) => index > currentIndex && phase.items.some((item) => closed(item.status)));
-	lines.push(`Overall: ${closedAll}/${items.length} done, ${remaining.length} open.`);
-	if (current !== undefined) {
-		const done = current.items.filter((item) => closed(item.status)).length;
-		lines.push(
-			`Active phase ${currentIndex + 1}/${phases.length} "${current.name}" (${done}/${current.items.length})${
-				workedAhead
-					? " — earliest phase with open tasks; the in-progress pointer auto-advances to the earliest open task on each completion, so it can sit behind out-of-order work (nothing was un-completed)."
-					: "."
-			}`,
-		);
-	}
+function priorItems(phases: readonly WorkPhase[]): Map<string, PriorItem> {
+	const map = new Map<string, PriorItem>();
 	for (const phase of phases) {
-		lines.push(`  ${phase.name}:`);
 		for (const item of phase.items) {
-			const checkbox = item.status === "completed" ? "[X]" : "[ ]";
-			const tag = item.status === "in_progress" ? " (in progress)" : item.status === "abandoned" ? " (dropped)" : "";
-			lines.push(`    - ${checkbox} ${item.title}${tag}`);
-			if (item.commit !== undefined) lines.push(`        Commit: ${commitRecordText(item.commit)} (${commitScopeText(item.commit.scope)})`);
-			if (isOpen(item.status)) lines.push(`        ${explanationText(item)}`);
-			lines.push(`        ${timeEstimateText(item.time)}`);
+			map.set(`${phase.name}\u0000${item.title}`, {
+				status: item.status,
+				runningSince: item.time.kind === "estimated" ? item.time.runningSince : null,
+			});
 		}
 	}
-	const unexplained = unexplainedItems(state);
-	if (unexplained.length > 0) {
-		lines.push(
-			`Items without an explanation (${unexplained.length}); batch EXPLAIN commands: ${unexplained.map((item) => JSON.stringify(item.title)).join(", ")}`,
-		);
+	return map;
+}
+
+function pruneRemovedPrior(prior: Map<string, PriorItem>, phases: readonly WorkPhase[]): void {
+	const alive = new Set<string>();
+	for (const phase of phases) {
+		for (const item of phase.items) alive.add(`${phase.name}\u0000${item.title}`);
 	}
-	return lines.join("\n");
+	for (const key of prior.keys()) {
+		if (!alive.has(key)) prior.delete(key);
+	}
+}
+
+function stampTransitions(phases: WorkPhase[], prior: ReadonlyMap<string, PriorItem>, now: number): void {
+	for (const phase of phases) {
+		for (const item of phase.items) {
+			const prev = prior.get(`${phase.name}\u0000${item.title}`);
+			const fallbackStartedAt = prev?.status === "in_progress" ? (prev.runningSince ?? undefined) : undefined;
+			const nextTimestamps = transitionTimestamps(prev?.status, item.status, item.timestamps, now, fallbackStartedAt);
+			if (nextTimestamps !== undefined) item.timestamps = nextTimestamps;
+		}
+	}
+}
+
+function formatView(
+	state: TodoMoreState,
+	target: TodoTarget | undefined,
+	now: number,
+	waits: BranchFacts["waits"],
+): { readonly kind: "ok"; readonly text: string } | { readonly kind: "error"; readonly text: string } {
+	if (target === undefined) return { kind: "ok", text: formatOpenView(state, now, waits) };
+	switch (target.kind) {
+		case "all":
+			return { kind: "ok", text: formatFullView(state, now, waits) };
+		case "phase": {
+			const phase = state.kind === "list" ? state.phases.find((candidate) => candidate.name === target.name) : undefined;
+			if (phase === undefined) {
+				return {
+					kind: "error",
+					text: formatCompactView(state, now, waits, { errors: [`Phase "${target.name}" not found`], readOnly: true }),
+				};
+			}
+			return { kind: "ok", text: formatPhaseView(phase, now, waits) };
+		}
+		case "task": {
+			const phases = working(state);
+			const errors: string[] = [];
+			const hit = resolveTask(phases, target.title, errors);
+			if (hit === undefined) {
+				return { kind: "error", text: formatCompactView(state, now, waits, { errors, readOnly: true }) };
+			}
+			return { kind: "ok", text: formatItemView(hit.phase.name, hit.item, now, waits) };
+		}
+		default: {
+			const unreachable: never = target;
+			throw new Error(`Unexpected view target: ${String(unreachable)}`);
+		}
+	}
 }
 
 const storageOf = (session: TodoSession): "session" | "memory" => (session.sessionManager.getSessionFile() ? "session" : "memory");
@@ -523,7 +537,7 @@ function operations(commands: TodoCommand[]): Operations {
 				params.push({ op: command.kind, ...targetParams(command.target) });
 				break;
 			case "view":
-				params.push({ op: "view" });
+				params.push({ op: "view", ...(command.target === undefined ? {} : { viewTarget: command.target }) });
 				break;
 			default: {
 				const unreachable: never = command;
@@ -585,14 +599,18 @@ export function previewTodo(
 	const rules: BudgetRules = { leafMaxMinutes, overtimeWarned: facts.overtimeWarned };
 	const now = Date.now();
 	let phases = working(previous);
+	const prior = priorItems(phases);
 	let next = previous;
 	for (const params of batch.params) {
 		const applied = applyStep(phases, next, params, rules);
 		if (applied.kind === "rejected") return { kind: "rejected" };
 		phases = applied.phases;
+		if (params.op === "init") prior.clear();
+		else if (params.op === "rm") pruneRemovedPrior(prior, phases);
 		next = settleStep(phases, next, params, facts.waits, now);
 	}
-	return { kind: "state", state: next };
+	stampTransitions(phases, prior, now);
+	return { kind: "state", state: stateOf(next.kind === "list" ? next.goal : { kind: "missing" }, phases) };
 }
 
 export type ParentCwd = () => string | undefined;
@@ -684,21 +702,28 @@ export async function runTodo(
 ): Promise<AgentToolResult<TodoMoreDetails>> {
 	const facts = branchFacts(session.sessionManager);
 	const previous = liveState(session);
+	const now = Date.now();
+	const waits = facts.waits;
 	const batch = batchOf(raw);
-	if (batch.kind === "invalid") return result(session, previous, batch.message, { isError: true });
+	if (batch.kind === "invalid") {
+		return result(session, previous, `${currentTimeLine(now)}\n${batch.message}`, { isError: true });
+	}
 	const ops = batch.params.map((params) => params.op);
 	const op = ops.length === 1 ? ops[0]! : "batch";
-	if (op === "view") return result(session, previous, formatSummary(previous, [], true), { op });
+	if (op === "view") {
+		const view = formatView(previous, batch.params[0]?.viewTarget, now, waits);
+		return result(session, previous, view.text, view.kind === "error" ? { op, isError: true } : { op });
+	}
 
 	const before = working(previous);
+	const prior = priorItems(before);
 	let phases = working(previous);
 	let next = previous;
 	const notes: string[] = [];
-	const now = Date.now();
-	const waits = facts.waits;
 	const rules: BudgetRules = { leafMaxMinutes, overtimeWarned: facts.overtimeWarned };
 	// Every step is checked and applied before any DONE commits: a later rejected step must not leave a commit behind.
 	const completions: { clause: TodoCommitClause | undefined; closed: WorkItem[] }[] = [];
+	const explainedTitles = new Set<string>();
 	for (const params of batch.params) {
 		const alreadyCompleted =
 			params.op === "done"
@@ -711,9 +736,16 @@ export async function runTodo(
 				: undefined;
 		const applied = applyStep(phases, next, params, rules);
 		if (applied.kind === "rejected") {
-			return result(session, previous, formatSummary(previous, applied.errors, true), { op, operations: ops, isError: true });
+			return result(session, previous, formatCompactView(previous, now, waits, { errors: applied.errors, readOnly: true }), {
+				op,
+				operations: ops,
+				isError: true,
+			});
 		}
 		phases = applied.phases;
+		if (params.op === "init") prior.clear();
+		else if (params.op === "rm") pruneRemovedPrior(prior, phases);
+		if (params.op === "explain" && params.task !== undefined) explainedTitles.add(params.task);
 		if (alreadyCompleted !== undefined) {
 			const closed = phases
 				.flatMap((phase) => phase.items)
@@ -722,16 +754,25 @@ export async function runTodo(
 		}
 		next = settleStep(phases, next, params, waits, now);
 	}
+	stampTransitions(phases, prior, now);
+	next = stateOf(next.kind === "list" ? next.goal : { kind: "missing" }, phases);
 	for (const completion of completions) {
 		const step = await completeWithCommit(session, completion.clause, completion.closed, parentCwd, agent);
 		if (step.kind === "refused") {
-			return result(session, previous, formatSummary(previous, [step.message], true), { op, operations: ops, isError: true });
+			return result(session, previous, formatCompactView(previous, now, waits, { errors: [step.message], readOnly: true }), {
+				op,
+				operations: ops,
+				isError: true,
+			});
 		}
 		if (step.note !== undefined) notes.push(step.note);
 	}
 	commitTodoState(session, next);
-	const summary = formatSummary(next, [], false);
-	return result(session, next, notes.length === 0 ? summary : `${summary}\n${notes.join("\n")}`, {
+	const summary = formatCompactView(next, now, waits, {
+		notes,
+		...(explainedTitles.size > 0 ? { highlightExplanations: explainedTitles } : {}),
+	});
+	return result(session, next, summary, {
 		op,
 		operations: ops,
 		changes: batch.params,

@@ -149,8 +149,17 @@ describe("Todo document consumption", () => {
 		});
 	});
 
-	test("accepts VIEW as the sole command", () => {
+	test("accepts VIEW and scoped VIEW selectors as the sole command", () => {
 		expect(parseTodo(document("VIEW"))).toEqual({ kind: "ok", commands: [{ kind: "view" }] });
+		expect(parseTodo(document("VIEW ALL"))).toEqual({ kind: "ok", commands: [{ kind: "view", target: { kind: "all" } }] });
+		expect(parseTodo(document('VIEW PHASE "Delivery"'))).toEqual({
+			kind: "ok",
+			commands: [{ kind: "view", target: { kind: "phase", name: "Delivery" } }],
+		});
+		expect(parseTodo(document('VIEW "Implement"'))).toEqual({
+			kind: "ok",
+			commands: [{ kind: "view", target: { kind: "task", title: "Implement" } }],
+		});
 	});
 
 	test("accepts the smallest and largest supported integer minute estimates without changing their values", () => {
@@ -214,6 +223,10 @@ describe("Todo document consumption", () => {
 		{ label: "INIT after another command", input: document('START "Task"', init) },
 		{ label: "INIT after estimate", input: document('ESTIMATE "Task" 6', init) },
 		{ label: "VIEW mixed with mutations", input: document("VIEW", 'DONE "Task"') },
+		{ label: "VIEW ALL mixed with mutations", input: document("VIEW ALL", 'DONE "Task"') },
+		{ label: "VIEW empty task selector", input: document('VIEW ""') },
+		{ label: "VIEW empty phase selector", input: document('VIEW PHASE ""') },
+		{ label: "VIEW extra argument", input: document('VIEW "Task" "extra"') },
 		{ label: "VIEW following mutations", input: document('DONE "Task"', "VIEW") },
 		{ label: "VIEW following estimate", input: document('ESTIMATE "Task" 6', "VIEW") },
 		{ label: "empty task selector", input: document('DONE ""') },

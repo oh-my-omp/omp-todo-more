@@ -147,7 +147,7 @@ function commandPreviewLines(command: TodoCommand): string[] {
 		case "rm":
 			return [`${command.kind.toUpperCase()} ${previewTarget(command.target)}`];
 		case "view":
-			return [`VIEW ${tr("current todos", "当前待办")}`];
+			return [command.target === undefined ? `VIEW ${tr("open todos", "未完成待办")}` : `VIEW ${previewTarget(command.target)}`];
 		default: {
 			const unreachable: never = command;
 			throw new Error(`Unexpected todo command: ${String(unreachable)}`);
