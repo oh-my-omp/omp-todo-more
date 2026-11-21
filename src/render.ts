@@ -136,7 +136,7 @@ function commandPreviewLines(command: TodoCommand): string[] {
 					? []
 					: [
 							`  ${tr("Commit", "提交")} ${
-								command.commit.scope.kind === "all" ? tr("all changes", "全部更改") : commitScopeText(command.commit.scope)
+								command.commit.scope.kind === "all" ? tr("this agent's changes", "本 agent 的更改") : commitScopeText(command.commit.scope)
 							}: ${command.commit.message}`,
 						]),
 			];
