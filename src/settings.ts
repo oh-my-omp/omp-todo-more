@@ -14,9 +14,8 @@ export const DEFAULT_SETTINGS: TodoMoreSettings = {
 	leafMaxMinutes: defaults.leafMaxMinutes.default,
 };
 
-function isEagerMode(value: unknown): value is EagerMode {
-	return EAGER_MODES.some((mode) => mode === value);
-}
+const isLeafMax = (value: unknown): value is number =>
+	typeof value === "number" && Number.isSafeInteger(value) && value >= defaults.leafMaxMinutes.min && value <= defaults.leafMaxMinutes.max;
 
 export async function readSettings(pi: Pick<ExtensionAPI, "logger">, ctx: Pick<ExtensionContext, "cwd">): Promise<TodoMoreSettings> {
 	try {

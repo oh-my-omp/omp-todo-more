@@ -12,6 +12,7 @@ import {
 import { EAGER_TODO_PRELUDE_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/todo-tracker";
 import { cfgTodoEnabled, cfgTodoReminders, cfgTodoRemindersMax } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { type NativeNode, node, span } from "@oh-my-pi/pi-tui";
+import { isSilentAbort, isUserInterruptAbort } from "@oh-my-pi/pi-tui/chat/messages";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 import { tr } from "../omomp-shared/i18n.ts";
 import { type BranchFacts, type BranchSource, branchFacts, contextBranch, foldBranch } from "./branch.ts";
@@ -59,24 +60,7 @@ const reminderDetailsSchema = z.object({
 });
 type ReminderDetails = z.infer<typeof reminderDetailsSchema>;
 
-type Cycle = {
-	reminderCount: number;
-	awaitingProgress: boolean;
-	mutationsSinceLastTouch: number;
-	midRunNudgeCount: number;
-};
-
-type PendingContinuation =
-	| { readonly kind: "none" }
-	| { readonly kind: "main"; readonly text: string; readonly details: ReminderDetails; readonly countBefore: number }
-	| { readonly kind: "sub"; readonly text: string };
-
-const NO_PENDING: PendingContinuation = { kind: "none" };
-
-type Completion =
-	| { readonly kind: "silent" }
-	| { readonly kind: "reset" }
-	| { readonly kind: "remind"; readonly attempt: number; readonly text: string; readonly details: ReminderDetails };
+type Completion = { readonly kind: "silent" } | { readonly kind: "remind"; readonly text: string; readonly details: ReminderDetails };
 
 const SILENT: Completion = { kind: "silent" };
 
@@ -345,6 +329,34 @@ function withContent(message: AgentMessage, text: string): AgentMessage {
 	if (message.role === "developer") return { ...message, content: [{ type: "text", text }] };
 	if (message.role === "custom") return { ...message, content: text };
 	return message;
+}
+
+/**
+ * The host decides when its todo reminders appear; each one reaches the model with the plugin's content,
+ * taken from the list as it stood where the reminder sits in the branch so a rewritten message keeps its bytes.
+ */
+export function contextMessages(
+	messages: AgentMessage[],
+	session: AgentSession | undefined,
+	manager: BranchSource,
+): AgentMessage[] | undefined {
+	if (session === undefined) return undefined;
+	let entries: readonly SessionEntry[] | undefined;
+	let current: TodoMoreState | undefined;
+	let rewritten: AgentMessage[] | undefined;
+	for (const [index, message] of messages.entries()) {
+		const reminder = hostReminderOf(message);
+		if (reminder === undefined) continue;
+		entries ??= manager.getBranchView();
+		const at = entryIndexOf(entries, message);
+		current ??= branchFacts(manager).state;
+		const state = at < 0 ? current : stateAtEntry(manager, entries, at);
+		const text = pluginContent(reminder, message, session, state);
+		if (text === undefined) continue;
+		rewritten ??= [...messages];
+		rewritten[index] = withContent(message, text);
+	}
+	return rewritten;
 }
 
 class NativeReminderText extends Text {
