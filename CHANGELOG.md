@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-22
+
 ### Changed
 
 - Migrated `todo` tool documentation topic pointers and topic cross-references from `xd://todo/*` to `help://todo/*` for omp 19.1.0 compatibility
