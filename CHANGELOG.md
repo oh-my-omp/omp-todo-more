@@ -22,6 +22,7 @@
 ### Fixed
 
 - A `todo` document rejected for a syntax, target or rule error no longer leaves behind the git commit of a `DONE` clause earlier in the same document: every step is checked before any `DONE` commits, so the rejected document's changes stay uncommitted and the item stays open, as the error says.
+- In Tern on omp 19.x the Todo More pill sits on omp's activity line again instead of a row of its own above it, the host's own todo pill no longer shows beside it, and the Tern dock keeps its own flex layout, so a tall dock on a phone no longer pushes the composer's model and send row under the key bar. The HUD widget now mounts above the editor, and the stylesheet no longer rebuilds the dock as a fourteen-slot grid ([oh-my-omp/omp-config#408](https://github.com/oh-my-omp/omp-config/issues/408)).
 
 ## [0.2.3] - 2026-11-21
 
