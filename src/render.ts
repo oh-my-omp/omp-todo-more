@@ -1,6 +1,10 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type ToolRenderResultOptions, z } from "@oh-my-pi/pi-coding-agent";
-import { type Component, replaceTabs, Text, type Theme, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import { type Component, replaceTabs, Text, type Theme } from "@oh-my-pi/pi-tui";
+import { renderOutputBlock } from "@oh-my-pi/pi-tui/render/output-block";
+import { renderStatusLine } from "@oh-my-pi/pi-tui/render/status-line";
+import { isClosedTodo, phaseRomanNumeral, selectCollapsedTodos } from "@oh-my-pi/pi-tui/tools/todo";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { language, tr } from "../omomp-shared/i18n.ts";
 import { formatTodoParseError, previewTodo, type TodoCommand, type TodoPreview, type TodoTarget } from "./protocol.ts";
 import {
@@ -8,7 +12,6 @@ import {
 	commitScopeText,
 	persistedStatusSchema,
 	type TodoMoreSnapshot,
-	type TodoStatus,
 	todoGoalSchema,
 	todoMoreSnapshotSchema,
 } from "./state.ts";
@@ -167,100 +170,37 @@ export function callPreviewLines(call: Call): string[] {
 	return lines.map(forDisplay);
 }
 
-const ESC_CHAR = "\x1b";
-// biome-ignore lint/suspicious/noControlCharactersInRegex: render boundaries must strip terminal control characters.
-const CONTROL_RE = /[\x00-\x08\x0B-\x1F\x7F-\x9F]/g;
-const REPLACEMENT_CHAR = "\ufffd";
-function sanitizeText(text: string): string {
-	const wellFormed = text.toWellFormed();
-	if (wellFormed !== text) {
-		return sanitizeWellFormedText(wellFormed.replaceAll(REPLACEMENT_CHAR, ""));
-	}
-	return sanitizeWellFormedText(text);
-}
-function sanitizeWellFormedText(text: string): string {
-	CONTROL_RE.lastIndex = 0;
-	if (CONTROL_RE.exec(text) === null) return text;
-
-	const stripped = text.indexOf(ESC_CHAR) === -1 ? text : Bun.stripANSI(text);
-	CONTROL_RE.lastIndex = 0;
-	return stripped.replace(CONTROL_RE, "");
-}
-
 function forDisplay(text: string): string {
 	return replaceTabs(sanitizeText(text));
-}
-
-const ROMAN_PAIRS: readonly (readonly [number, string])[] = [
-	[1000, "M"],
-	[900, "CM"],
-	[500, "D"],
-	[400, "CD"],
-	[100, "C"],
-	[90, "XC"],
-	[50, "L"],
-	[40, "XL"],
-	[10, "X"],
-	[9, "IX"],
-	[5, "V"],
-	[4, "IV"],
-	[1, "I"],
-];
-function phaseRomanNumeral(index: number): string {
-	let text = "";
-	for (const [value, symbol] of ROMAN_PAIRS) {
-		while (index >= value) {
-			text += symbol;
-			index -= value;
-		}
-	}
-	return text;
-}
-
-export function isClosed(item: { status: TodoStatus }): boolean {
-	return item.status === "completed" || item.status === "abandoned";
 }
 
 export function progressCounts(more: TodoMoreSnapshot): { closed: number; total: number } {
 	const phases = more.phases.filter((phase) => phase.items.length > 0);
 	return {
-		closed: phases.reduce((sum, phase) => sum + phase.items.filter(isClosed).length, 0),
+		closed: phases.reduce((sum, phase) => sum + phase.items.filter(isClosedTodo).length, 0),
 		total: phases.reduce((sum, phase) => sum + phase.items.length, 0),
 	};
 }
 
 const COLLAPSED_ITEMS = 8;
-function selectWithinCap(items: Item[]): { items: Item[]; summary: string } {
-	if (items.length <= COLLAPSED_ITEMS + 1) return { items, summary: "" };
-	const active = items.filter((item) => item.status === "in_progress");
-	if (active.length > COLLAPSED_ITEMS) {
-		const hidden = active.length - COLLAPSED_ITEMS;
+
+// The host selects the rows but words its summary in English only; recompute the count from the selection so the summary stays localized.
+function selectCollapsed(items: Item[]): { items: Item[]; summary: string } {
+	const selected = selectCollapsedTodos(items, () => false, COLLAPSED_ITEMS);
+	if (selected.summary === "") return { items: selected.items, summary: "" };
+	const open = items.filter((item) => !isClosedTodo(item));
+	const considered = open.length > 0 ? open : items;
+	const active = considered.filter((item) => item.status === "in_progress").length;
+	if (active > COLLAPSED_ITEMS) {
+		const hidden = active - COLLAPSED_ITEMS;
 		return {
-			items: active.slice(0, COLLAPSED_ITEMS),
+			items: selected.items,
 			summary: tr(`… ${hidden} more active todo${hidden === 1 ? "" : "s"}`, `… 还有 ${hidden} 个进行中的待办`),
 		};
 	}
-	const firstActive = active[0];
-	const start = firstActive === undefined ? 0 : items.indexOf(firstActive);
-	const fill: Item[] = [];
-	for (let index = start; index < items.length && active.length + fill.length < COLLAPSED_ITEMS; index++) {
-		const item = items[index];
-		if (item !== undefined && item.status !== "in_progress") fill.push(item);
-	}
-	const selected = [...active, ...fill];
-	const hidden = items.length - selected.length;
-	return {
-		items: selected,
-		summary: hidden > 0 ? tr(`… ${hidden} more todo${hidden === 1 ? "" : "s"}`, `… 还有 ${hidden} 个待办`) : "",
-	};
-}
-
-function selectCollapsed(items: Item[]): { items: Item[]; summary: string } {
-	const open = items.filter((item) => !isClosed(item));
-	if (open.length === 0) return selectWithinCap(items);
-	const lead = items.filter(isClosed).slice(-1);
-	const selected = selectWithinCap(open);
-	return { items: [...lead, ...selected.items], summary: selected.summary };
+	const shown = new Set(considered);
+	const hidden = considered.length - selected.items.filter((item) => shown.has(item)).length;
+	return { items: selected.items, summary: tr(`… ${hidden} more todo${hidden === 1 ? "" : "s"}`, `… 还有 ${hidden} 个待办`) };
 }
 
 export type DeltaPhase =
@@ -444,31 +384,17 @@ function formatItem(item: Item, theme: Theme, transitioned: boolean, frame: numb
 }
 
 function statusLine(theme: Theme, icon: string, meta: string): string {
-	return `${icon} ${theme.fg("accent", tr("Todo", "待办"))}${meta ? ` ${theme.fg("dim", forDisplay(meta).replace(/\r\n?|\n/g, " "))}` : ""}`;
+	return renderStatusLine({ iconOverride: icon, title: tr("Todo", "待办"), meta: [meta] }, theme);
 }
 
 function framedCard(theme: Theme, header: string, build: () => string[], error = false): Component {
 	return {
 		invalidate() {},
 		render(width) {
-			const box = theme.boxRound;
-			const border = (text: string): string => theme.fg(error ? "error" : "borderMuted", text);
-			const safeWidth = Math.max(1, width);
-			const contentWidth = Math.max(1, safeWidth - 4);
-			const left = `${box.topLeft}${box.horizontal.repeat(3)}`;
-			const label = truncateToWidth(` ${header} `, Math.max(0, safeWidth - visibleWidth(left) - visibleWidth(box.topRight)));
-			const fill = Math.max(0, safeWidth - visibleWidth(left) - visibleWidth(label) - visibleWidth(box.topRight));
-			const lines = [`${border(left)}${label}${border(box.horizontal.repeat(fill) + box.topRight)}`];
-			for (const line of build()) {
-				for (const part of line.split("\n"))
-					for (const wrapped of wrapTextWithAnsi(part.trimEnd(), contentWidth)) {
-						lines.push(
-							`${border(box.vertical)} ${wrapped}${" ".repeat(Math.max(0, contentWidth - visibleWidth(wrapped)))} ${border(box.vertical)}`,
-						);
-					}
-			}
-			lines.push(border(`${box.bottomLeft}${box.horizontal.repeat(Math.max(0, safeWidth - 2))}${box.bottomRight}`));
-			return lines.map((line) => truncateToWidth(line, safeWidth, ""));
+			return renderOutputBlock(
+				{ header, sections: [{ lines: build() }], width, applyBg: false, borderColor: error ? "error" : "borderMuted" },
+				theme,
+			);
 		},
 	};
 }
@@ -573,9 +499,9 @@ export function renderTodoResult(
 		for (let index = 0; index < phases.length; index++) {
 			const phase = phases[index];
 			if (phase === undefined) continue;
-			const collapsed = !expanded && multiPhase && phase.items.every(isClosed);
+			const collapsed = !expanded && multiPhase && phase.items.every(isClosedTodo);
 			const name = `${phaseRomanNumeral(index + 1)}. ${forDisplay(phase.name)}`;
-			const progress = `${phase.items.filter(isClosed).length}/${phase.items.length}`;
+			const progress = `${phase.items.filter(isClosedTodo).length}/${phase.items.length}`;
 			lines.push(`${theme.fg(collapsed ? "dim" : "accent", theme.bold(name))}${theme.fg("dim", `  ${progress}`)}`);
 			if (collapsed) continue;
 			const selection = expanded ? { items: phase.items, summary: "" } : selectCollapsed(phase.items);
@@ -586,7 +512,7 @@ export function renderTodoResult(
 				const branch = theme.fg("dim", last ? theme.tree.last : theme.tree.branch);
 				const continued = last ? "   " : `${theme.tree.vertical}  `;
 				lines.push(`  ${branch} ${formatItem(item, theme, completionKeys.has(`${phase.name}\u0000${item.title}`), spinnerFrame)}`);
-				if (expanded && !isClosed(item)) {
+				if (expanded && !isClosedTodo(item)) {
 					const explanation = forDisplay(
 						item.explanation ?? tr("(no explanation yet: add one with EXPLAIN)", "（尚无说明：请使用 EXPLAIN 添加）"),
 					);
