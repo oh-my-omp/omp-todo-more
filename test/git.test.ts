@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { ChangeJournal } from "@oh-my-pi/pi-coding-agent/commit/selective/journal";
@@ -241,6 +241,77 @@ describe("the git association of a completion", () => {
 		expect(result.isError).not.toBe(true);
 		expect(await git(harness.cwd, "show", "--name-only", "--format=", "HEAD")).toBe("docs/b.md\nsrc/a.txt");
 		expect(await git(harness.cwd, "status", "--porcelain")).toBe("M c.txt");
+	});
+
+	describe("a scoped clause resolves its paths as git pathspecs from the session directory", () => {
+		const files = {
+			"src/a.ts": "one\n",
+			"src/deep/b.ts": "one\n",
+			"c.ts": "one\n",
+			"docs/d.md": "one\n",
+		};
+
+		async function scoped(spec: string, options: { readonly cwd?: string } = {}) {
+			const root = await repository(files);
+			const harness = await fixture(options.cwd === undefined ? root : join(root, options.cwd));
+			await harness.call(init, 'ADD "Implement" "Change files" 5');
+			for (const file of Object.keys(files)) await harness.edit(relative(harness.cwd, join(root, file)), "two\n");
+			await harness.edit(relative(harness.cwd, join(root, "src/new.ts")), "new\n");
+			const result = await harness.call(`DONE "Implement" ${JSON.stringify(spec)} "Commit the scope"`);
+			expect(result.isError).not.toBe(true);
+			const committed = (await git(root, "show", "--name-only", "--format=", "HEAD")).split("\n").sort();
+			const status = await Bun.$`git -C ${root} status --porcelain`.quiet().text();
+			const remaining = status.split("\n").filter((line) => line !== "");
+			return { root, committed, remaining, harness };
+		}
+
+		test("`.` at the repository root commits every change, including untracked files", async () => {
+			const { committed, remaining } = await scoped(".");
+			expect(committed).toEqual(["c.ts", "docs/d.md", "src/a.ts", "src/deep/b.ts", "src/new.ts"]);
+			expect(remaining).toEqual([]);
+		});
+
+		test("`./` is the same as `.`", async () => {
+			const { committed } = await scoped("./");
+			expect(committed).toEqual(["c.ts", "docs/d.md", "src/a.ts", "src/deep/b.ts", "src/new.ts"]);
+		});
+
+		test("`.` in a subdirectory commits that directory's changes and leaves the rest", async () => {
+			const { committed, remaining } = await scoped(".", { cwd: "src" });
+			expect(committed).toEqual(["src/a.ts", "src/deep/b.ts", "src/new.ts"]);
+			expect(remaining).toEqual([" M c.ts", " M docs/d.md"]);
+		});
+
+		test("a relative path and a `../` path resolve against a subdirectory session", async () => {
+			const inside = await scoped("deep", { cwd: "src" });
+			expect(inside.committed).toEqual(["src/deep/b.ts"]);
+			const outside = await scoped("../docs", { cwd: "src" });
+			expect(outside.committed).toEqual(["docs/d.md"]);
+		});
+
+		test("an absolute path is the path itself", async () => {
+			const root = await repository(files);
+			const harness = await fixture(join(root, "src"));
+			await harness.call(init, 'ADD "Implement" "Change files" 5');
+			await harness.edit("a.ts", "two\n");
+			await harness.edit("../c.ts", "two\n");
+			const result = await harness.call(`DONE "Implement" ${JSON.stringify(join(await realpath(root), "c.ts"))} "Commit c"`);
+			expect(result.isError).not.toBe(true);
+			expect(await git(root, "show", "--name-only", "--format=", "HEAD")).toBe("c.ts");
+			expect(await git(root, "status", "--porcelain")).toBe("M src/a.ts");
+		});
+
+		test("`*.ts` matches across directory levels", async () => {
+			const { committed, remaining } = await scoped("*.ts");
+			expect(committed).toEqual(["c.ts", "src/a.ts", "src/deep/b.ts", "src/new.ts"]);
+			expect(remaining).toEqual([" M docs/d.md"]);
+		});
+
+		test("`src/*.ts` matches the files below src at any depth", async () => {
+			const { committed, remaining } = await scoped("src/*.ts");
+			expect(committed).toEqual(["src/a.ts", "src/deep/b.ts", "src/new.ts"]);
+			expect(remaining).toEqual([" M c.ts", " M docs/d.md"]);
+		});
 	});
 
 	test("a scope that matches nothing is refused and changes nothing", async () => {

@@ -1,4 +1,3 @@
-import { isAbsolute, relative } from "node:path";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { commitSelection } from "@oh-my-pi/pi-coding-agent/commit/selective/apply";
 import { createDraft, type Draft } from "@oh-my-pi/pi-coding-agent/commit/selective/draft";
@@ -67,36 +66,39 @@ export function sharedWorktreeRoot(cwd: string, otherCwd: string): string | null
 	return repositoryAt(otherCwd)?.info().repoRoot === root ? root : null;
 }
 
-function repoRelative(spec: string, root: string, prefix: string): string {
-	if (isAbsolute(spec)) return relative(root, spec);
-	return `${prefix}${spec}`.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
-}
+type PathspecOutcome =
+	| { readonly kind: "matched"; readonly paths: ReadonlySet<string> }
+	| { readonly kind: "failed"; readonly message: string };
 
-function pathsOf(draft: Draft, specs: readonly string[], prefix: string): { matched: Set<string>; resolved: string[] } {
-	const resolved = specs.map((spec) => repoRelative(spec, draft.root, prefix));
-	const matched = new Set<string>();
-	for (const spec of resolved) {
-		const glob = /[*?[{]/.test(spec) ? new Bun.Glob(spec) : undefined;
-		for (const path of draft.paths) {
-			if (path === spec || path.startsWith(`${spec}/`) || glob?.match(path) === true) matched.add(path);
-		}
+/** The changed paths (root-relative) that git's own pathspec matching selects when run from `cwd`, as `git add -- <specs>` would. */
+async function pathspecMatches(cwd: string, specs: readonly string[]): Promise<PathspecOutcome> {
+	const result = await Bun.$`git --no-optional-locks -C ${cwd} status --porcelain=v1 -z --untracked-files=all --no-renames -- ${specs}`
+		.quiet()
+		.nothrow();
+	if (result.exitCode !== 0) {
+		return { kind: "failed", message: result.stderr.toString().trim() || `git status exited with ${result.exitCode}` };
 	}
-	return { matched, resolved };
+	const paths = new Set<string>();
+	for (const entry of result.stdout.toString().split("\0")) if (entry.length > 3) paths.add(entry.slice(3));
+	return { kind: "matched", paths };
 }
 
-function selectScope(
-	draft: Draft,
-	scope: CommitScope,
-	prefix: string,
-): { kind: "ok"; scope: CommitScope } | { kind: "empty"; files: string[] } {
+type ScopeSelection =
+	| { kind: "ok"; scope: CommitScope }
+	| { kind: "empty"; files: readonly string[] }
+	| { kind: "failed"; message: string };
+
+async function selectScope(draft: Draft, scope: CommitScope, cwd: string): Promise<ScopeSelection> {
 	if (scope.kind === "all") return { kind: "ok", scope };
-	const { matched, resolved } = pathsOf(draft, scope.files, prefix);
-	if (matched.size === 0) return { kind: "empty", files: resolved };
+	const named = await pathspecMatches(cwd, scope.files);
+	if (named.kind === "failed") return { kind: "failed", message: `Cannot resolve the scope in ${draft.root}: ${named.message}` };
+	const matched = new Set(draft.paths.filter((path) => named.paths.has(path)));
+	if (matched.size === 0) return { kind: "empty", files: scope.files };
 	for (const path of draft.paths) {
 		if (matched.has(path)) draft.take({ path });
 		else draft.drop({ path });
 	}
-	return { kind: "ok", scope: { kind: "paths", files: resolved } };
+	return { kind: "ok", scope };
 }
 
 export async function commitCompletion(
@@ -122,8 +124,8 @@ export async function commitCompletion(
 		}
 		if (draft.selection().length === 0) return { kind: "inert", because: "foreign" };
 	}
-	const prefix = repositoryAt(cwd)?.prefixOf(cwd) ?? "";
-	const selected = selectScope(draft, scope, prefix);
+	const selected = await selectScope(draft, scope, cwd);
+	if (selected.kind === "failed") return selected;
 	if (selected.kind === "empty") {
 		return {
 			kind: "failed",
