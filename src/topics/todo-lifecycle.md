@@ -14,4 +14,4 @@ An overtime warning is a serious problem: the plan or the approach is wrong. Bef
 
 NEVER call todo alone: initialize with first work and update with the next action.
 
-Read xd://todo/protocol for the document grammar, selectors, validation and completion commits.
+Read help://todo/protocol for the document grammar, selectors, validation and completion commits.

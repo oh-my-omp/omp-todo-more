@@ -44,8 +44,8 @@ Any error rejects the whole document. The call fails unless:
 - In a git checkout where this agent has uncommitted work, DONE carries a commit clause — DONE "title" "<message>" to commit this agent's changes or DONE "title" "<paths>" "<message>" to commit those paths — and the tool runs git commit itself.
 
 Topics — read the one a call needs before making it:
-- \`xd://todo/protocol\` — before writing a Todo document, choosing selectors, or completing tasks with commits
-- \`xd://todo/lifecycle\` — before planning work, changing task state, or revising time budgets`;
+- \`help://todo/protocol\` — before writing a Todo document, choosing selectors, or completing tasks with commits
+- \`help://todo/lifecycle\` — before planning work, changing task state, or revising time budgets`;
 
 export const OPS = ["init", "start", "done", "rm", "drop", "append", "view", "explain", "estimate", "goal"] as const;
 export type Op = (typeof OPS)[number];

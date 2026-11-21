@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Migrated `todo` tool documentation topic pointers and topic cross-references from `xd://todo/*` to `help://todo/*` for omp 19.1.0 compatibility
 - Updated the shared copies of `context-delta.ts`, `tern-plugin.ts` to oh-my-omp/shared@3d09cd4.
 - The empty-list `edit` gate now blocks the call from the host's `tool_call` event instead of replacing the host `edit` tool's `execute`, so the plugin no longer touches the host tool object or re-installs it after tool-registry refreshes. An `edit` that follows a `todo` in the same assistant message runs only when that `todo` document passes `todo`'s own parse and rule checks and leaves a non-empty list; otherwise it is blocked with the init reminder.
 - `DONE` now commits through the host's selective commit on a private index instead of staging the shared index. `DONE "title" "<message>"` commits only the changes the host's change record attributes to this agent and its subagents; `DONE "title" "<paths>" "<message>"` commits every change in the named git pathspecs, resolved by git from the session directory as `git add -- <pathspec>` would. Neither takes another writer's staged or unstaged changes outside the commit. A `DONE` without a clause is rejected only when this agent has uncommitted work (another writer's changes no longer trigger it). When HEAD moves while the commit is built, the commit lands on the new HEAD if the selection still applies; otherwise `DONE` fails naming the move and the paths and the task stays open. In a session that keeps no change record, the message-only form fails and asks for paths, and a clause-less `DONE` in a dirty checkout is rejected with the path form alone.
@@ -30,10 +31,6 @@
 ### Changed
 
 - Updated the shared copies of `context-delta.ts`, `todo-read.ts` to oh-my-omp/shared@80068ad.
-
-### Fixed
-
-- In Tern on omp 19.0.1 the Todo More pill sits on omp's activity line again instead of a row of its own above it, and the Tern dock keeps its own flex layout, so a tall dock on a phone no longer pushes the composer under the key bar. The HUD widget now mounts above the editor, and the stylesheet no longer rebuilds the dock as a fourteen-slot grid ([oh-my-omp/omp-config#408](https://github.com/oh-my-omp/omp-config/issues/408))
 
 ## [0.2.2] - 2026-11-20
 

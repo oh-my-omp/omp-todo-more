@@ -28,4 +28,4 @@ VIEW must be the sole command; mutations already return the resulting list. Titl
 
 Partial input is an uncommitted preview. The complete document is validated in order and committed once; syntax, target or rule errors reject the entire batch.
 
-Read xd://todo/lifecycle before planning work or changing task state.
+Read help://todo/lifecycle before planning work or changing task state.
