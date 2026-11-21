@@ -11,11 +11,13 @@
 - Todo card rendering, collapsed-row selection, phase numbering, text sanitizing and the session-exit/tool-start entry types now come from the host's exports instead of in-repo copies; the card looks the same.
 - Todo items now have four statuses: `pending`, `in_progress`, `completed`, `abandoned`. Items saved as `blocked` by earlier versions load as `pending` without their blocker text; earlier todo results that contain `BLOCK`/`UNBLOCK` changes still load, without those changes.
 - A todo list's phases, titles, order and statuses are now recorded only in omp's own list. The plugin keeps its goal, item explanations, timers and commit records in a `mouriya.omp.todo-more.notes` session entry attached to the list's items by phase name and title, and no longer writes a second copy of the whole list or fails a `todo` call or `/todo-more` save on that copy. The `todo` tool and the `/todo-more` editor behave as before. Sessions saved by earlier versions keep their lists but their goal, explanations, timers and commit records are no longer restored.
+- Todo reminders now follow omp's own `todo.*` settings: when the stop reminder, the mid-run nudge (`todo.midRunNudges`) and the eager prelude (`todo.eager`) appear, and how many stop reminders are sent (`todo.remindersMax`), is decided by omp for the main session and subagents alike. They still reach the model with this plugin's content: open items with explanations and estimates, the goal, the `EXPLAIN` hint, the Todo-document syntax for the eager prelude, and the goal-mode todo snapshot. The reminder after a turn that ended in a server error, unfinished tool calls or a non-human abort is sent only while `todo.reminders` is on and at most `todo.remindersMax` times since the latest user message.
 
 ### Removed
 
 - Removed the `BLOCK` and `UNBLOCK` commands and the item blocker text.
 - Removed the handling of list changes made outside the plugin's `todo` tool and `/todo-more` editor: the plugin no longer reads `user_todo_edit` entries or other `todo` results written by someone else, and the overtime timer no longer wraps `session.commitTodoPhases`.
+- Removed the plugin settings `reminders`, `remindersMax` and `eager`; the plugin no longer switches off omp's `todo.reminders` and `todo.eager` in each session, so the values set in `/settings` apply. Set them there instead (`leafMaxMinutes` stays a plugin setting).
 
 ## [0.2.3] - 2026-11-21
 
