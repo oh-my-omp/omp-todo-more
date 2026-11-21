@@ -1,6 +1,6 @@
 import { type SessionEntry, z } from "@oh-my-pi/pi-coding-agent";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
-import type { TodoPhase as HostTodoPhase, TodoStatus as HostTodoStatus } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 
 export const TODO_MORE_ENTRY_TYPE = "mouriya.omp.todo-more";
 
@@ -16,7 +16,7 @@ export const overtimeDetailsSchema = z.object({
 	elapsedMs: z.number(),
 });
 
-export const TODO_STATUSES = ["pending", "in_progress", "completed", "abandoned", "blocked"] as const;
+export const TODO_STATUSES = ["pending", "in_progress", "completed", "abandoned"] as const;
 export type TodoStatus = (typeof TODO_STATUSES)[number];
 
 export type TodoGoal = { readonly objective: string; readonly measure: string; readonly doneWhen: string };
@@ -96,7 +96,6 @@ export type TodoItem = {
 	readonly status: TodoStatus;
 	readonly time: ItemTime;
 	readonly commit?: CommitRecord;
-	readonly blocker?: string;
 };
 
 export type TodoPhase = { readonly name: string; readonly items: readonly TodoItem[] };
@@ -111,13 +110,15 @@ const nonEmpty = z.string().refine((value) => value.trim().length > 0, "must not
 
 export const todoGoalSchema = z.object({ objective: nonEmpty, measure: nonEmpty, doneWhen: nonEmpty });
 
-const statusSchema = z.enum(TODO_STATUSES);
+// Session data written before the blocked status was removed still says "blocked"; it reads back as pending, as the host reads it.
+export const persistedStatusSchema = z
+	.enum([...TODO_STATUSES, "blocked"])
+	.transform((status): TodoStatus => (status === "blocked" ? "pending" : status));
 
-export const itemSnapshotSchema = z.object({
+const itemSnapshotSchema = z.object({
 	title: z.string(),
 	explanation: z.string().nullable(),
-	status: statusSchema,
-	blocker: z.string().optional(),
+	status: persistedStatusSchema,
 	commit: commitRecordSchema.optional(),
 	time: itemTimeSchema.default(() => ({ kind: "missing" })),
 });
@@ -131,7 +132,7 @@ export type TodoMoreSnapshot = z.infer<typeof todoMoreSnapshotSchema>;
 const nativePhasesSchema = z.array(
 	z.object({
 		name: z.string(),
-		tasks: z.array(z.object({ content: z.string(), status: statusSchema, blocker: z.string().optional() }).passthrough()),
+		tasks: z.array(z.object({ content: z.string(), status: persistedStatusSchema })),
 	}),
 );
 type NativePhases = z.infer<typeof nativePhasesSchema>;
@@ -171,7 +172,6 @@ export function toSnapshot(state: TodoMoreState): TodoMoreSnapshot {
 						explanation: item.explanation.kind === "explained" ? item.explanation.text : null,
 						status: item.status,
 						time: item.time,
-						...(item.blocker === undefined ? {} : { blocker: item.blocker }),
 						...(item.commit === undefined ? {} : { commit: item.commit }),
 					})),
 				})),
@@ -193,7 +193,6 @@ function fromSnapshot(snapshot: TodoMoreSnapshot): TodoMoreState {
 				explanation: item.explanation === null ? { kind: "missing" } : { kind: "explained", text: item.explanation },
 				status: item.status,
 				time: item.time,
-				...(item.blocker === undefined ? {} : { blocker: item.blocker }),
 				...(item.commit === undefined ? {} : { commit: item.commit }),
 			}),
 		),
@@ -236,28 +235,11 @@ export function joinNative(phases: NativePhases, base: TodoMoreState, at: number
 				explanation: previous?.explanation ?? { kind: "missing" },
 				time: transitionTime(previous?.time ?? { kind: "missing" }, task.status, at, waits),
 				status: task.status,
-				...(task.blocker === undefined ? {} : { blocker: task.blocker }),
 				...(previous?.commit === undefined ? {} : { commit: previous.commit }),
 			};
 		}),
 	}));
 	return stateOf(base.kind === "list" ? base.goal : { kind: "missing" }, joined);
-}
-
-function hostStatus(status: TodoStatus): HostTodoStatus {
-	switch (status) {
-		case "pending":
-		case "blocked":
-			return "pending";
-		case "in_progress":
-		case "completed":
-		case "abandoned":
-			return status;
-		default: {
-			const unreachable: never = status;
-			throw new Error(`Unexpected todo status: ${String(unreachable)}`);
-		}
-	}
 }
 
 export function hostPhases(state: TodoMoreState): HostTodoPhase[] {
@@ -267,7 +249,7 @@ export function hostPhases(state: TodoMoreState): HostTodoPhase[] {
 		case "list":
 			return state.phases.map((phase) => ({
 				name: phase.name,
-				tasks: phase.items.map((item) => ({ content: item.title, status: hostStatus(item.status) })),
+				tasks: phase.items.map((item) => ({ content: item.title, status: item.status })),
 			}));
 		default: {
 			const unreachable: never = state;

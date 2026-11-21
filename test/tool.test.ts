@@ -76,10 +76,7 @@ function fixture(initial?: TodoMoreSnapshot): Fixture {
 function projected(snapshot: TodoMoreSnapshot): HostTodoPhase[] {
 	return snapshot.phases.map((phase) => ({
 		name: phase.name,
-		tasks: phase.items.map((item) => ({
-			content: item.title,
-			status: item.status === "blocked" ? "pending" : item.status,
-		})),
+		tasks: phase.items.map((item) => ({ content: item.title, status: item.status })),
 	}));
 }
 
@@ -160,13 +157,7 @@ function populated(): TodoMoreSnapshot {
 			{
 				name: "Verification",
 				items: [
-					{
-						title: "Runtime",
-						explanation: "Use the real host",
-						status: "blocked",
-						blocker: "Waiting for credentials",
-						time: { kind: "missing" },
-					},
+					{ title: "Runtime", explanation: "Use the real host", status: "pending", time: { kind: "missing" } },
 					{ title: "Already checked", explanation: "Retain earlier evidence", status: "completed", time: { kind: "missing" } },
 					{ title: "Old approach", explanation: "Keep historical scope", status: "abandoned", time: { kind: "missing" } },
 				],
@@ -382,27 +373,27 @@ describe("atomic Todo document execution", () => {
 		});
 	}
 
-	test("a late target error discards goal, append and blocker changes together", async () => {
+	test("a late target error discards goal, append and status changes together", async () => {
 		const harness = fixture(populated());
 		await expectRejected(harness, () =>
 			harness.call(
 				'GOAL "Replacement" "New measure" "New boundary"',
 				'PHASE "Release"',
 				'ADD "Publish" "New scope" 10',
-				'BLOCK "Implement" "New dependency"',
-				'UNBLOCK "Runtime"',
+				'DONE "Review"',
+				'START "Runtime"',
 				'RM "Missing task"',
 			),
 		);
 		expect(harness.snapshots()).toHaveLength(1);
 	});
 
-	test("normalizes each operation rather than only the final batch state", async () => {
+	test("completion promotes the earliest pending task", async () => {
 		const harness = fixture(populated());
 		const expected = populated();
-		itemOf(expected, "Implement").status = "pending";
+		itemOf(expected, "Implement").status = "completed";
 		itemOf(expected, "Review").status = "in_progress";
-		expectSaved(harness, await harness.call('BLOCK "Implement" "Wait"', 'UNBLOCK "Implement"'), expected, 1, 0);
+		expectSaved(harness, await harness.call('DONE "Implement"'), expected, 1, 0);
 	});
 
 	test("GOAL replaces only goal fields without normalizing imported statuses or clocks", async () => {
@@ -437,31 +428,6 @@ describe("atomic Todo document execution", () => {
 		expect(harness.snapshots()).toHaveLength(0);
 	});
 
-	test("BLOCK PHASE normalizes its reason and UNBLOCK PHASE removes blockers", async () => {
-		const harness = fixture(populated());
-		const blocked = populated();
-		blocked.phases[0]!.items = blocked.phases[0]!.items.map((item) => ({ ...item, status: "blocked", blocker: "Waiting for service" }));
-		expectSaved(harness, await harness.call('BLOCK PHASE "Delivery" "  Waiting\\n for\\tservice  "'), blocked, 1, 0);
-		expectSaved(harness, await harness.call('UNBLOCK PHASE "Delivery"'), populated(), 2, 1);
-		const allBlocked = populated();
-		allBlocked.phases[0]!.items = allBlocked.phases[0]!.items.map((item) => ({ ...item, status: "blocked" }));
-		expectSaved(harness, await harness.call('BLOCK "Implement"', 'BLOCK "Review"'), allBlocked, 3, 2);
-	});
-
-	test("BLOCK and UNBLOCK leave completed and abandoned targets unchanged without an extra snapshot", async () => {
-		const harness = fixture(populated());
-		const result = await harness.call(
-			'BLOCK "Already checked" "Not a new dependency"',
-			'BLOCK "Old approach"',
-			'UNBLOCK "Already checked"',
-			'UNBLOCK "Old approach"',
-		);
-		expect(result.isError).not.toBe(true);
-		expect(harness.snapshot()).toEqual(populated());
-		expect(harness.snapshots()).toHaveLength(1);
-		expect(harness.projections).toStrictEqual([projected(populated())]);
-	});
-
 	test("quoted ALL selects a task, while DONE ALL selects all phases", async () => {
 		const initial: TodoMoreSnapshot = {
 			goal,
@@ -475,7 +441,7 @@ describe("atomic Todo document execution", () => {
 				},
 				{
 					name: "Verification",
-					items: [{ title: "Last", explanation: "Another phase", status: "blocked", blocker: "Wait", time: { kind: "missing" } }],
+					items: [{ title: "Last", explanation: "Another phase", status: "pending", time: { kind: "missing" } }],
 				},
 			],
 		};
@@ -499,18 +465,17 @@ describe("atomic Todo document execution", () => {
 	test("DROP PHASE and RM PHASE affect only the selected phase", async () => {
 		const initial = populated();
 		const harness = fixture(initial);
+		const verification = structuredClone(initial.phases[1]!);
+		verification.items[0]!.status = "in_progress";
 		const dropped: TodoMoreSnapshot = {
 			goal,
-			phases: [
-				{ ...initial.phases[0]!, items: initial.phases[0]!.items.map((item) => ({ ...item, status: "abandoned" })) },
-				initial.phases[1]!,
-			],
+			phases: [{ ...initial.phases[0]!, items: initial.phases[0]!.items.map((item) => ({ ...item, status: "abandoned" })) }, verification],
 		};
 		expectSaved(harness, await harness.call('DROP PHASE "Delivery"'), dropped, 1, 0);
 		expectSaved(
 			harness,
 			await harness.call('RM PHASE "Delivery"'),
-			{ goal, phases: [{ name: "Delivery", items: [] }, initial.phases[1]!] },
+			{ goal, phases: [{ name: "Delivery", items: [] }, verification] },
 			2,
 			1,
 		);
@@ -589,8 +554,6 @@ describe("atomic Todo document execution", () => {
 	for (const command of [
 		'DONE ""',
 		'RM PHASE ""',
-		"BLOCK ALL",
-		"UNBLOCK ALL",
 		'PHASE "New phase"',
 		'PHASE "New phase"\nDONE "Review"',
 		'ADD "No phase" "Append requires explicit phase context" 10',
@@ -626,7 +589,7 @@ describe("atomic batch timing through the authority branch", () => {
 						'ADD "Second" "Pause within the batch" 3',
 						'ADD "Third" "Remain active" 4',
 						'DONE "First"',
-						'BLOCK "Second" "Wait"',
+						'DROP "Second"',
 						'EXPLAIN "Third" "Accepted active explanation"',
 					),
 				}),
@@ -646,7 +609,7 @@ describe("atomic batch timing through the authority branch", () => {
 						name: "Tasks",
 						items: [
 							{ title: "First", explanation: "Complete within the batch", status: "completed", time: first },
-							{ title: "Second", explanation: "Pause within the batch", status: "blocked", blocker: "Wait", time: second },
+							{ title: "Second", explanation: "Pause within the batch", status: "abandoned", time: second },
 							{ title: "Third", explanation: "Accepted active explanation", status: "in_progress", time: third },
 						],
 					},
@@ -655,7 +618,7 @@ describe("atomic batch timing through the authority branch", () => {
 			0,
 			0,
 		);
-		expect(result.details?.operations).toEqual(["init", "done", "block", "explain"]);
+		expect(result.details?.operations).toEqual(["init", "done", "drop", "explain"]);
 	});
 
 	test("existing active time is settled at the same T as its successor starts", async () => {
@@ -666,7 +629,7 @@ describe("atomic batch timing through the authority branch", () => {
 			anchor,
 			() =>
 				runTodo(harness.session, {
-					input: document('BLOCK "Implement" "Wait"', 'UNBLOCK "Implement"', 'EXPLAIN "Review" "Continue with review"'),
+					input: document('START "Review"', 'EXPLAIN "Review" "Continue with review"'),
 				}),
 			1_000,
 		);
@@ -680,32 +643,32 @@ describe("atomic batch timing through the authority branch", () => {
 		expectSaved(harness, result, expected, 1, 0);
 	});
 
-	test("BLOCK, paused ESTIMATE, UNBLOCK, active ESTIMATE and DONE preserve only active elapsed time", async () => {
+	test("START pauses the clock, paused ESTIMATE, resume, active ESTIMATE and DONE preserve only active elapsed time", async () => {
 		const initial = timed();
-		initial.phases = [{ name: "Delivery", items: [itemOf(initial, "Implement")] }];
 		const harness = fixture(initial);
-		const blocked: TodoMoreSnapshot = {
+		const paused: TodoMoreSnapshot = {
 			goal,
 			phases: [
 				{
 					name: "Delivery",
 					items: [
+						{ title: "Implement", explanation: "Consume complete commands", status: "pending", time: time("implement-budget", 10, 7_250) },
 						{
-							title: "Implement",
-							explanation: "Consume complete commands",
-							status: "blocked",
-							blocker: "Wait",
-							time: time("implement-budget", 10, 7_250),
+							title: "Review",
+							explanation: "Review original behavior",
+							status: "in_progress",
+							time: time("review-budget", 20, 500, epoch + 6_000),
 						},
 					],
 				},
+				initial.phases[1]!,
 			],
 		};
-		expectSaved(harness, await harness.callAt(epoch + 6_000, 'BLOCK "Implement" "Wait"'), blocked, 1, 0);
+		expectSaved(harness, await harness.callAt(epoch + 6_000, 'START "Review"'), paused, 1, 0);
 		const reestimated = await harness.callAt(epoch + 20_000, 'ESTIMATE "Implement" 12');
 		const changedBudget = createdTime(harness, "Implement", 12, null, 7_250);
 		expect(changedBudget.budgetId).not.toBe("implement-budget");
-		const changed = structuredClone(blocked);
+		const changed = structuredClone(paused);
 		itemOf(changed, "Implement").time = changedBudget;
 		expectSaved(harness, reestimated, changed, 2, 1);
 		expect(reestimated.details?.changes).toEqual([{ op: "estimate", task: "Implement", estimatedMinutes: 12 }]);
@@ -721,8 +684,8 @@ describe("atomic batch timing through the authority branch", () => {
 
 		const resumed = structuredClone(changed);
 		Object.assign(itemOf(resumed, "Implement"), { status: "in_progress", time: time(changedBudget.budgetId, 12, 7_250, epoch + 30_000) });
-		delete itemOf(resumed, "Implement").blocker;
-		expectSaved(harness, await harness.callAt(epoch + 30_000, 'UNBLOCK "Implement"'), resumed, 3, 3);
+		Object.assign(itemOf(resumed, "Review"), { status: "pending", time: time("review-budget", 20, 24_500) });
+		expectSaved(harness, await harness.callAt(epoch + 30_000, 'START "Implement"'), resumed, 3, 3);
 		expect(elapsedTime(estimateOf(harness.snapshot(), "Implement"), epoch + 35_000)).toBe(12_250);
 
 		const activeEstimate = await harness.callAt(epoch + 32_000, 'ESTIMATE "Implement" 15');
@@ -735,6 +698,7 @@ describe("atomic batch timing through the authority branch", () => {
 
 		const final = structuredClone(active);
 		Object.assign(itemOf(final, "Implement"), { status: "completed", time: time(activeBudget.budgetId, 15, 12_250) });
+		Object.assign(itemOf(final, "Review"), { status: "in_progress", time: time("review-budget", 20, 24_500, epoch + 35_000) });
 		expectSaved(harness, await harness.callAt(epoch + 35_000, 'DONE "Implement"'), final, 5, 5);
 	});
 
@@ -755,7 +719,7 @@ describe("atomic batch timing through the authority branch", () => {
 			isError: false,
 			timestamp: epoch + 302_000,
 		});
-		expect((await harness.callAt(epoch + 306_000, 'BLOCK "Implement" "Wait"')).isError).not.toBe(true);
+		expect((await harness.callAt(epoch + 306_000, 'DONE "Implement"')).isError).not.toBe(true);
 		expect(estimateOf(harness.snapshot(), "Implement")).toEqual(time("implement-budget", 10, 7_250));
 	});
 
@@ -807,7 +771,7 @@ describe("atomic batch timing through the authority branch", () => {
 			test(`invalid required minute budget rejects the entire batch: ${command}`, async () => {
 				const harness = fixture(timed());
 				await expectRejected(harness, () =>
-					harness.callAt(epoch + 6_000, 'GOAL "Changed" "Measured" "Complete"', 'BLOCK "Implement" "Wait"', command),
+					harness.callAt(epoch + 6_000, 'GOAL "Changed" "Measured" "Complete"', 'DONE "Implement"', command),
 				);
 				expect(harness.snapshot()).toEqual(timed());
 			});
@@ -881,8 +845,8 @@ describe("atomic batch timing through the authority branch", () => {
 					epoch + 6_000,
 					'GOAL "Replacement" "New measure" "New boundary"',
 					'ESTIMATE "Implement" 11',
-					'BLOCK "Implement" "Would pause"',
-					'UNBLOCK "Runtime"',
+					'DONE "Implement"',
+					'START "Runtime"',
 					'ESTIMATE "Review" 21',
 					lateCommand,
 				),

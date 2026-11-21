@@ -208,7 +208,7 @@ class SchedulerFixture {
 
 	async native(status: TodoStatus, source: "edit" | "result"): Promise<void> {
 		if (source === "edit") {
-			this.bound.commitTodoPhases([{ name: "Delivery", tasks: [{ content: title, status: status === "blocked" ? "pending" : status }] }]);
+			this.bound.commitTodoPhases([{ name: "Delivery", tasks: [{ content: title, status }] }]);
 			await Promise.resolve();
 			return;
 		}
@@ -292,17 +292,14 @@ describe("overtime deadline scheduling", () => {
 		});
 	});
 
-	for (const [source, paused] of [
-		["edit", "pending"],
-		["result", "blocked"],
-	] as const) {
+	for (const source of ["edit", "result"] as const) {
 		test(`native ${source} pauses and resumes the remaining budget, then completion leaves no timer`, async () => {
 			await withScheduler(async (fixture) => {
 				await fixture.append(estimatedState());
 				await fixture.clock.advanceTo(epoch + 20_000);
 				const beforePause = fixture.clock.captureNext();
-				await fixture.native("blocked", source);
-				expect(itemOf(fixture.manager).status).toBe(paused);
+				await fixture.native("pending", source);
+				expect(itemOf(fixture.manager).status).toBe("pending");
 				expect(estimateOf(fixture.manager)).toMatchObject({ elapsedMs: 20_000, runningSince: null });
 				expect(fixture.clock.deadlines).toEqual([]);
 				await fixture.clock.advanceTo(epoch + 100_000);

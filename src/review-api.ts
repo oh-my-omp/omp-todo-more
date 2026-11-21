@@ -6,7 +6,7 @@ import { sessionOf } from "./session.ts";
 import { actionableItems, type TodoMoreState, type TodoStatus } from "./state.ts";
 
 function statusCounts(state: TodoMoreState): TodoReadCounts {
-	const counts: Record<TodoStatus, number> = { pending: 0, in_progress: 0, completed: 0, abandoned: 0, blocked: 0 };
+	const counts: Record<TodoStatus, number> = { pending: 0, in_progress: 0, completed: 0, abandoned: 0 };
 	if (state.kind === "list") for (const phase of state.phases) for (const item of phase.items) counts[item.status]++;
 	return counts;
 }

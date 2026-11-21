@@ -44,9 +44,9 @@ Any error rejects the whole document. The call fails unless:
 
 Topics — read the one a call needs before making it:
 - \`xd://todo/protocol\` — before writing a Todo document, choosing selectors, or completing tasks with commits
-- \`xd://todo/lifecycle\` — before planning work, changing task state, handling blockers, or revising time budgets`;
+- \`xd://todo/lifecycle\` — before planning work, changing task state, or revising time budgets`;
 
-export const OPS = ["init", "start", "done", "rm", "drop", "block", "unblock", "append", "view", "explain", "estimate", "goal"] as const;
+export const OPS = ["init", "start", "done", "rm", "drop", "append", "view", "explain", "estimate", "goal"] as const;
 export type Op = (typeof OPS)[number];
 export const RESULT_OPS = [...OPS, "batch"] as const;
 export { customFormat, parametersSchema };
@@ -59,7 +59,6 @@ type Params = {
 	readonly task?: string;
 	readonly phase?: string;
 	readonly items?: ItemParam[];
-	readonly reason?: string;
 	readonly explanation?: string;
 	readonly estimatedMinutes?: number;
 	readonly commit?: TodoCommitClause;
@@ -71,7 +70,6 @@ type WorkItem = {
 	time: ItemTime;
 	status: TodoStatus;
 	commit?: CommitRecord;
-	blocker?: string;
 };
 type WorkPhase = { name: string; items: WorkItem[] };
 
@@ -261,32 +259,6 @@ function applyOp(phases: WorkPhase[], params: Params, errors: string[]): WorkPha
 		case "drop":
 			for (const item of targets(phases, params, errors)) item.status = "abandoned";
 			return phases;
-		case "block": {
-			if (!params.task && !params.phase) {
-				errors.push("block requires a task or phase target");
-				return phases;
-			}
-			const reason = params.reason?.replace(/\s+/g, " ").trim() || undefined;
-			for (const item of targets(phases, params, errors)) {
-				if (item.status !== "pending" && item.status !== "in_progress" && item.status !== "blocked") continue;
-				item.status = "blocked";
-				if (reason === undefined) delete item.blocker;
-				else item.blocker = reason;
-			}
-			return phases;
-		}
-		case "unblock": {
-			if (!params.task && !params.phase) {
-				errors.push("unblock requires a task or phase target");
-				return phases;
-			}
-			for (const item of targets(phases, params, errors)) {
-				if (item.status !== "blocked") continue;
-				item.status = "pending";
-				delete item.blocker;
-			}
-			return phases;
-		}
 		case "rm":
 			return removeTasks(phases, params, errors);
 		case "append":
@@ -330,8 +302,6 @@ function addedItems(params: Params): ItemParam[] {
 		case "done":
 		case "rm":
 		case "drop":
-		case "block":
-		case "unblock":
 		case "view":
 		case "explain":
 		case "estimate":
@@ -421,9 +391,8 @@ function formatSummary(state: TodoMoreState, errors: readonly string[], readOnly
 	if (currentIndex === -1) currentIndex = phases.length - 1;
 	const current = phases[currentIndex];
 	const closedAll = items.filter((item) => closed(item.status)).length;
-	const blockedAll = items.filter((item) => item.status === "blocked").length;
 	const workedAhead = phases.some((phase, index) => index > currentIndex && phase.items.some((item) => closed(item.status)));
-	lines.push(`Overall: ${closedAll}/${items.length} done, ${remaining.length} open${blockedAll > 0 ? `, ${blockedAll} blocked` : ""}.`);
+	lines.push(`Overall: ${closedAll}/${items.length} done, ${remaining.length} open.`);
 	if (current !== undefined) {
 		const done = current.items.filter((item) => closed(item.status)).length;
 		lines.push(
@@ -438,19 +407,10 @@ function formatSummary(state: TodoMoreState, errors: readonly string[], readOnly
 		lines.push(`  ${phase.name}:`);
 		for (const item of phase.items) {
 			const checkbox = item.status === "completed" ? "[X]" : "[ ]";
-			const tag =
-				item.status === "in_progress"
-					? " (in progress)"
-					: item.status === "abandoned"
-						? " (dropped)"
-						: item.status === "blocked"
-							? item.blocker
-								? ` (blocked: ${item.blocker})`
-								: " (blocked)"
-							: "";
+			const tag = item.status === "in_progress" ? " (in progress)" : item.status === "abandoned" ? " (dropped)" : "";
 			lines.push(`    - ${checkbox} ${item.title}${tag}`);
 			if (item.commit !== undefined) lines.push(`        Commit: ${commitRecordText(item.commit)} (${commitScopeText(item.commit.scope)})`);
-			if (isOpen(item.status) || item.status === "blocked") lines.push(`        ${explanationText(item)}`);
+			if (isOpen(item.status)) lines.push(`        ${explanationText(item)}`);
 			lines.push(`        ${timeEstimateText(item.time)}`);
 		}
 	}
@@ -559,11 +519,7 @@ function operations(commands: TodoCommand[]): Operations {
 				break;
 			case "drop":
 			case "rm":
-			case "unblock":
 				params.push({ op: command.kind, ...targetParams(command.target) });
-				break;
-			case "block":
-				params.push({ op: "block", ...targetParams(command.target), reason: command.reason });
 				break;
 			case "view":
 				params.push({ op: "view" });

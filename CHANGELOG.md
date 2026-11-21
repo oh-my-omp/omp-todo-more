@@ -5,6 +5,11 @@
 ### Changed
 
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
+- Todo items now have four statuses: `pending`, `in_progress`, `completed`, `abandoned`. Items saved as `blocked` by earlier versions load as `pending` without their blocker text, keeping their time; earlier todo results that contain `BLOCK`/`UNBLOCK` changes still load, without those changes.
+
+### Removed
+
+- Removed the `BLOCK` and `UNBLOCK` commands and the item blocker text.
 
 ## [0.2.3] - 2026-11-21
 
