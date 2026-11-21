@@ -6,10 +6,12 @@
 
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 - Todo items now have four statuses: `pending`, `in_progress`, `completed`, `abandoned`. Items saved as `blocked` by earlier versions load as `pending` without their blocker text, keeping their time; earlier todo results that contain `BLOCK`/`UNBLOCK` changes still load, without those changes.
+- Todo reminders now follow omp's own `todo.*` settings: when the stop reminder, the mid-run nudge (`todo.midRunNudges`) and the eager prelude (`todo.eager`) appear, and how many stop reminders are sent (`todo.remindersMax`), is decided by omp for the main session and subagents alike. They still reach the model with this plugin's content: open items with explanations and estimates, the goal, the `EXPLAIN` hint, the Todo-document syntax for the eager prelude, and the goal-mode todo snapshot. The reminder after a turn that ended in a server error, unfinished tool calls or a non-human abort is sent only while `todo.reminders` is on and at most `todo.remindersMax` times since the latest user message.
 
 ### Removed
 
 - Removed the `BLOCK` and `UNBLOCK` commands and the item blocker text.
+- Removed the plugin settings `reminders`, `remindersMax` and `eager`; the plugin no longer switches off omp's `todo.reminders` and `todo.eager` in each session, so the values set in `/settings` apply. Set them there instead (`leafMaxMinutes` stays a plugin setting).
 
 ## [0.2.3] - 2026-11-21
 
