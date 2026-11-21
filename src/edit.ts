@@ -1,7 +1,6 @@
 import { z } from "@oh-my-pi/pi-coding-agent";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { tr } from "../omomp-shared/i18n.ts";
-import { liveState, recordNotes } from "./commit.ts";
+import { commitTodoState, type HostListSession, liveState } from "./commit.ts";
 import { stateOf, type TodoGoal, type TodoMoreState, todoGoalSchema } from "./state.ts";
 
 export type TodoEdit = { kind: "set_goal"; goal: TodoGoal } | { kind: "explain"; title: string; explanation: string };
@@ -51,10 +50,10 @@ export function applyTodoEdit(state: TodoMoreState, edit: TodoEdit): AppliedEdit
 	}
 }
 
-/** An edit changes only the plugin's part of the list; the host list stays as it is. */
-export function saveTodoEdit(session: Pick<AgentSession, "sessionManager" | "getTodoPhases">, edit: TodoEdit): TodoEditResult {
+/** Like a `todo` call, a save writes the host list and the plugin's notes; an edit leaves the host list's content unchanged. */
+export function saveTodoEdit(session: HostListSession, edit: TodoEdit): TodoEditResult {
 	const applied = applyTodoEdit(liveState(session), edit);
 	if (applied.kind === "rejected") return applied;
-	recordNotes(session, applied.state);
+	commitTodoState(session, applied.state);
 	return { kind: "saved", state: applied.state };
 }

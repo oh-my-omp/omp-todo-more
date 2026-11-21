@@ -3,7 +3,8 @@ import { branchFacts } from "./branch.ts";
 import type { ModelRef } from "./models.ts";
 import { hostPhases, joinHost, TODO_MORE_NOTES_TYPE, type TodoMoreState, toNotes } from "./state.ts";
 
-export type TodoSession = Pick<AgentSession, "sessionManager" | "setTodoPhases" | "getTodoPhases"> & {
+export type HostListSession = Pick<AgentSession, "sessionManager" | "setTodoPhases" | "getTodoPhases">;
+export type TodoSession = HostListSession & {
 	readonly model: ModelRef | undefined;
 };
 
@@ -24,7 +25,7 @@ export function recordNotes(session: Pick<AgentSession, "sessionManager">, next:
 }
 
 /** Writes the host list and the plugin's part of it, with no await between. */
-export function commitTodoState(session: TodoSession, next: TodoMoreState): void {
+export function commitTodoState(session: HostListSession, next: TodoMoreState): void {
 	recordNotes(session, next);
 	session.setTodoPhases(hostPhases(next));
 }

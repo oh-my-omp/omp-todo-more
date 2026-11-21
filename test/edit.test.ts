@@ -292,18 +292,22 @@ describe("saveTodoEdit", () => {
 		return { manager, session, state };
 	}
 
-	test("an explanation edit writes only the plugin's notes and leaves the host list alone", () => {
+	test("an explanation edit writes the host list once, unchanged, and the plugin's notes", () => {
 		const { manager, session, state } = seeded();
 		const hostBefore = session.getTodoPhases();
 		const writes: unknown[] = [];
 		const watched = {
 			sessionManager: manager,
 			getTodoPhases: session.getTodoPhases,
-			setTodoPhases: (phases: unknown) => writes.push(phases),
+			setTodoPhases: (phases: Parameters<typeof session.setTodoPhases>[0]) => {
+				writes.push(phases);
+				session.setTodoPhases(phases);
+			},
 		};
 		const result = saveTodoEdit(watched, { kind: "explain", title: "Verify resume", explanation: "Inspect every saved field" });
 		expect(result.kind).toBe("saved");
-		expect(writes).toEqual([]);
+		expect(writes).toHaveLength(1);
+		expect(writes[0]).toEqual(hostBefore);
 		expect(session.getTodoPhases()).toEqual(hostBefore);
 		const entries = manager.getBranch().filter((entry) => entry.type === "custom");
 		expect(entries.map((entry) => entry.type === "custom" && entry.customType)).toEqual([TODO_MORE_NOTES_TYPE, TODO_MORE_NOTES_TYPE]);

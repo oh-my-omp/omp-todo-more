@@ -86,7 +86,7 @@ const DROP: CutOffStep = { kind: "drop" };
 
 const ownSession = (ctx: ExtensionContext): AgentSession | undefined => sessionOf(ctx.agent.id);
 
-const facts = (ctx: ExtensionContext): BranchFacts => branchFacts(contextBranch(ctx));
+const facts = (ctx: Pick<ExtensionContext, "sessionManager">): BranchFacts => branchFacts(contextBranch(ctx));
 
 function todoToolRef(session: AgentSession): string {
 	const tool = session.getToolByName(TODO_TOOL);
@@ -403,7 +403,10 @@ function cutOffAnswer(message: AgentMessage | undefined): AssistantMessage | und
 }
 
 /** Whether the list still has open items and the host's `todo.*` settings allow one more reminder. */
-function continuation(session: AgentSession, ctx: ExtensionContext): Completion {
+export function continuation(
+	session: Pick<AgentSession, "getPlanModeState" | "settings" | "getActiveToolNames" | "wakeSources" | "sessionManager" | "getTodoPhases">,
+	ctx: Pick<ExtensionContext, "sessionManager">,
+): Completion {
 	if (session.getPlanModeState()?.enabled === true) return SILENT;
 	if (!cfgTodoEnabled.get(session.settings) || !cfgTodoReminders.get(session.settings)) return SILENT;
 	if (!session.getActiveToolNames().includes(TODO_TOOL)) return SILENT;

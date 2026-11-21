@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent";
+import { AgentSession, Settings } from "@oh-my-pi/pi-coding-agent";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { contextMessages } from "../src/reminders.ts";
+import { contextMessages, continuation } from "../src/reminders.ts";
 import { runTodo } from "../src/tool.ts";
 import { hostSession, runPersisted } from "./host.ts";
 
@@ -40,5 +40,36 @@ describe("host reminders carry the plugin's content", () => {
 		const { host, session: own } = session(manager);
 		await runPersisted(host, { input: valid });
 		expect(JSON.stringify(contextMessages([nudge()], own, manager))).toContain("1 todo item still open");
+	});
+});
+
+describe("the continuation reminder reads the live host list", () => {
+	// `continuation` runs at `agent_end`, before the last `todo` result has reached the branch.
+	function stopped(manager: SessionManager) {
+		const host = hostSession(manager);
+		const own = {
+			sessionManager: manager,
+			getTodoPhases: host.getTodoPhases,
+			getPlanModeState: () => undefined,
+			getActiveToolNames: () => ["todo"],
+			settings: Settings.isolated(),
+			wakeSources: undefined,
+		};
+		return { host, own, ctx: { sessionManager: manager } };
+	}
+
+	test("a todo call whose result is not on the branch yet still gets its open items reminded", async () => {
+		const manager = SessionManager.inMemory("/tmp/todo-more-continuation-tests");
+		const { host, own, ctx } = stopped(manager);
+		await runTodo(host, { input: valid });
+		const completion = continuation(own, ctx);
+		expect(completion.kind).toBe("remind");
+		expect(completion.kind === "remind" ? completion.text : "").toContain("You stopped with 1 incomplete todo item(s):\n- P\n  - t");
+	});
+
+	test("an empty host list stays silent", () => {
+		const manager = SessionManager.inMemory("/tmp/todo-more-continuation-tests-empty");
+		const { own, ctx } = stopped(manager);
+		expect(continuation(own, ctx)).toEqual({ kind: "silent" });
 	});
 });
