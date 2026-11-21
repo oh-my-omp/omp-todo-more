@@ -6,13 +6,13 @@ import { formatTodoParseError, previewTodo, type TodoCommand, type TodoPreview, 
 import {
 	commitScopeSchema,
 	commitScopeText,
-	TODO_STATUSES,
+	persistedStatusSchema,
 	type TodoMoreSnapshot,
 	type TodoStatus,
 	todoGoalSchema,
 	todoMoreSnapshotSchema,
 } from "./state.ts";
-import { OPS, RESULT_OPS } from "./tool.ts";
+import { OPS, type Op, RESULT_OPS } from "./tool.ts";
 
 const itemParamSchema = z.object({
 	title: z.string(),
@@ -20,29 +20,40 @@ const itemParamSchema = z.object({
 	estimatedMinutes: z.number(),
 });
 
+// Results written before BLOCK and UNBLOCK were removed still name those operations; they are dropped where a result is read.
+const LEGACY_OPS = ["block", "unblock"] as const;
+type LegacyOp = (typeof LEGACY_OPS)[number];
+const isLegacyOp = (op: string): op is LegacyOp => (LEGACY_OPS as readonly string[]).includes(op);
+const currentOp = (op: Op | LegacyOp): op is Op => !isLegacyOp(op);
+
 const changeSchema = z.object({
-	op: z.enum(OPS),
+	op: z.enum([...OPS, ...LEGACY_OPS]),
 	goal: todoGoalSchema.optional(),
 	list: z.array(z.object({ phase: z.string(), items: z.array(itemParamSchema) })).optional(),
 	task: z.string().optional(),
 	phase: z.string().optional(),
 	items: z.array(itemParamSchema).optional(),
-	reason: z.string().optional(),
 	explanation: z.string().optional(),
 	estimatedMinutes: z.number().optional(),
 	commit: z.object({ scope: commitScopeSchema, message: z.string() }).optional(),
 });
 
+type Change = z.infer<typeof changeSchema>;
+
 export const detailsSchema = z.object({
-	op: z.enum(RESULT_OPS).optional(),
-	operations: z.array(z.enum(OPS)).optional(),
-	changes: z.array(changeSchema).optional(),
-	phases: z.array(
-		z.object({
-			name: z.string(),
-			tasks: z.array(z.object({ content: z.string(), status: z.enum(TODO_STATUSES), blocker: z.string().optional() }).passthrough()),
-		}),
-	),
+	op: z
+		.enum([...RESULT_OPS, ...LEGACY_OPS])
+		.optional()
+		.transform((op) => (op === undefined || isLegacyOp(op) ? undefined : op)),
+	operations: z
+		.array(z.enum([...OPS, ...LEGACY_OPS]))
+		.optional()
+		.transform((operations) => operations?.filter(currentOp)),
+	changes: z
+		.array(changeSchema)
+		.optional()
+		.transform((changes) => changes?.filter((change): change is Change & { op: Op } => currentOp(change.op))),
+	phases: z.array(z.object({ name: z.string(), tasks: z.array(z.object({ content: z.string(), status: persistedStatusSchema })) })),
 	storage: z.enum(["session", "memory"]),
 	completedTasks: z.array(z.object({ phase: z.string(), content: z.string() })).optional(),
 	todoMore: z.literal(true),
@@ -131,13 +142,7 @@ function commandPreviewLines(command: TodoCommand): string[] {
 			];
 		case "drop":
 		case "rm":
-		case "unblock":
 			return [`${command.kind.toUpperCase()} ${previewTarget(command.target)}`];
-		case "block":
-			return [
-				`BLOCK ${previewTarget(command.target)}`,
-				...(command.reason === undefined ? [] : [`  ${tr("Reason", "原因")}: ${command.reason}`]),
-			];
 		case "view":
 			return [`VIEW ${tr("current todos", "当前待办")}`];
 		default: {
@@ -313,8 +318,6 @@ export function resultView(details: ReadTodoDetails, args: unknown, expanded: bo
 					break;
 				case "done":
 				case "drop":
-				case "block":
-				case "unblock":
 					if (change.task !== undefined) {
 						touchedTasks.add(change.task);
 					} else if (change.phase !== undefined) {
@@ -356,8 +359,6 @@ export function resultView(details: ReadTodoDetails, args: unknown, expanded: bo
 					break;
 				case "done":
 				case "drop":
-				case "block":
-				case "unblock":
 					switch (command.target.kind) {
 						case "task":
 							touchedTasks.add(command.target.title);
@@ -420,8 +421,6 @@ function completionLabel(text: string, transitioned: boolean, frame: number | un
 export function compactTodoLabel(item: Item): string {
 	const parts = [forDisplay(item.title), item.time.kind === "estimated" ? `${item.time.minutes}m` : tr("no estimate", "无估计")];
 	if (item.explanation === null) parts.push(tr("[explanation missing]", "[缺少说明]"));
-	if (item.status === "blocked")
-		parts.push(item.blocker ? `${tr("blocked", "已阻塞")}: ${forDisplay(item.blocker)}` : tr("blocked", "已阻塞"));
 	if (item.commit !== undefined) parts.push(item.commit.sha.slice(0, 7));
 	return parts.join(" · ");
 }
@@ -435,8 +434,6 @@ function formatItem(item: Item, theme: Theme, transitioned: boolean, frame: numb
 			return theme.fg("accent", `${theme.checkbox.unchecked} ${text}`);
 		case "abandoned":
 			return theme.fg("error", `${theme.checkbox.unchecked} ${strike(text)}`);
-		case "blocked":
-			return theme.fg("warning", `${theme.checkbox.unchecked} ${text}`);
 		case "pending":
 			return theme.fg("dim", `${theme.checkbox.unchecked} ${text}`);
 		default: {

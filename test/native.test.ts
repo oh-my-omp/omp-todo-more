@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { ensureThemeSync, type NativeChild, type NativeNode, theme } from "@oh-my-pi/pi-tui";
 import { describeSnapshot, describeTodoHud, describeTodoResult } from "../src/native.ts";
 import { renderReminder } from "../src/reminders.ts";
+import { detailsSchema } from "../src/render.ts";
 import type { TodoMoreSnapshot, TodoStatus } from "../src/state.ts";
 import type { TodoMoreDetails } from "../src/tool.ts";
 
@@ -47,8 +48,7 @@ const snapshot: TodoMoreSnapshot = {
 				{
 					title: "Check runtime",
 					explanation: "Exercise the real native consumer",
-					status: "blocked",
-					blocker: "Waiting for the terminal",
+					status: "pending",
 					time: { kind: "estimated", budgetId: "runtime-budget", minutes: 12, elapsedMs: 120_000, runningSince: null },
 				},
 			],
@@ -96,7 +96,7 @@ function resultFor(more: TodoMoreSnapshot): Parameters<typeof describeTodoResult
 			storage: "session",
 			phases: more.phases.map((phase) => ({
 				name: phase.name,
-				tasks: phase.items.map((item) => ({ content: item.title, status: item.status === "blocked" ? "pending" : item.status })),
+				tasks: phase.items.map((item) => ({ content: item.title, status: item.status })),
 			})),
 			more,
 		},
@@ -114,7 +114,7 @@ function rows(children: readonly NativeChild[]) {
 }
 
 describe("native todo presentation", () => {
-	test("expanded disclosure preserves all goal fields, all five statuses, estimate notes, and both blocked explanation and reason", () => {
+	test("expanded disclosure preserves all goal fields, all four statuses, and estimate and explanation notes", () => {
 		const hud = describeTodoHud(snapshot, true);
 		if (hud === null) throw new Error("Expected a native HUD");
 		const body = [hud];
@@ -156,8 +156,8 @@ describe("native todo presentation", () => {
 						},
 						{
 							text: "Check runtime",
-							status: "blocked",
-							note: "Estimate: 12 min\nExplanation: Exercise the real native consumer\nBlocker: Waiting for the terminal",
+							status: "pending",
+							note: "Estimate: 12 min\nExplanation: Exercise the real native consumer",
 						},
 					],
 				},
@@ -246,23 +246,18 @@ describe("native todo HUD", () => {
 	test.each([
 		{
 			name: "first in_progress takes precedence over pending and later in_progress",
-			statuses: ["pending", "in_progress", "in_progress", "completed", "abandoned", "blocked"],
+			statuses: ["pending", "in_progress", "in_progress", "completed", "abandoned", "pending"],
 			label: "Task 2 2/6",
 		},
 		{
 			name: "first pending takes precedence when no task is in_progress",
-			statuses: ["blocked", "pending", "pending", "completed"],
-			label: "Task 2 1/4",
+			statuses: ["pending", "pending", "completed"],
+			label: "Task 1 1/3",
 		},
 		{
 			name: "completed and abandoned tasks are both closed",
 			statuses: ["abandoned", "completed"],
 			label: "All done 2/2",
-		},
-		{
-			name: "blocked tasks keep the list open without becoming the primary title",
-			statuses: ["blocked", "completed", "abandoned"],
-			label: "Todos 2/3",
 		},
 	] satisfies { name: string; statuses: TodoStatus[]; label: string }[])("$name", ({ statuses, label }) => {
 		const hud = describeTodoHud(
@@ -292,7 +287,7 @@ describe("native todo HUD", () => {
 });
 
 describe("native result card", () => {
-	test("collapsed card shows only the objective, folds closed phases, and keeps estimate and blocker on each row", () => {
+	test("collapsed card shows only the objective, folds closed phases, and keeps estimates on each row", () => {
 		const body = resultBody(
 			resultFor({
 				goal: { objective: "Ship", measure: "Measured", doneWhen: "Done" },
@@ -302,10 +297,9 @@ describe("native result card", () => {
 						name: "Open",
 						items: [
 							{
-								title: "Blocked task",
+								title: "Waiting task",
 								explanation: "Waits",
-								status: "blocked",
-								blocker: "Waiting for review",
+								status: "pending",
 								time: { kind: "estimated", budgetId: "open-budget", minutes: 12, elapsedMs: 0, runningSince: null },
 							},
 						],
@@ -322,7 +316,7 @@ describe("native result card", () => {
 		).toContain("Objective: Ship");
 		expect(checklist(body).phases.map((phase) => phase.collapsed)).toEqual([true, false]);
 		expect(rows(body).map((item) => item.note)).toEqual([undefined, undefined]);
-		expect(rows(body)[1]?.text).toBe("Blocked task · 12m · blocked: Waiting for review");
+		expect(rows(body)[1]?.text).toBe("Waiting task · 12m");
 	});
 
 	test("expanded card restores every goal field and each row's explanation", () => {
@@ -490,8 +484,55 @@ describe("native historical todo results", () => {
 			"Implement the card · 25m",
 			"Inspect saved fields · 10m",
 			"Old approach · no estimate",
-			"Check runtime · 12m · blocked: Waiting for the terminal",
+			"Check runtime · 12m",
 		]);
 		expect(rows(historicalBody)[4]?.note).toBe("Explanation: Exercise the real native consumer");
+	});
+});
+
+describe("legacy persisted todo results", () => {
+	test("detailsSchema reads results written before block and unblock were removed", () => {
+		const raw = {
+			op: "batch",
+			operations: ["done", "block", "unblock", "explain"],
+			changes: [
+				{ op: "done", task: "Keep" },
+				{ op: "block", task: "Keep", reason: "Waiting for service" },
+				{ op: "unblock", task: "Keep" },
+				{ op: "explain", task: "Keep", explanation: "Updated" },
+			],
+			phases: [{ name: "Delivery", tasks: [{ content: "Keep", status: "blocked" }] }],
+			storage: "session",
+			todoMore: true,
+			more: {
+				goal: null,
+				phases: [
+					{
+						name: "Delivery",
+						items: [
+							{
+								title: "Keep",
+								explanation: "Persisted",
+								status: "blocked",
+								blocker: "Waiting for service",
+								time: { kind: "missing" },
+							},
+						],
+					},
+				],
+			},
+		};
+		const parsed = detailsSchema.safeParse(raw);
+		expect(parsed.success).toBe(true);
+		if (!parsed.success) throw new Error("Expected legacy result details to parse");
+		expect(parsed.data.operations).toEqual(["done", "explain"]);
+		expect(parsed.data.changes).toEqual([
+			{ op: "done", task: "Keep" },
+			{ op: "explain", task: "Keep", explanation: "Updated" },
+		]);
+		expect(parsed.data.phases[0]?.tasks[0]?.status).toBe("pending");
+		const item = parsed.data.more.phases[0]?.items[0];
+		expect(item?.status).toBe("pending");
+		expect(item !== undefined && "blocker" in item).toBe(false);
 	});
 });

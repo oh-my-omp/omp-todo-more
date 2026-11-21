@@ -149,8 +149,6 @@ export const SCENARIOS: readonly Scenario[] = [
 					call("todo", { input: "*** Begin Todo\nPHASE\n*** End Todo" }),
 					call("todo", { input: '*** Begin Todo\nDONE "t" ""\n*** End Todo' }),
 					call("todo", { input: '*** Begin Todo\nDONE "t" "s" "m" "x"\n*** End Todo' }),
-					call("todo", { input: "*** Begin Todo\nUNBLOCK ALL\n*** End Todo" }),
-					call("todo", { input: "*** Begin Todo\nBLOCK ALL\n*** End Todo" }),
 					call("todo", { input: '*** Begin Todo\nADD "t" "x" 150323855350\n*** End Todo' }),
 					call("todo", { input: '*** Begin Todo\nADD "t" "x" 0\n*** End Todo' }),
 					call("todo", { input: "*** Begin Todo\nSTART ?\n*** End Todo" }),
@@ -198,7 +196,7 @@ export const SCENARIOS: readonly Scenario[] = [
 	},
 	{
 		name: "todo-all-ops",
-		expect: ['"batch"', '"view"', "auto-advances", "a b", "Todo list cleared."],
+		expect: ['"batch"', '"view"', "auto-advances", "Todo list cleared."],
 		steps: [
 			{
 				kind: "prompt",
@@ -216,8 +214,6 @@ export const SCENARIOS: readonly Scenario[] = [
 					todo('DONE "Run tests"'),
 					todo('START "Write code"', 'DROP "Prep"'),
 					todo('PHASE "P2"', 'ADD "Late" "added later" 3'),
-					todo('BLOCK "Write code" "dep  a  b"'),
-					todo('UNBLOCK PHASE "Build"'),
 					todo("VIEW"),
 					say("Mutated."),
 				],

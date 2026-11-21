@@ -7,6 +7,7 @@ import {
 	estimatedMinutesSchema,
 	type ItemTime,
 	OVERTIME_TYPE,
+	recordOf,
 	stateOf,
 	TODO_MORE_ENTRY_TYPE,
 	type TodoItem,
@@ -29,7 +30,7 @@ const budget: Extract<ItemTime, { kind: "estimated" }> = {
 	runningSince: null,
 };
 
-type NativeTask = { content: string; status: TodoStatus; blocker?: string };
+type NativeTask = { content: string; status: TodoStatus };
 
 function customEntry(
 	id: string,
@@ -52,6 +53,15 @@ function nativeEdit(id: string, at: number, tasks: readonly NativeTask[], parent
 		},
 		parentId,
 	);
+}
+
+function messageEntry(
+	id: string,
+	at: number,
+	message: Extract<SessionEntry, { type: "message" }>["message"],
+	parentId: string | null = null,
+): Extract<SessionEntry, { type: "message" }> {
+	return { type: "message", id, parentId, timestamp: new Date(at).toISOString(), message };
 }
 
 function warningEntry(budgetId: string): Extract<SessionEntry, { type: "custom_message" }> {
@@ -119,34 +129,32 @@ describe("estimatedMinutesSchema", () => {
 });
 
 describe("active wall-time transitions", () => {
-	for (const pausedStatus of ["blocked", "pending"] as const) {
-		test(`${pausedStatus} pauses accumulated time until the item resumes`, () => {
-			const active = transitionTime(budget, "in_progress", epoch);
-			expect(active).toEqual({ ...budget, runningSince: epoch });
-			expect(elapsedTime(requireEstimate(active), epoch + 4_000)).toBe(5_250);
+	test("pending pauses accumulated time until the item resumes", () => {
+		const active = transitionTime(budget, "in_progress", epoch);
+		expect(active).toEqual({ ...budget, runningSince: epoch });
+		expect(elapsedTime(requireEstimate(active), epoch + 4_000)).toBe(5_250);
 
-			const paused = transitionTime(active, pausedStatus, epoch + 6_000);
-			expect(paused).toEqual({ ...budget, elapsedMs: 7_250 });
-			expect(elapsedTime(requireEstimate(paused), epoch + 25_000)).toBe(7_250);
+		const paused = transitionTime(active, "pending", epoch + 6_000);
+		expect(paused).toEqual({ ...budget, elapsedMs: 7_250 });
+		expect(elapsedTime(requireEstimate(paused), epoch + 25_000)).toBe(7_250);
 
-			const resumed = transitionTime(paused, "in_progress", epoch + 30_000);
-			expect(resumed).toEqual({ ...budget, elapsedMs: 7_250, runningSince: epoch + 30_000 });
-			expect(elapsedTime(requireEstimate(resumed), epoch + 35_000)).toBe(12_250);
-			expect(transitionTime(resumed, "completed", epoch + 35_000)).toEqual({ ...budget, elapsedMs: 12_250 });
-			expect(budget).toEqual({ kind: "estimated", budgetId: "runtime-budget", minutes: 1, elapsedMs: 1_250, runningSince: null });
-		});
-	}
+		const resumed = transitionTime(paused, "in_progress", epoch + 30_000);
+		expect(resumed).toEqual({ ...budget, elapsedMs: 7_250, runningSince: epoch + 30_000 });
+		expect(elapsedTime(requireEstimate(resumed), epoch + 35_000)).toBe(12_250);
+		expect(transitionTime(resumed, "completed", epoch + 35_000)).toEqual({ ...budget, elapsedMs: 12_250 });
+		expect(budget).toEqual({ kind: "estimated", budgetId: "runtime-budget", minutes: 1, elapsedMs: 1_250, runningSince: null });
+	});
 
 	test("repeated active transitions preserve the original running interval", () => {
 		const active = transitionTime(budget, "in_progress", epoch);
 		const repeated = transitionTime(active, "in_progress", epoch + 2_000);
 		expect(repeated).toEqual({ ...budget, runningSince: epoch });
 		expect(elapsedTime(requireEstimate(repeated), epoch + 3_000)).toBe(4_250);
-		expect(transitionTime(repeated, "blocked", epoch + 4_000)).toEqual({ ...budget, elapsedMs: 5_250 });
+		expect(transitionTime(repeated, "pending", epoch + 4_000)).toEqual({ ...budget, elapsedMs: 5_250 });
 	});
 
 	test("status transitions never invent an estimate for imported items", () => {
-		for (const status of ["in_progress", "blocked", "pending", "completed", "abandoned"] as const) {
+		for (const status of ["in_progress", "pending", "completed", "abandoned"] as const) {
 			expect(transitionTime({ kind: "missing" }, status, epoch)).toEqual({ kind: "missing" });
 		}
 	});
@@ -161,7 +169,7 @@ describe("branch timing replay", () => {
 					name: "Historical",
 					items: [
 						{ title, explanation: "Old explanation", status: "in_progress" },
-						{ title: "Waiting", explanation: null, status: "blocked", blocker: "External service" },
+						{ title: "Waiting", explanation: null, status: "pending" },
 					],
 				},
 			],
@@ -174,27 +182,98 @@ describe("branch timing replay", () => {
 			time: { kind: "missing" },
 		});
 		expect(requireItem(state, "Waiting").time).toEqual({ kind: "missing" });
-		expect(requireItem(state, "Waiting").blocker).toBe("External service");
-		const paused = nativeEdit("pause-historical", epoch + 5_000, [{ content: title, status: "blocked" }], historical.id);
+		const paused = nativeEdit("pause-historical", epoch + 5_000, [{ content: title, status: "pending" }], historical.id);
 		expect(requireItem(readTodoMore([historical, paused])).time).toEqual({ kind: "missing" });
+	});
+
+	test("a rich snapshot item saved as blocked reads as pending without its blocker and keeps its time", () => {
+		const time: Extract<ItemTime, { kind: "estimated" }> = {
+			kind: "estimated",
+			budgetId: "waiting-budget",
+			minutes: 6,
+			elapsedMs: 45_000,
+			runningSince: null,
+		};
+		const historical = customEntry("historical-blocked", epoch, TODO_MORE_ENTRY_TYPE, {
+			goal,
+			phases: [
+				{
+					name: "Historical",
+					items: [{ title: "Waiting", explanation: "Blocked earlier", status: "blocked", blocker: "External service", time }],
+				},
+			],
+		});
+
+		const record = recordOf(historical);
+		if (record?.kind !== "rich" || record.state.kind !== "list") throw new Error("Expected the legacy snapshot to read as a list");
+		const recorded = requireItem(record.state, "Waiting");
+		expect(recorded).toEqual({
+			title: "Waiting",
+			explanation: { kind: "explained", text: "Blocked earlier" },
+			status: "pending",
+			time,
+		});
+		expect("blocker" in recorded).toBe(false);
+
+		const item = requireItem(readTodoMore([historical]), "Waiting");
+		expect(item.status).toBe("pending");
+		expect("blocker" in item).toBe(false);
+		expect(item.time).toEqual(time);
+	});
+
+	test("native entries saved with a blocked task read back as pending", () => {
+		const snapshot = customEntry("snapshot", epoch, TODO_MORE_ENTRY_TYPE, toSnapshot(currentState()));
+		const edit = customEntry(
+			"blocked-edit",
+			epoch + 5_000,
+			USER_TODO_EDIT_CUSTOM_TYPE,
+			{ phases: [{ name: "Host edit", tasks: [{ content: title, status: "blocked" }] }] },
+			snapshot.id,
+		);
+		const editRecord = recordOf(edit);
+		expect(editRecord?.kind).toBe("native");
+		if (editRecord?.kind !== "native") throw new Error("Expected the native edit record");
+		expect(editRecord.phases[0]?.tasks[0]?.status).toBe("pending");
+		const afterEdit = requireItem(readTodoMore([snapshot, edit]));
+		expect(afterEdit.status).toBe("pending");
+		expect("blocker" in afterEdit).toBe(false);
+
+		const result = messageEntry(
+			"blocked-result",
+			epoch + 10_000,
+			{
+				role: "toolResult",
+				toolCallId: "todo-1",
+				toolName: "todo",
+				content: [{ type: "text", text: "Task updated" }],
+				details: { op: "update", phases: [{ name: "Host edit", tasks: [{ content: title, status: "blocked" }] }] },
+				isError: false,
+				timestamp: epoch + 10_000,
+			},
+			edit.id,
+		);
+		const resultRecord = recordOf(result);
+		expect(resultRecord?.kind).toBe("native");
+		if (resultRecord?.kind !== "native") throw new Error("Expected the native result record");
+		expect(resultRecord.phases[0]?.tasks[0]?.status).toBe("pending");
+		const afterResult = requireItem(readTodoMore([snapshot, edit, result]));
+		expect(afterResult.status).toBe("pending");
 	});
 
 	test("native edits use outer timestamps and retain budget identity through pause and resume", () => {
 		const snapshot = customEntry("snapshot", epoch, TODO_MORE_ENTRY_TYPE, toSnapshot(currentState()));
 		const repeated = nativeEdit("repeat", epoch + 2_000, [{ content: title, status: "in_progress" }], snapshot.id);
-		const blocked = nativeEdit("block", epoch + 6_000, [{ content: title, status: "blocked", blocker: "Await service" }], repeated.id);
-		const pending = nativeEdit("pending", epoch + 20_000, [{ content: title, status: "pending" }], blocked.id);
-		const resumed = nativeEdit("resume", epoch + 30_000, [{ content: title, status: "in_progress" }], pending.id);
+		const paused = nativeEdit("pause", epoch + 6_000, [{ content: title, status: "pending" }], repeated.id);
+		const stillPaused = nativeEdit("still-paused", epoch + 20_000, [{ content: title, status: "pending" }], paused.id);
+		const resumed = nativeEdit("resume", epoch + 30_000, [{ content: title, status: "in_progress" }], stillPaused.id);
 		const completed = nativeEdit("complete", epoch + 35_000, [{ content: title, status: "completed" }], resumed.id);
-		const branch: readonly SessionEntry[] = [snapshot, repeated, blocked, pending, resumed, completed];
+		const branch: readonly SessionEntry[] = [snapshot, repeated, paused, stillPaused, resumed, completed];
 
 		expect(requireItem(readTodoMore(branch.slice(0, 2))).time).toEqual({ ...budget, runningSince: epoch });
-		const blockedItem = requireItem(readTodoMore(branch.slice(0, 3)));
-		expect(blockedItem.time).toEqual({ ...budget, elapsedMs: 7_250 });
-		expect(blockedItem.blocker).toBe("Await service");
-		const pendingItem = requireItem(readTodoMore(branch.slice(0, 4)));
-		expect(pendingItem.time).toEqual({ ...budget, elapsedMs: 7_250 });
-		expect(pendingItem.blocker).toBeUndefined();
+		const pausedItem = requireItem(readTodoMore(branch.slice(0, 3)));
+		expect(pausedItem.time).toEqual({ ...budget, elapsedMs: 7_250 });
+		const stillPausedItem = requireItem(readTodoMore(branch.slice(0, 4)));
+		expect(stillPausedItem.time).toEqual({ ...budget, elapsedMs: 7_250 });
 		const resumedItem = requireItem(readTodoMore(branch.slice(0, 5)));
 		expect(resumedItem.time).toEqual({ ...budget, elapsedMs: 7_250, runningSince: epoch + 30_000 });
 		expect(elapsedTime(requireEstimate(resumedItem.time), epoch + 34_000)).toBe(11_250);
@@ -236,8 +315,7 @@ describe("branch timing replay", () => {
 					{
 						title: "Verify results",
 						explanation: { kind: "missing" },
-						status: "blocked",
-						blocker: "Wait for runtime",
+						status: "pending",
 						time: { ...budget, budgetId: "verification-budget", minutes: 4, elapsedMs: 30_000 },
 					},
 				],

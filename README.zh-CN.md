@@ -3,18 +3,18 @@
 [English](README.md) | 简体中文
 
 - **`todo` 工具**
-  - `todo` 工具注册 — 功能：注册名为 `todo` 的工具，遮蔽宿主同名内置工具，每次调用解析一份 Todo 文档为命令（`INIT`、`PHASE`、`ADD`、`START`、`DONE`、`DROP`、`RM`、`BLOCK`、`UNBLOCK`、`EXPLAIN`、`ESTIMATE`、`GOAL`、`VIEW`），作用于携带目标、逐项说明与分钟估算的分阶段列表。时机：在插件已加载的会话中，模型每次调用 `todo` 时。实例：`index.ts` 的 `pi.registerTool(TODO_TOOL_DEFINITION)`；一次调用形如 `*** Begin Todo\nINIT "objective" "measure" "doneWhen"\nPHASE "Implementation"\nADD "Implement the parser" "Accept complete documents" 20\n*** End Todo`。
+  - `todo` 工具注册 — 功能：注册名为 `todo` 的工具，遮蔽宿主同名内置工具，每次调用解析一份 Todo 文档为命令（`INIT`、`PHASE`、`ADD`、`START`、`DONE`、`DROP`、`RM`、`EXPLAIN`、`ESTIMATE`、`GOAL`、`VIEW`），作用于携带目标、逐项说明与分钟估算的分阶段列表。时机：在插件已加载的会话中，模型每次调用 `todo` 时。实例：`index.ts` 的 `pi.registerTool(TODO_TOOL_DEFINITION)`；一次调用形如 `*** Begin Todo\nINIT "objective" "measure" "doneWhen"\nPHASE "Implementation"\nADD "Implement the parser" "Accept complete documents" 20\n*** End Todo`。
   - 工具字段声明 — 功能：声明 `loadMode: "discoverable"`、`approval: "read"`、`strict: true`、`concurrency: "exclusive"` 与 `mergeCallAndResult: true`，使工具可被发现、严格校验、串行执行，且结果卡片替换调用卡片。时机：插件加载注册工具时固定。实例：`index.ts` 的 `TOOL_FIELDS`。
   - 说明与卡片渲染 — 功能：携带写明文档语法与拒绝规则的模型侧说明，以及 `describeCall`/`describeResult` 和 `renderCall`/`renderResult` 钩子，在 ANSI 与原生卡片中预览已接受的命令行和未完成的尾部。时机：每当提供 `todo` 时出现在 prompt 的 tools 部分，以及渲染 `todo` 调用或结果卡片时。实例：`src/tool.ts` 的 `DESCRIPTION`，`src/render.ts` 的 `renderTodoCall`/`renderTodoResult`。
   - 文档校验 — 功能：在应用任何内容之前校验整份文档，第一个错误即拒绝整个批次：JSON 引号字符串、唯一标题、`ADD "title" "explanation" <正整数分钟>` 受 `leafMaxMinutes` 上限约束、对已收到超时警告的条目拒绝 `ESTIMATE`。时机：每次 `todo` 调用，在任何状态变更之前。实例：`src/tool.ts` 的 `ruleErrors`/`overCap` 产生 `Task "…" estimate 90 min exceeds the 60-minute limit for one item`。
   - `xd://todo/protocol` — 功能：提供覆盖文档语法、选择器与完成提交的 `protocol` doc topic。时机：模型读取 `xd://todo` 或 `xd://todo/protocol` 时。实例：`src/topics.ts` 的 `todoDocTopics` 加载 `src/topics/todo-protocol.md`。
-  - `xd://todo/lifecycle` — 功能：提供覆盖规划、阻塞与时间预算的 `lifecycle` doc topic。时机：模型读取 `xd://todo` 或 `xd://todo/lifecycle` 时。实例：`src/topics.ts` 的 `todoDocTopics` 加载 `src/topics/todo-lifecycle.md`。
+  - `xd://todo/lifecycle` — 功能：提供覆盖规划、等待与时间预算的 `lifecycle` doc topic。时机：模型读取 `xd://todo` 或 `xd://todo/lifecycle` 时。实例：`src/topics.ts` 的 `todoDocTopics` 加载 `src/topics/todo-lifecycle.md`。
 - **完成时的 git 关联**
   - `DONE` 提交子句 — 功能：经宿主 git 绑定暂存并提交——一个字符串提交全部未提交改动，两个字符串分别是以空白分隔的路径范围与提交信息——把 sha/信息/范围记录在条目上，并拒绝脏检出中不带子句的 `DONE`。时机：在 `todo` 批次中执行 `DONE` 命令时。实例：`DONE "Render the preview" "src/render.ts" "Show streamed intent"`，由 `src/tool.ts` 的 `completeWithCommit` 与 `src/git.ts` 处理。
   - `Model:` trailer — 功能：为提交信息追加 `Model: <provider>/<model-id>` trailer，每个自上次 todo 提交以来本提交会话运行过的模型一个，外加当前模型，各一次、按首次使用顺序。时机：每次 `DONE` 产生提交时。实例：`src/models.ts` 的 `withModelTrailers`；用 `git log --format='%(trailers:key=Model,valueonly)'` 读回。
   - 父级工作树豁免 — 功能：豁免工作树即其父级工作树的子代理（经 `ctx.agent.parentId` 找到）的提交义务与脏树拒绝，因为该工作树由父级整合。时机：`task:*` 子代理执行每个 `DONE` 时。实例：`index.ts` 的 `parentCwdOf`，工作树共享比较见 `src/git.ts`。
 - **会话分支上的列表状态**
-  - 快照条目与宿主投影 — 功能：每次接受的变更向会话分支追加一条完整 `mouriya.omp.todo-more` 快照并确认被接受，再把宿主投影（标题为内容、四种状态、blocked 视为 pending）推入 `TodoTracker`，使宿主 HUD、`/todo`、再水合与持久化继续工作。时机：每次被接受的 `todo` 调用与 GUI 保存之后。实例：`src/commit.ts` 的 `appendCustomEntry(TODO_MORE_ENTRY_TYPE, toSnapshot(next))` 与 `session.setTodoPhases(hostPhases(next))`。
+  - 快照条目与宿主投影 — 功能：每次接受的变更向会话分支追加一条完整 `mouriya.omp.todo-more` 快照并确认被接受，再把宿主投影（标题为内容、相同的四种状态）推入 `TodoTracker`，使宿主 HUD、`/todo`、再水合与持久化继续工作。时机：每次被接受的 `todo` 调用与 GUI 保存之后。实例：`src/commit.ts` 的 `appendCustomEntry(TODO_MORE_ENTRY_TYPE, toSnapshot(next))` 与 `session.setTodoPhases(hostPhases(next))`。
   - 分支折叠 — 功能：每次读取都在分支条目上向前折叠——按标题并入宿主的 `user_todo_edit` 记录（`/todo`、RPC `set_todos`、子代理自动完成），把新标题标记为缺少说明与时钟——并为每个 session manager 保留一个增量累加器。时机：工具、提醒、超时或 UI 每次读取列表时。实例：`src/branch.ts` 的 `foldEntry`/`branchFacts`。
   - 时间跟踪 — 功能：跟踪每个条目 `in_progress` 墙钟时间并排除 `ask` 等待，为每个 estimate 记录预算 id，使超时警告在重新估算后仍锁定该预算身份。时机：每次分支折叠与每次超时检查时。实例：`src/state.ts` 的 `elapsedTime`/`transitionTime`，等待从 `tool_execution_start` 记录折叠，见 `src/branch.ts`。
 - **编辑型子代理中的 `todo` 恢复**

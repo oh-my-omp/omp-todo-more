@@ -15,12 +15,9 @@ export const customFormat = {
     | "ESTIMATE" SP string SP MINUTES LF
     | "DONE" SP done LF
     | ("DROP" | "RM") SP target LF
-    | "UNBLOCK" SP block_target LF
-    | "BLOCK" SP block_target (SP string)? LF
     | "VIEW" LF
 ?done: target | target SP string | target SP string SP string
 ?target: string | "PHASE" SP string | "ALL"
-?block_target: string | "PHASE" SP string
 string: /"(?:[^"\\\x00-\x1f]|\\(?:["\\\/bfnrt]|u[0-9a-fA-F]{4}))*"/
 MINUTES: /[1-9][0-9]*/
 SP: /[ \t]+/
@@ -38,8 +35,6 @@ export type TodoCommand =
 	| { kind: "estimate"; title: string; estimatedMinutes: number }
 	| { kind: "done"; target: TodoTarget; commit?: TodoCommitClause }
 	| { kind: "drop" | "rm"; target: TodoTarget }
-	| { kind: "unblock"; target: Exclude<TodoTarget, { kind: "all" }> }
-	| { kind: "block"; target: Exclude<TodoTarget, { kind: "all" }>; reason?: string }
 	| { kind: "view" };
 export type TodoProgram = { kind: "ok"; commands: TodoCommand[] } | { kind: "invalid"; message: string };
 type TodoLineError =
@@ -215,20 +210,6 @@ function parseLine(line: string): ParsedLine {
 			if (target) {
 				const kind = { DROP: "drop", RM: "rm" } as const;
 				return { kind: "ok", command: { kind: kind[head.value], target } };
-			}
-			break;
-		}
-		case "UNBLOCK": {
-			const target = targetOf(args);
-			if (target && target.kind !== "all") return { kind: "ok", command: { kind: "unblock", target } };
-			break;
-		}
-		case "BLOCK": {
-			const width = args[0]?.kind === "word" && args[0].value === "PHASE" ? 2 : 1;
-			const target = targetOf(args.slice(0, width));
-			const reason = args[width];
-			if (target && target.kind !== "all" && (args.length === width || (args.length === width + 1 && reason?.kind === "string"))) {
-				return { kind: "ok", command: { kind: "block", target, ...(reason?.kind === "string" ? { reason: reason.value } : {}) } };
 			}
 			break;
 		}
