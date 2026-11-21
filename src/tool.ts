@@ -697,6 +697,8 @@ export async function runTodo(
 	const now = Date.now();
 	const waits = facts.waits;
 	const rules: BudgetRules = { leafMaxMinutes, overtimeWarned: facts.overtimeWarned };
+	// Every step is checked and applied before any DONE commits: a later rejected step must not leave a commit behind.
+	const completions: { clause: TodoCommitClause | undefined; closed: WorkItem[] }[] = [];
 	for (const params of batch.params) {
 		const alreadyCompleted =
 			params.op === "done"
@@ -716,15 +718,16 @@ export async function runTodo(
 			const closed = phases
 				.flatMap((phase) => phase.items)
 				.filter((item) => item.status === "completed" && !alreadyCompleted.has(item.title));
-			if (closed.length > 0) {
-				const step = await completeWithCommit(session, params.commit, closed, parentCwd, agent);
-				if (step.kind === "refused") {
-					return result(session, previous, formatSummary(previous, [step.message], true), { op, operations: ops, isError: true });
-				}
-				if (step.note !== undefined) notes.push(step.note);
-			}
+			if (closed.length > 0) completions.push({ clause: params.commit, closed });
 		}
 		next = settleStep(phases, next, params, waits, now);
+	}
+	for (const completion of completions) {
+		const step = await completeWithCommit(session, completion.clause, completion.closed, parentCwd, agent);
+		if (step.kind === "refused") {
+			return result(session, previous, formatSummary(previous, [step.message], true), { op, operations: ops, isError: true });
+		}
+		if (step.note !== undefined) notes.push(step.note);
 	}
 	commitTodoState(session, next);
 	const summary = formatSummary(next, [], false);

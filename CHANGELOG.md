@@ -19,6 +19,10 @@
 - Removed the handling of list changes made outside the plugin's `todo` tool and `/todo-more` editor: the plugin no longer reads `user_todo_edit` entries or other `todo` results written by someone else, and the overtime timer no longer wraps `session.commitTodoPhases`.
 - Removed the plugin settings `reminders`, `remindersMax` and `eager`; the plugin no longer switches off omp's `todo.reminders` and `todo.eager` in each session, so the values set in `/settings` apply. Set them there instead (`leafMaxMinutes` stays a plugin setting).
 
+### Fixed
+
+- A `todo` document rejected for a syntax, target or rule error no longer leaves behind the git commit of a `DONE` clause earlier in the same document: every step is checked before any `DONE` commits, so the rejected document's changes stay uncommitted and the item stays open, as the error says.
+
 ## [0.2.3] - 2026-11-21
 
 ### Changed
