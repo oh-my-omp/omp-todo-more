@@ -273,13 +273,11 @@ export const SCENARIOS: readonly Scenario[] = [
 		name: "done-commit",
 		expect: [
 			"Model: parity/script",
-			"Committed",
-			"uncommitted work",
+			'feat: finish t1\\" (a.txt)',
+			"would leave this agent's uncommitted work in",
 			"matches no changed path",
 			"committed nothing",
 			"none of the uncommitted changes are this agent's",
-			"feat: finish t1",
-			"feat: finish t5",
 		],
 		setup: "git init -q && printf 'one\\n' > a.txt && git add . && git commit -qm seed",
 		steps: [
@@ -318,7 +316,7 @@ export const SCENARIOS: readonly Scenario[] = [
 			{
 				kind: "prompt",
 				text: "Finish t2 and t3.",
-				turns: [todo('DONE "t2" "b.txt" "feat: finish t2"'), todo('DONE "t3" "feat: finish t3"'), say("Committed both.")],
+				turns: [todo('DONE "t2" "a.txt b.txt" "feat: finish t2"'), todo('DONE "t3" "feat: finish t3"'), say("Committed both.")],
 			},
 			{
 				kind: "prompt",
@@ -345,7 +343,7 @@ export const SCENARIOS: readonly Scenario[] = [
 	},
 	{
 		name: "done-commit-hook-fail",
-		expect: ["git commit failed", "hook rejects", "feat: t1", "Commit:"],
+		expect: ["git commit failed", "hook rejects", "feat: t1\\\" (this agent's changes)"],
 		setup:
 			"git init -q && printf 'one\\n' > a.txt && git add . && git commit -qm seed && printf '#!/bin/sh\\necho hook rejects >&2\\nexit 1\\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit",
 		steps: [
