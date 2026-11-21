@@ -43,6 +43,11 @@ export function todo(...lines: string[]): ScriptedTurn {
 	return { toolCalls: [{ name: "todo", arguments: { input: ["*** Begin Todo", ...lines, "*** End Todo"].join("\n") } }] };
 }
 
+const writeTool = (path: string, content: string): { name: string; arguments: Record<string, unknown> } => ({
+	name: "write",
+	arguments: { path, content, i: `write ${path}` },
+});
+
 const say = (text: string): ScriptedTurn => ({ text });
 const child = (turn: ScriptedTurn): ScriptedTurn => ({ ...turn, child: true });
 
@@ -266,7 +271,16 @@ export const SCENARIOS: readonly Scenario[] = [
 	},
 	{
 		name: "done-commit",
-		expect: ["Model: parity/script", "Committed", "staged nothing", "uncommitted work", "committed nothing"],
+		expect: [
+			"Model: parity/script",
+			"Committed",
+			"uncommitted work",
+			"matches no changed path",
+			"committed nothing",
+			"none of the uncommitted changes are this agent's",
+			"feat: finish t1",
+			"feat: finish t5",
+		],
 		setup: "git init -q && printf 'one\\n' > a.txt && git add . && git commit -qm seed",
 		steps: [
 			{
@@ -286,7 +300,11 @@ export const SCENARIOS: readonly Scenario[] = [
 					say("Reminder turn."),
 				],
 			},
-			{ kind: "shell", command: "printf 'x\\n' > a.txt && printf 'y\\n' > b.txt" },
+			{
+				kind: "prompt",
+				text: "Write a.txt and b.txt with the write tool.",
+				turns: [calls(writeTool("a.txt", "x\n"), writeTool("b.txt", "y\n")), say("Written."), say("Reminder turn.")],
+			},
 			{
 				kind: "prompt",
 				text: "Try to finish t1 without a commit clause.",
@@ -300,24 +318,34 @@ export const SCENARIOS: readonly Scenario[] = [
 			{
 				kind: "prompt",
 				text: "Finish t2 and t3.",
-				turns: [todo('DONE "t2" "a.txt b.txt" "feat: finish t2"'), todo('DONE "t3" "feat: finish t3"'), say("Committed both.")],
+				turns: [todo('DONE "t2" "b.txt" "feat: finish t2"'), todo('DONE "t3" "feat: finish t3"'), say("Committed both.")],
 			},
-			{ kind: "shell", command: "printf 'z\\n' > c.txt" },
+			{
+				kind: "prompt",
+				text: "Write c.txt with the write tool.",
+				turns: [calls(writeTool("c.txt", "z\n")), say("Written."), say("Reminder turn.")],
+			},
 			{
 				kind: "prompt",
 				text: "Finish t4 with an unmatched scope, then the rest.",
 				turns: [
 					todo('DONE "t4" "zzz.txt" "feat: finish t4"'),
 					todo('DONE "t5" "feat: finish t5"', 'START "ghost"'),
-					todo("DONE ALL"),
 					say("Wrapped."),
+					say("Reminder turn."),
 				],
+			},
+			{ kind: "shell", command: "printf 'w\\n' > d.txt" },
+			{
+				kind: "prompt",
+				text: "Finish t4 while only a foreign change is uncommitted.",
+				turns: [todo('DONE "t4" "feat: finish t4"'), todo("DONE ALL"), say("Done.")],
 			},
 		],
 	},
 	{
 		name: "done-commit-hook-fail",
-		expect: ["git commit failed", "hook rejects"],
+		expect: ["git commit failed", "hook rejects", "feat: t1", "Commit:"],
 		setup:
 			"git init -q && printf 'one\\n' > a.txt && git add . && git commit -qm seed && printf '#!/bin/sh\\necho hook rejects >&2\\nexit 1\\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit",
 		steps: [
@@ -326,7 +354,11 @@ export const SCENARIOS: readonly Scenario[] = [
 				text: "Init in a repo whose hook fails.",
 				turns: [INIT1, say("Planned."), say("Reminder turn.")],
 			},
-			{ kind: "shell", command: "printf 'x\\n' > a.txt" },
+			{
+				kind: "prompt",
+				text: "Write a.txt with the write tool.",
+				turns: [calls(writeTool("a.txt", "x\n")), say("Written."), say("Reminder turn.")],
+			},
 			{
 				kind: "prompt",
 				text: "Try to finish t1.",
