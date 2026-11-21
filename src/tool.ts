@@ -2,7 +2,7 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
 import { type BranchFacts, branchFacts } from "./branch.ts";
-import { commitTodoState, type TodoSession } from "./commit.ts";
+import { commitTodoState, liveState, type TodoSession } from "./commit.ts";
 import { type AgentRef, commitCompletion, sharedWorktreeRoot, workState } from "./git.ts";
 import { participatingModels } from "./models.ts";
 import { customFormat, parametersSchema, parseTodo, type TodoCommand, type TodoCommitClause, type TodoTarget } from "./protocol.ts";
@@ -571,8 +571,7 @@ export type TodoPreview = { kind: "state"; state: TodoMoreState } | { kind: "rej
  * The state `raw` would leave behind `previous`, from the parse and rule checks `runTodo` runs and without executing its effects.
  * `rejected` means `batchOf` or `applyStep` fails, so `runTodo` fails too. `state` does not promise that `runTodo` succeeds: the preview
  * does not model `completeWithCommit` (a `DONE` that closes an item is refused while this agent has uncommitted work, or the session
- * keeps no change record to tell, and the `DONE` carries no commit clause, or when its commit fails) nor `commitTodoState` (the branch
- * write); both leave the list as it was.
+ * keeps no change record to tell, and the `DONE` carries no commit clause, or when its commit fails): that refusal leaves the list as it was.
  */
 export function previewTodo(
 	facts: Pick<BranchFacts, "waits" | "overtimeWarned">,
@@ -684,7 +683,7 @@ export async function runTodo(
 	agent: AgentRef = MAIN_AGENT,
 ): Promise<AgentToolResult<TodoMoreDetails>> {
 	const facts = branchFacts(session.sessionManager);
-	const previous = facts.state;
+	const previous = liveState(session);
 	const batch = batchOf(raw);
 	if (batch.kind === "invalid") return result(session, previous, batch.message, { isError: true });
 	const ops = batch.params.map((params) => params.op);
@@ -727,11 +726,7 @@ export async function runTodo(
 		}
 		next = settleStep(phases, next, params, waits, now);
 	}
-	const committed = commitTodoState(session, next);
-	if (committed.kind === "failed") {
-		const current = branchFacts(session.sessionManager).state;
-		return result(session, current, formatSummary(current, [committed.message], true), { op, operations: ops, isError: true });
-	}
+	commitTodoState(session, next);
 	const summary = formatSummary(next, [], false);
 	return result(session, next, notes.length === 0 ? summary : `${summary}\n${notes.join("\n")}`, {
 		op,

@@ -14,8 +14,8 @@
   - `Model:` trailer — 功能：为提交信息追加 `Model: <provider>/<model-id>` trailer，每个自上次 todo 提交以来本提交会话运行过的模型一个，外加当前模型，各一次、按首次使用顺序。时机：每次 `DONE` 产生提交时。实例：`src/models.ts` 的 `commitMessage`；用 `git log --format='%(trailers:key=Model,valueonly)'` 读回。
   - 父级工作树豁免 — 功能：豁免工作树即其父级工作树的子代理（经 `ctx.agent.parentId` 找到）的提交义务与未提交改动拒绝，因为该工作树由父级整合。时机：`task:*` 子代理执行每个 `DONE` 时。实例：`index.ts` 的 `parentCwdOf`，工作树共享比较见 `src/git.ts`。
 - **会话分支上的列表状态**
-  - 快照条目与宿主投影 — 功能：每次接受的变更向会话分支追加一条完整 `mouriya.omp.todo-more` 快照并确认被接受，再把宿主投影（标题为内容、相同的四种状态）推入 `TodoTracker`，使宿主 HUD、`/todo`、再水合与持久化继续工作。时机：每次被接受的 `todo` 调用与 GUI 保存之后。实例：`src/commit.ts` 的 `appendCustomEntry(TODO_MORE_ENTRY_TYPE, toSnapshot(next))` 与 `session.setTodoPhases(hostPhases(next))`。
-  - 分支折叠 — 功能：每次读取都在分支条目上向前折叠——按标题并入宿主的 `user_todo_edit` 记录（`/todo`、RPC `set_todos`、子代理自动完成），把新标题标记为缺少说明与时钟——并为每个 session manager 保留一个增量累加器。时机：工具、提醒、超时或 UI 每次读取列表时。实例：`src/branch.ts` 的 `foldEntry`/`branchFacts`。
+  - 宿主列表与说明记录 — 功能：列表的阶段、标题、顺序与状态只存在宿主的列表里（live 为 `session.getTodoPhases()`，分支上为最新 `todo` 结果的 `details.phases`），插件只把宿主存不下的部分——目标、条目说明、计时与提交记录——记为按阶段名与标题挂接的 `mouriya.omp.todo-more.notes` 条目；`todo` 调用写宿主列表，仅在说明记录变化时追加该条目；`/todo-more` 保存同样如此（`commitTodoState`），改目标或说明时宿主列表内容不变。在 `todo` 调用结束与其结果落到分支之间读取的读者（空列表 `edit` 门、规划快照、评审读取、停止时的提醒判断、尚未落盘的宿主提醒内容）读 `liveState`。时机：每次被接受的 `todo` 调用与 `/todo-more` 保存之后。实例：`src/commit.ts` 的 `commitTodoState`/`recordNotes`/`liveState`，`src/state.ts` 的 `joinHost`/`toNotes`。
+  - 分支折叠 — 功能：每次读取都在分支条目上向前折叠——把最新 `todo` 结果的宿主列表按阶段名与标题并入最新说明记录，把没有说明记录的宿主条目标记为缺少说明与时钟——并为每个 session manager 保留一个增量累加器。时机：提醒、UI 或超时事实每次读取列表时。实例：`src/branch.ts` 的 `foldEntry`/`branchFacts`。
   - 时间跟踪 — 功能：跟踪每个条目 `in_progress` 墙钟时间并排除 `ask` 等待，为每个 estimate 记录预算 id，使超时警告在重新估算后仍锁定该预算身份。时机：每次分支折叠与每次超时检查时。实例：`src/state.ts` 的 `elapsedTime`/`transitionTime`，等待从 `tool_execution_start` 记录折叠，见 `src/branch.ts`。
 - **编辑型子代理中的 `todo` 恢复**
   - 子代理 `todo` 恢复 — 功能：为启用工具中含 `edit` 但不含 `todo` 的子代理会话补回 `todo`，按规范顺序（内置工具按注册表顺序，其余按码点排序）写整份启用集使 fork 保持 prompt 缓存；工具受限会话经 `refreshRpcHostTools` 安装。时机：子代理会话每次模型调用之前，通过在其首个 `before_agent_start` 上挂接的 before-model-call 钩子。实例：`index.ts` 的 `guardSubagent`/`restoreTodo`，其中 `canonicalToolOrder` 来自 `omomp-shared/active-tools.ts`。
@@ -31,7 +31,7 @@
   - goal 模式 `<todo_context>` — 功能：把每条带宿主 todo 快照的 `goal-mode-context` 消息里的快照，换成该消息在分支中所处位置时插件更丰富的快照（目标、状态、说明、估算）。时机：此类消息在上下文中时的每次模型调用的 `context` 钩子。实例：`src/reminders.ts` 的 `contextMessages`/`goalTodoContext`。
   - 提醒渲染器 — 功能：把提醒事件渲染为一行事件头（未完成数 · 第几次/上限），使转录卡片不再重复列出 todo 条目。时机：转录渲染 `mouriya.omp.todo-more.reminder` 消息时。实例：`src/reminders.ts` 的 `pi.registerMessageRenderer(REMINDER_TYPE, renderReminder)`。
 - **超时警告**
-  - 超时截止定时器 — 功能：保持一个指向最近活动条目估算截止时间的定时器，在会话/分支事件、`todo`/`ask` 结果、`commitTodoPhases` 写入与轮次/运行结束时重新武装，`ask` 打开期间暂停。时机：从 `session_start`/`session_switch`/`session_branch`/`session_tree` 与每个改变列表的事件调度。实例：`src/overtime.ts` 的 `registerOvertime`/`reschedule`。
+  - 超时截止定时器 — 功能：保持一个指向最近活动条目估算截止时间的定时器，条目取自 live 宿主列表并带上说明记录里的计时，在会话/分支事件、`todo`/`ask` 结果与轮次/运行结束时重新武装，`ask` 打开期间暂停。时机：从 `session_start`/`session_switch`/`session_branch`/`session_tree` 与每个改变列表的事件调度。实例：`src/overtime.ts` 的 `registerOvertime`/`reschedule`。
   - 超时警告投递 — 功能：到点时按预算 id 发送一条 `mouriya.omp.todo-more.overtime` 消息——运行中作为 aside、空闲时作为不开轮次的可见消息——包在 `<system-reminder source="omp-todo-more/overtime">` delta 中，记录下的消息即分支折叠的持久警告事实。时机：被跟踪条目的 in_progress 墙钟时间超过其估算时。实例：`src/overtime.ts` 的正文 `SERIOUS: todo item "…" has exceeded its estimated time: estimate 60 min; elapsed 62.31 min of in_progress wall time.`，经 `createDeltaStream("omp-todo-more/overtime")` 发送。
 - **原生 UI 与 Tern 面板**
   - `todo-more.hud` 小组件 — 功能：在编辑器下方挂载实时 `TodoHud`，跟随被查看的会话——pill、进度及打开富 popover 的 disclosure——并在会话、分支与树跳转时重装。时机：`session_start`/`session_switch`/`session_branch`/`session_tree`。实例：`src/ui.ts` 的 `installHud`/widget key `todo-more.hud`。

@@ -7,6 +7,7 @@ import type { AgentSession, ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 import { createDeltaStream } from "../omomp-shared/context-delta.ts";
 import { branchFacts } from "./branch.ts";
+import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { sessionOf } from "./session.ts";
 import { elapsedTime, OVERTIME_TYPE } from "./state.ts";
@@ -14,7 +15,6 @@ import { elapsedTime, OVERTIME_TYPE } from "./state.ts";
 type DeadlineBinding = {
 	readonly ctx: ExtensionContext;
 	readonly session: AgentSession;
-	readonly restore: () => void;
 	timer?: { readonly handle: Timer; readonly deadline: number };
 };
 
@@ -42,7 +42,6 @@ export function registerOvertime(pi: ExtensionAPI): void {
 	const stop = (): void => {
 		if (active !== undefined) {
 			cancelTimer(active);
-			active.restore();
 			active = undefined;
 		}
 		pending.clear();
@@ -54,7 +53,7 @@ export function registerOvertime(pi: ExtensionAPI): void {
 			for (const budgetId of pending) {
 				if (facts.overtimeWarned.has(budgetId)) pending.delete(budgetId);
 			}
-			const state = facts.state;
+			const state = liveState(binding.session);
 			const now = Date.now();
 			const waiting = facts.waits.some((wait) => wait.end === null);
 			let nextDeadline: number | undefined;
@@ -123,19 +122,7 @@ export function registerOvertime(pi: ExtensionAPI): void {
 		stop();
 		const session = sessionOf(ctx.agent.id);
 		if (session === undefined) return;
-		const commit = session.commitTodoPhases;
-		const observed: typeof commit = (phases) => {
-			commit.call(session, phases);
-			changed();
-		};
-		session.commitTodoPhases = observed;
-		const binding: DeadlineBinding = {
-			ctx,
-			session,
-			restore: () => {
-				if (session.commitTodoPhases === observed) session.commitTodoPhases = commit;
-			},
-		};
+		const binding: DeadlineBinding = { ctx, session };
 		active = binding;
 		reschedule(binding);
 	};

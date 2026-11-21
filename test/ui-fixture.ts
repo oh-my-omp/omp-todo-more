@@ -2,9 +2,8 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { Theme, TUI } from "@oh-my-pi/pi-tui";
 import { readTodoMore } from "../src/branch.ts";
-import { toSnapshot } from "../src/state.ts";
-
-export const RICH_SNAPSHOT_TYPE = "mouriya.omp.todo-more";
+import { hostPhases, TODO_MORE_NOTES_TYPE } from "../src/state.ts";
+import { todoResultMessage } from "./host.ts";
 
 export type UiFixture = {
 	readonly manager: SessionManager;
@@ -111,15 +110,16 @@ export function fillBranch(manager: SessionManager, count: number): void {
 	const richUntil = count - Math.max(500, Math.floor(count * 0.08));
 	for (let i = 0; i < count; i++) {
 		if (i % 300 === 0 && i < richUntil) {
-			manager.appendCustomEntry(RICH_SNAPSHOT_TYPE, {
+			manager.appendCustomEntry(TODO_MORE_NOTES_TYPE, {
 				goal: { objective: "Ship it", measure: "Done", doneWhen: "Merged" },
-				phases: [
-					{
-						name: "Delivery",
-						items: [{ title: `Task ${i}`, explanation: `Work ${i}`, status: "in_progress", time: { kind: "missing" } }],
-					},
-				],
+				items: [{ phase: "Delivery", title: `Task ${i}`, explanation: `Work ${i}`, time: { kind: "missing" } }],
 			});
+			manager.appendMessage(
+				todoResultMessage(
+					{ op: "update", phases: [{ name: "Delivery", tasks: [{ content: `Task ${i}`, status: "in_progress" }] }] },
+					1_700_000_000_000 + i,
+				),
+			);
 		} else if (i % 311 === 0) {
 			manager.appendCustomEntry("tool_execution_start", {
 				toolCallId: `t-${i}`,
@@ -135,13 +135,9 @@ export function fillBranch(manager: SessionManager, count: number): void {
 }
 
 export function appendTodoChange(manager: SessionManager, title: string): void {
-	const snapshot = toSnapshot(readTodoMore(manager.getBranchView()));
-	const phases =
-		snapshot.phases.length === 0
-			? [{ name: "Delivery", items: [] }]
-			: snapshot.phases.map((phase) => ({ name: phase.name, items: [...phase.items] }));
-	const first = phases[0];
-	if (first === undefined) throw new Error("Expected at least one phase");
-	first.items.push({ title, explanation: "appended", status: "pending", time: { kind: "missing" } });
-	manager.appendCustomEntry(RICH_SNAPSHOT_TYPE, { goal: snapshot.goal, phases });
+	const phases = hostPhases(readTodoMore(manager.getBranchView()));
+	const first = phases[0] ?? { name: "Delivery", tasks: [] };
+	const rest = phases.slice(1);
+	const changed = [{ name: first.name, tasks: [...first.tasks, { content: title, status: "pending" as const }] }, ...rest];
+	manager.appendMessage(todoResultMessage({ op: "update", phases: changed }, Date.now()));
 }

@@ -1,8 +1,10 @@
 import { type SessionEntry, z } from "@oh-my-pi/pi-coding-agent";
-import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 
 export const TODO_MORE_ENTRY_TYPE = "mouriya.omp.todo-more";
+
+/** The plugin's own part of the list: goal, explanations, timers and commit records. Structure and statuses live in the host list. */
+export const TODO_MORE_NOTES_TYPE = `${TODO_MORE_ENTRY_TYPE}.notes`;
 
 export const TODO_MORE_RESULT_MARK = "todoMore";
 
@@ -129,26 +131,35 @@ export const todoMoreSnapshotSchema = z.object({
 });
 export type TodoMoreSnapshot = z.infer<typeof todoMoreSnapshotSchema>;
 
-const nativePhasesSchema = z.array(
+const itemNoteSchema = z.object({
+	phase: z.string(),
+	title: z.string(),
+	explanation: z.string().nullable(),
+	time: itemTimeSchema,
+	commit: commitRecordSchema.optional(),
+});
+
+/** What the host list cannot hold, attached to its items by phase name and title. */
+export const todoNotesSchema = z.object({ goal: todoGoalSchema.nullable(), items: z.array(itemNoteSchema) });
+export type TodoNotes = z.infer<typeof todoNotesSchema>;
+
+export const NO_NOTES: TodoNotes = { goal: null, items: [] };
+
+const hostPhasesSchema = z.array(
 	z.object({
 		name: z.string(),
 		tasks: z.array(z.object({ content: z.string(), status: persistedStatusSchema })),
 	}),
 );
-type NativePhases = z.infer<typeof nativePhasesSchema>;
 
-const userEditSchema = z.object({ phases: nativePhasesSchema }).passthrough();
-
-const nativeResultSchema = z
+const hostResultSchema = z
 	.object({
 		role: z.literal("toolResult"),
 		toolName: z.literal("todo"),
 		isError: z.boolean().optional(),
-		details: z.object({ op: z.string().optional(), phases: nativePhasesSchema }).passthrough(),
+		details: z.object({ op: z.string().optional(), phases: hostPhasesSchema }).passthrough(),
 	})
 	.passthrough();
-
-const markedDetailsSchema = z.object({ [TODO_MORE_RESULT_MARK]: z.literal(true) }).passthrough();
 
 export function itemCount(phases: readonly TodoPhase[]): number {
 	return phases.reduce((total, phase) => total + phase.items.length, 0);
@@ -183,63 +194,67 @@ export function toSnapshot(state: TodoMoreState): TodoMoreSnapshot {
 	}
 }
 
-function fromSnapshot(snapshot: TodoMoreSnapshot): TodoMoreState {
-	const goal: GoalState = snapshot.goal === null ? { kind: "missing" } : { kind: "set", goal: snapshot.goal };
-	const phases = snapshot.phases.map((phase) => ({
-		name: phase.name,
-		items: phase.items.map(
-			(item): TodoItem => ({
-				title: item.title,
-				explanation: item.explanation === null ? { kind: "missing" } : { kind: "explained", text: item.explanation },
-				status: item.status,
-				time: item.time,
-				...(item.commit === undefined ? {} : { commit: item.commit }),
-			}),
-		),
-	}));
-	return stateOf(goal, phases);
-}
-
-export type NativeRecord = { readonly kind: "native"; readonly phases: NativePhases; readonly at: number };
-
-export type ListRecord = { readonly kind: "rich"; readonly state: TodoMoreState } | NativeRecord;
+/** One record the list is read from: the plugin's notes, or the host list a `todo` result carried. */
+export type ListRecord =
+	| { readonly kind: "notes"; readonly notes: TodoNotes }
+	| { readonly kind: "phases"; readonly phases: HostTodoPhase[] };
 
 export function recordOf(entry: SessionEntry): ListRecord | undefined {
 	if (entry.type === "custom") {
-		if (entry.customType === TODO_MORE_ENTRY_TYPE) {
-			const parsed = todoMoreSnapshotSchema.safeParse(entry.data);
-			return parsed.success ? { kind: "rich", state: fromSnapshot(parsed.data) } : undefined;
-		}
-		if (entry.customType === USER_TODO_EDIT_CUSTOM_TYPE) {
-			const parsed = userEditSchema.safeParse(entry.data);
-			return parsed.success ? { kind: "native", phases: parsed.data.phases, at: Date.parse(entry.timestamp) } : undefined;
-		}
-		return undefined;
+		if (entry.customType !== TODO_MORE_NOTES_TYPE) return undefined;
+		const parsed = todoNotesSchema.safeParse(entry.data);
+		return parsed.success ? { kind: "notes", notes: parsed.data } : undefined;
 	}
 	if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.toolName !== "todo") return undefined;
-	const parsed = nativeResultSchema.safeParse(entry.message);
+	const parsed = hostResultSchema.safeParse(entry.message);
 	if (!parsed.success || parsed.data.isError === true || parsed.data.details.op === "view") return undefined;
-	if (markedDetailsSchema.safeParse(parsed.data.details).success) return undefined;
-	return { kind: "native", phases: parsed.data.details.phases, at: Date.parse(entry.timestamp) };
+	return { kind: "phases", phases: parsed.data.details.phases };
 }
 
-export function joinNative(phases: NativePhases, base: TodoMoreState, at: number, waits: readonly AskWait[]): TodoMoreState {
-	const known = new Map<string, TodoItem>();
-	if (base.kind === "list") for (const item of base.phases.flatMap((phase) => phase.items)) known.set(item.title, item);
+const noteKey = (phase: string, title: string): string => `${phase}\u0000${title}`;
+
+/** Structure and statuses come from the host list only; a note with no matching host item contributes nothing. */
+export function joinHost(phases: readonly HostTodoPhase[], notes: TodoNotes): TodoMoreState {
+	const known = new Map<string, TodoNotes["items"][number]>();
+	for (const note of notes.items) known.set(noteKey(note.phase, note.title), note);
 	const joined = phases.map((phase) => ({
 		name: phase.name,
 		items: phase.tasks.map((task): TodoItem => {
-			const previous = known.get(task.content);
+			const note = known.get(noteKey(phase.name, task.content));
 			return {
 				title: task.content,
-				explanation: previous?.explanation ?? { kind: "missing" },
-				time: transitionTime(previous?.time ?? { kind: "missing" }, task.status, at, waits),
+				explanation: note?.explanation == null ? { kind: "missing" } : { kind: "explained", text: note.explanation },
+				time: note?.time ?? { kind: "missing" },
 				status: task.status,
-				...(previous?.commit === undefined ? {} : { commit: previous.commit }),
+				...(note?.commit === undefined ? {} : { commit: note.commit }),
 			};
 		}),
 	}));
-	return stateOf(base.kind === "list" ? base.goal : { kind: "missing" }, joined);
+	return stateOf(notes.goal === null ? { kind: "missing" } : { kind: "set", goal: notes.goal }, joined);
+}
+
+export function toNotes(state: TodoMoreState): TodoNotes {
+	switch (state.kind) {
+		case "empty":
+			return NO_NOTES;
+		case "list":
+			return {
+				goal: state.goal.kind === "set" ? state.goal.goal : null,
+				items: state.phases.flatMap((phase) =>
+					phase.items.map((item) => ({
+						phase: phase.name,
+						title: item.title,
+						explanation: item.explanation.kind === "explained" ? item.explanation.text : null,
+						time: item.time,
+						...(item.commit === undefined ? {} : { commit: item.commit }),
+					})),
+				),
+			};
+		default: {
+			const unreachable: never = state;
+			throw new Error(`Unexpected todo-more state: ${String(unreachable)}`);
+		}
+	}
 }
 
 export function hostPhases(state: TodoMoreState): HostTodoPhase[] {

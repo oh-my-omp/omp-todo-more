@@ -16,6 +16,7 @@ import { isSilentAbort, isUserInterruptAbort } from "@oh-my-pi/pi-tui/chat/messa
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 import { tr } from "../omomp-shared/i18n.ts";
 import { type BranchFacts, type BranchSource, branchFacts, contextBranch, foldBranch } from "./branch.ts";
+import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { type CutOffWait, cutOffWait, quotaDeadline, quotaNoticeLine } from "./quota-wait.ts";
 import { sessionOf } from "./session.ts";
@@ -85,7 +86,7 @@ const DROP: CutOffStep = { kind: "drop" };
 
 const ownSession = (ctx: ExtensionContext): AgentSession | undefined => sessionOf(ctx.agent.id);
 
-const facts = (ctx: ExtensionContext): BranchFacts => branchFacts(contextBranch(ctx));
+const facts = (ctx: Pick<ExtensionContext, "sessionManager">): BranchFacts => branchFacts(contextBranch(ctx));
 
 function todoToolRef(session: AgentSession): string {
 	const tool = session.getToolByName(TODO_TOOL);
@@ -349,7 +350,7 @@ export function contextMessages(
 		if (reminder === undefined) continue;
 		entries ??= manager.getBranchView();
 		const at = entryIndexOf(entries, message);
-		current ??= branchFacts(manager).state;
+		current ??= liveState(session);
 		const state = at < 0 ? current : stateAtEntry(manager, entries, at);
 		const text = pluginContent(reminder, message, session, state);
 		if (text === undefined) continue;
@@ -402,19 +403,23 @@ function cutOffAnswer(message: AgentMessage | undefined): AssistantMessage | und
 }
 
 /** Whether the list still has open items and the host's `todo.*` settings allow one more reminder. */
-function continuation(session: AgentSession, ctx: ExtensionContext): Completion {
+export function continuation(
+	session: Pick<AgentSession, "getPlanModeState" | "settings" | "getActiveToolNames" | "wakeSources" | "sessionManager" | "getTodoPhases">,
+	ctx: Pick<ExtensionContext, "sessionManager">,
+): Completion {
 	if (session.getPlanModeState()?.enabled === true) return SILENT;
 	if (!cfgTodoEnabled.get(session.settings) || !cfgTodoReminders.get(session.settings)) return SILENT;
 	if (!session.getActiveToolNames().includes(TODO_TOOL)) return SILENT;
 	const branch = facts(ctx);
 	const max = cfgTodoRemindersMax.get(session.settings);
 	if (branch.remindersSinceUserMessage >= max) return SILENT;
-	if (branch.state.kind === "empty") return SILENT;
-	const open = actionableItems(branch.state);
+	const state = liveState(session);
+	if (state.kind === "empty") return SILENT;
+	const open = actionableItems(state);
 	if (open.length === 0) return SILENT;
 	if (session.wakeSources !== undefined) return SILENT;
 	const attempt = branch.remindersSinceUserMessage + 1;
-	return { kind: "remind", text: reminderText(branch.state, open, attempt, max), details: reminderDetails(open, attempt, max) };
+	return { kind: "remind", text: reminderText(state, open, attempt, max), details: reminderDetails(open, attempt, max) };
 }
 
 export function registerReminders(pi: ExtensionAPI): void {

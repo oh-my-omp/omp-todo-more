@@ -11,7 +11,8 @@ import { readTodoMore } from "../src/branch.ts";
 import type { TodoSession } from "../src/commit.ts";
 import type { ModelRef } from "../src/models.ts";
 import { type CommitRecord, type TodoMoreSnapshot, toSnapshot } from "../src/state.ts";
-import { type ParentCwd, runTodo, type TodoMoreDetails } from "../src/tool.ts";
+import type { ParentCwd, TodoMoreDetails } from "../src/tool.ts";
+import { hostSession, runPersisted } from "./host.ts";
 
 const goal = {
 	objective: "Commit the work each item completes",
@@ -67,11 +68,11 @@ async function sessionManagerFor(cwd: string, journaled: boolean): Promise<Sessi
 
 async function fixture(cwd: string, options: FixtureOptions = {}): Promise<Harness> {
 	const sessionManager = await sessionManagerFor(cwd, options.journaled ?? true);
-	const session: TodoSession = { sessionManager, setTodoPhases: () => {}, model: options.model };
+	const session = hostSession(sessionManager, options.model);
 	return {
 		cwd,
 		session,
-		call: (...lines: string[]) => runTodo(session, { input: document(...lines) }, options.parentCwd),
+		call: (...lines: string[]) => runPersisted(session, { input: document(...lines) }, options.parentCwd),
 		snapshot: (): TodoMoreSnapshot => toSnapshot(readTodoMore(sessionManager.getBranch())),
 		edit: async (file, content) => {
 			const path = join(cwd, file);

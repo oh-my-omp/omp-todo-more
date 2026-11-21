@@ -1,13 +1,10 @@
 import { z } from "@oh-my-pi/pi-coding-agent";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { tr } from "../omomp-shared/i18n.ts";
-import { branchFacts } from "./branch.ts";
-import { commitTodoState, type TodoCommitResult } from "./commit.ts";
-import { errorText } from "./errors.ts";
+import { commitTodoState, type HostListSession, liveState } from "./commit.ts";
 import { stateOf, type TodoGoal, type TodoMoreState, todoGoalSchema } from "./state.ts";
 
 export type TodoEdit = { kind: "set_goal"; goal: TodoGoal } | { kind: "explain"; title: string; explanation: string };
-export type TodoEditResult = TodoCommitResult | { kind: "rejected"; message: string };
+export type TodoEditResult = { kind: "saved"; state: TodoMoreState } | { kind: "rejected"; message: string };
 type AppliedEdit = { kind: "ok"; state: TodoMoreState } | { kind: "rejected"; message: string };
 const nonEmpty = z.string().refine((value) => value.trim().length > 0, "must not be empty");
 const editSchema = z.union([
@@ -53,16 +50,10 @@ export function applyTodoEdit(state: TodoMoreState, edit: TodoEdit): AppliedEdit
 	}
 }
 
-export function saveTodoEdit(session: AgentSession, edit: TodoEdit): TodoEditResult {
-	try {
-		const current = branchFacts(session.sessionManager).state;
-		const applied = applyTodoEdit(current, edit);
-		return applied.kind === "rejected" ? applied : commitTodoState(session, applied.state);
-	} catch (error) {
-		return {
-			kind: "failed",
-			stage: "persist",
-			message: `${tr("Cannot read the authority todo branch", "无法读取权威 Todo 分支")}: ${errorText(error)}`,
-		};
-	}
+/** Like a `todo` call, a save writes the host list and the plugin's notes; an edit leaves the host list's content unchanged. */
+export function saveTodoEdit(session: HostListSession, edit: TodoEdit): TodoEditResult {
+	const applied = applyTodoEdit(liveState(session), edit);
+	if (applied.kind === "rejected") return applied;
+	commitTodoState(session, applied.state);
+	return { kind: "saved", state: applied.state };
 }
