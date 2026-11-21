@@ -198,6 +198,22 @@ describe("the git association of a completion", () => {
 		expect(await git(harness.cwd, "status", "--porcelain")).toBe("M a.txt");
 	});
 
+	test("a document rejected after its DONE leaves no commit and the work uncommitted", async () => {
+		const harness = await fixture(await repository({ "a.txt": "one\n" }));
+		await harness.call(init, 'ADD "Implement" "Change the tracked file" 5');
+		const head = await git(harness.cwd, "rev-parse", "HEAD");
+		await harness.edit("a.txt", "two\n");
+
+		const result = await harness.call('DONE "Implement" "Implement the change"', 'START "ghost"');
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain('Task "ghost" not found');
+		expect(textOf(result)).not.toContain("Committed");
+		expect(itemOf(harness.snapshot(), "Implement").status).not.toBe("completed");
+		expect(itemOf(harness.snapshot(), "Implement").commit).toBeUndefined();
+		expect(await git(harness.cwd, "rev-parse", "HEAD")).toBe(head);
+		expect(await git(harness.cwd, "status", "--porcelain")).toBe("M a.txt");
+	});
+
 	test("a scoped clause commits every change in its paths and leaves the rest uncommitted", async () => {
 		const harness = await fixture(await repository({ "a.txt": "one\n", "b.txt": "one\n", "c.txt": "one\n" }));
 		await harness.call(init, 'ADD "Implement" "Change one tracked file" 5');

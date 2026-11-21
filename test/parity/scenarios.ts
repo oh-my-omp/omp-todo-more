@@ -329,6 +329,7 @@ export const SCENARIOS: readonly Scenario[] = [
 				turns: [
 					todo('DONE "t4" "zzz.txt" "feat: finish t4"'),
 					todo('DONE "t5" "feat: finish t5"', 'START "ghost"'),
+					todo('DONE "t5" "feat: finish t5"'),
 					say("Wrapped."),
 					say("Reminder turn."),
 				],
