@@ -1,7 +1,8 @@
 import { type Stats, statSync } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
-import { z, type zod } from "@oh-my-pi/pi-coding-agent";
+import type * as zod from "@oh-my-pi/omptype/zod";
+import { z } from "@oh-my-pi/omptype/zod";
 import { ptree } from "@oh-my-pi/pi-utils";
 
 export type TernPluginStage = "find" | "dir" | "list" | "install" | "link" | "reload" | "remove" | "unlink" | "verify";
