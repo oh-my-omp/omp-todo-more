@@ -18,7 +18,7 @@
   - 分支折叠 — 功能：每次读取都在分支条目上向前折叠——按标题并入宿主的 `user_todo_edit` 记录（`/todo`、RPC `set_todos`、子代理自动完成），把新标题标记为缺少说明与时钟——并为每个 session manager 保留一个增量累加器。时机：工具、提醒、超时或 UI 每次读取列表时。实例：`src/branch.ts` 的 `foldEntry`/`branchFacts`。
   - 时间跟踪 — 功能：跟踪每个条目 `in_progress` 墙钟时间并排除 `ask` 等待，为每个 estimate 记录预算 id，使超时警告在重新估算后仍锁定该预算身份。时机：每次分支折叠与每次超时检查时。实例：`src/state.ts` 的 `elapsedTime`/`transitionTime`，等待从 `tool_execution_start` 记录折叠，见 `src/branch.ts`。
 - **编辑型子代理中的 `todo` 恢复**
-  - 子代理 `todo` 恢复 — 功能：为启用工具中含 `edit` 但不含 `todo` 的子代理会话补回 `todo`，按规范顺序（内置工具按注册表顺序，其余按码点排序）写整份启用集使 fork 保持 prompt 缓存；工具受限会话经 `refreshRpcHostTools` 安装。时机：子代理会话每次模型调用之前，通过在其首个 `before_agent_start` 上挂接的 before-model-call 钩子。实例：`index.ts` 的 `guardSubagent`/`restoreTodo`/`canonicalToolOrder`。
+  - 子代理 `todo` 恢复 — 功能：为启用工具中含 `edit` 但不含 `todo` 的子代理会话补回 `todo`，按规范顺序（内置工具按注册表顺序，其余按码点排序）写整份启用集使 fork 保持 prompt 缓存；工具受限会话经 `refreshRpcHostTools` 安装。时机：子代理会话每次模型调用之前，通过在其首个 `before_agent_start` 上挂接的 before-model-call 钩子。实例：`index.ts` 的 `guardSubagent`/`restoreTodo`，其中 `canonicalToolOrder` 来自 `omomp-shared/active-tools.ts`。
 - **计划与提醒**
   - eager 前导 — 功能：当 `eager` 为 `preferred`（隐藏提醒）或 `always`（还强制具名 `todo` 工具选择）时在首个合资格 prompt 上要求制定分阶段 todo，自动压缩后列表为空时在下一个 prompt 重新发出提醒。时机：`before_agent_start` 钩子的 prompt 起始处，由 `auto_compaction_end` 武装。实例：`src/reminders.ts` 的 `eagerTodoPrelude`/`eagerTodoText`，文本 ``Before substantive work, create a phased todo. … You MUST call `todo` first in this turn.``。
   - 编辑守卫 — 功能：包装会话 `edit` 工具的 execute，使空 todo 列表下的调用以初始化提醒失败而不是执行编辑，每个工具实例只安装一次、在其批次运行前装好。时机：`session_start`、`before_agent_start` 与 `edit` 的 `tool_call`；检查本身在 `execute` 内运行。实例：`src/planning.ts` 的 `installEditGuard` 返回 `Todo is empty. Work phase … initialize with one complete Todo document`。

@@ -1,9 +1,10 @@
 import type { AgentTool, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { AgentSession, ExtensionAPI, ExtensionContext, ToolDefinition, ToolInfo } from "@oh-my-pi/pi-coding-agent";
+import type { AgentSession, ExtensionAPI, ExtensionContext, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import type { ToolRenderer } from "@oh-my-pi/pi-tui/tools/renderer";
 import { logger } from "@oh-my-pi/pi-utils";
+import { canonicalToolOrder } from "./omomp-shared/active-tools.ts";
 import { tr } from "./omomp-shared/i18n.ts";
 import { errorText } from "./src/errors.ts";
 import { describeTodoCall, describeTodoResult } from "./src/native.ts";
@@ -51,16 +52,6 @@ const parentCwdOf =
 async function executeTodo(session: AgentSession, params: unknown, ctx: ExtensionContext) {
 	const settings = await readSettings({ logger }, ctx);
 	return runTodo(session, params, parentCwdOf(ctx), settings.leafMaxMinutes);
-}
-
-function canonicalToolOrder(all: readonly ToolInfo[], names: Iterable<string>): string[] {
-	const requested = new Set(names);
-	const builtins = [
-		...new Set(all.filter((tool) => tool.sourceInfo.source === "builtin" && requested.has(tool.name)).map((tool) => tool.name)),
-	];
-	const builtinSet = new Set(builtins);
-	const others = [...requested].filter((name) => !builtinSet.has(name)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-	return [...builtins, ...others];
 }
 
 async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promise<void> {

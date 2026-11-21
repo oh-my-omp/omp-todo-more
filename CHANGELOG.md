@@ -5,6 +5,8 @@
 ### Changed
 
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
+- Subagents get `todo` back with the enabled tools in the shared canonical order (builtins in registry order, the rest by Unicode code point), the same order other omomp plugins write; the repository declares `omomp-shared/active-tools.ts`, so the check compares it with oh-my-omp/shared.
+- Todo card rendering, collapsed-row selection, phase numbering, text sanitizing and the session-exit/tool-start entry types now come from the host's exports instead of in-repo copies; the card looks the same.
 - Todo items now have four statuses: `pending`, `in_progress`, `completed`, `abandoned`. Items saved as `blocked` by earlier versions load as `pending` without their blocker text, keeping their time; earlier todo results that contain `BLOCK`/`UNBLOCK` changes still load, without those changes.
 
 ### Removed
