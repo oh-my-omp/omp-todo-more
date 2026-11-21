@@ -1,6 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { applyTodoEdit, type TodoEdit } from "../src/edit.ts";
-import { EMPTY, stateOf, type TodoGoal, type TodoItem, type TodoMoreState, type TodoPhase, toSnapshot } from "../src/state.ts";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { branchFacts, readTodoMore } from "../src/branch.ts";
+import { applyTodoEdit, saveTodoEdit, type TodoEdit } from "../src/edit.ts";
+import {
+	EMPTY,
+	hostPhases,
+	stateOf,
+	TODO_MORE_NOTES_TYPE,
+	type TodoGoal,
+	type TodoItem,
+	type TodoMoreState,
+	type TodoPhase,
+	toNotes,
+	toSnapshot,
+} from "../src/state.ts";
+import { appendStateResult, hostSession } from "./host.ts";
 
 const goal: TodoGoal = {
 	objective: "Ship editable todos",
@@ -264,5 +278,59 @@ describe("applyTodoEdit", () => {
 
 		expect(edited).toBe(state);
 		expect(toSnapshot(edited)).toEqual(before);
+	});
+});
+
+describe("saveTodoEdit", () => {
+	function seeded() {
+		const manager = SessionManager.inMemory("/tmp/todo-more-edit-tests");
+		const session = hostSession(manager);
+		const state = stateOf({ kind: "set", goal }, currentPhases());
+		session.setTodoPhases(hostPhases(state));
+		manager.appendCustomEntry(TODO_MORE_NOTES_TYPE, toNotes(state));
+		appendStateResult(manager, state, 1_800_000_000_000);
+		return { manager, session, state };
+	}
+
+	test("an explanation edit writes only the plugin's notes and leaves the host list alone", () => {
+		const { manager, session, state } = seeded();
+		const hostBefore = session.getTodoPhases();
+		const writes: unknown[] = [];
+		const watched = {
+			sessionManager: manager,
+			getTodoPhases: session.getTodoPhases,
+			setTodoPhases: (phases: unknown) => writes.push(phases),
+		};
+		const result = saveTodoEdit(watched, { kind: "explain", title: "Verify resume", explanation: "Inspect every saved field" });
+		expect(result.kind).toBe("saved");
+		expect(writes).toEqual([]);
+		expect(session.getTodoPhases()).toEqual(hostBefore);
+		const entries = manager.getBranch().filter((entry) => entry.type === "custom");
+		expect(entries.map((entry) => entry.type === "custom" && entry.customType)).toEqual([TODO_MORE_NOTES_TYPE, TODO_MORE_NOTES_TYPE]);
+		const edited = readTodoMore(manager.getBranch());
+		const item =
+			edited.kind === "list"
+				? edited.phases.flatMap((phase) => phase.items).find((candidate) => candidate.title === "Verify resume")
+				: undefined;
+		expect(item?.explanation).toEqual({ kind: "explained", text: "Inspect every saved field" });
+		expect(item?.status).toBe("pending");
+		expect(item?.time).toEqual(state.kind === "list" ? state.phases[0]?.items[1]?.time : undefined);
+	});
+
+	test("a goal edit replaces only the goal; an unchanged edit appends nothing", () => {
+		const { manager, session } = seeded();
+		const replacement: TodoGoal = { objective: "New", measure: "Measured", doneWhen: "Done" };
+		expect(saveTodoEdit(session, { kind: "set_goal", goal: replacement }).kind).toBe("saved");
+		const appended = manager.getBranch().length;
+		expect(branchFacts(manager).notes.goal).toEqual(replacement);
+		expect(saveTodoEdit(session, { kind: "set_goal", goal: replacement }).kind).toBe("saved");
+		expect(manager.getBranch()).toHaveLength(appended);
+	});
+
+	test("an edit on an empty list is rejected without any write", () => {
+		const manager = SessionManager.inMemory("/tmp/todo-more-edit-tests-empty");
+		const session = hostSession(manager);
+		expect(saveTodoEdit(session, { kind: "set_goal", goal })).toEqual({ kind: "rejected", message: "Todo list is empty." });
+		expect(manager.getBranch()).toHaveLength(0);
 	});
 });

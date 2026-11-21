@@ -5,7 +5,10 @@ import type { ExtensionAPI, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { fillBranch, messageEntry, RICH_SNAPSHOT_TYPE } from "../ui-fixture.ts";
+import { readTodoMore } from "../../src/branch.ts";
+import { hostPhases, TODO_MORE_NOTES_TYPE } from "../../src/state.ts";
+import { todoResultMessage } from "../host.ts";
+import { fillBranch, messageEntry } from "../ui-fixture.ts";
 
 const args = new Map<string, string>();
 for (let i = 2; i < Bun.argv.length; i += 2) args.set(Bun.argv[i] ?? "", Bun.argv[i + 1] ?? "");
@@ -42,8 +45,8 @@ function sessionOver(manager: SessionManager): AgentSession {
 	const session = {
 		sessionManager: manager,
 		model: undefined,
+		getTodoPhases: () => hostPhases(readTodoMore(manager.getBranchView())),
 		setTodoPhases: () => {},
-		commitTodoPhases: () => {},
 	};
 	return Object.setPrototypeOf(session, AgentSession.prototype) as AgentSession;
 }
@@ -151,22 +154,24 @@ async function overtimePath(n: number): Promise<Sample> {
 	};
 	let k = 0;
 	const write = (): void => {
-		manager.appendCustomEntry(RICH_SNAPSHOT_TYPE, {
+		const runningSince = Date.now();
+		manager.appendCustomEntry(TODO_MORE_NOTES_TYPE, {
 			goal: { objective: "Ship it", measure: "Done", doneWhen: "Merged" },
-			phases: [
+			items: [
 				{
-					name: "Delivery",
-					items: [
-						{
-							title: "Running task",
-							explanation: `Work ${k++}`,
-							status: "in_progress",
-							time: { kind: "estimated", budgetId: "bench-budget", minutes: 60, elapsedMs: 0, runningSince: Date.now() },
-						},
-					],
+					phase: "Delivery",
+					title: "Running task",
+					explanation: `Work ${k++}`,
+					time: { kind: "estimated", budgetId: "bench-budget", minutes: 60, elapsedMs: 0, runningSince },
 				},
 			],
 		});
+		manager.appendMessage(
+			todoResultMessage(
+				{ op: "update", phases: [{ name: "Delivery", tasks: [{ content: "Running task", status: "in_progress" }] }] },
+				runningSince,
+			),
+		);
 	};
 	try {
 		await emit({ type: "session_start" });

@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
 import { branchFacts } from "./branch.ts";
-import { commitTodoState, type TodoSession } from "./commit.ts";
+import { commitTodoState, liveState, type TodoSession } from "./commit.ts";
 import { commitCompletion, sharedWorktreeRoot, worktreeState } from "./git.ts";
 import { participatingModels } from "./models.ts";
 import { customFormat, parametersSchema, parseTodo, type TodoCommand, type TodoCommitClause, type TodoTarget } from "./protocol.ts";
@@ -599,7 +599,7 @@ export async function runTodo(
 	leafMaxMinutes: number = DEFAULT_SETTINGS.leafMaxMinutes,
 ): Promise<AgentToolResult<TodoMoreDetails>> {
 	const facts = branchFacts(session.sessionManager);
-	const previous = facts.state;
+	const previous = liveState(session);
 	const input = parametersSchema.safeParse(raw);
 	if (!input.success) return result(session, previous, `Invalid todo arguments: ${input.error.message}`, { isError: true });
 	const parsed = parseTodo(input.data.input);
@@ -653,11 +653,7 @@ export async function runTodo(
 			params.goal !== undefined ? { kind: "set", goal: params.goal } : next.kind === "list" ? next.goal : { kind: "missing" };
 		next = stateOf(goal, phases);
 	}
-	const committed = commitTodoState(session, next);
-	if (committed.kind === "failed") {
-		const current = branchFacts(session.sessionManager).state;
-		return result(session, current, formatSummary(current, [committed.message], true), { op, operations: ops, isError: true });
-	}
+	commitTodoState(session, next);
 	const summary = formatSummary(next, [], false);
 	return result(session, next, notes.length === 0 ? summary : `${summary}\n${notes.join("\n")}`, {
 		op,

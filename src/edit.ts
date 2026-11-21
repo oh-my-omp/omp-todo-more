@@ -1,13 +1,11 @@
 import { z } from "@oh-my-pi/pi-coding-agent";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { tr } from "../omomp-shared/i18n.ts";
-import { branchFacts } from "./branch.ts";
-import { commitTodoState, type TodoCommitResult } from "./commit.ts";
-import { errorText } from "./errors.ts";
+import { liveState, recordNotes } from "./commit.ts";
 import { stateOf, type TodoGoal, type TodoMoreState, todoGoalSchema } from "./state.ts";
 
 export type TodoEdit = { kind: "set_goal"; goal: TodoGoal } | { kind: "explain"; title: string; explanation: string };
-export type TodoEditResult = TodoCommitResult | { kind: "rejected"; message: string };
+export type TodoEditResult = { kind: "saved"; state: TodoMoreState } | { kind: "rejected"; message: string };
 type AppliedEdit = { kind: "ok"; state: TodoMoreState } | { kind: "rejected"; message: string };
 const nonEmpty = z.string().refine((value) => value.trim().length > 0, "must not be empty");
 const editSchema = z.union([
@@ -53,16 +51,10 @@ export function applyTodoEdit(state: TodoMoreState, edit: TodoEdit): AppliedEdit
 	}
 }
 
-export function saveTodoEdit(session: AgentSession, edit: TodoEdit): TodoEditResult {
-	try {
-		const current = branchFacts(session.sessionManager).state;
-		const applied = applyTodoEdit(current, edit);
-		return applied.kind === "rejected" ? applied : commitTodoState(session, applied.state);
-	} catch (error) {
-		return {
-			kind: "failed",
-			stage: "persist",
-			message: `${tr("Cannot read the authority todo branch", "无法读取权威 Todo 分支")}: ${errorText(error)}`,
-		};
-	}
+/** An edit changes only the plugin's part of the list; the host list stays as it is. */
+export function saveTodoEdit(session: Pick<AgentSession, "sessionManager" | "getTodoPhases">, edit: TodoEdit): TodoEditResult {
+	const applied = applyTodoEdit(liveState(session), edit);
+	if (applied.kind === "rejected") return applied;
+	recordNotes(session, applied.state);
+	return { kind: "saved", state: applied.state };
 }

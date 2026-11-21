@@ -9,7 +9,8 @@ import { readTodoMore } from "../src/branch.ts";
 import type { TodoSession } from "../src/commit.ts";
 import type { ModelRef } from "../src/models.ts";
 import { type CommitRecord, type TodoMoreSnapshot, toSnapshot } from "../src/state.ts";
-import { type ParentCwd, runTodo, type TodoMoreDetails } from "../src/tool.ts";
+import type { ParentCwd, TodoMoreDetails } from "../src/tool.ts";
+import { hostSession, runPersisted } from "./host.ts";
 
 const goal = {
 	objective: "Commit the work each item completes",
@@ -55,11 +56,11 @@ type Harness = {
 
 function fixture(cwd: string, model?: ModelRef, parentCwd?: ParentCwd): Harness {
 	const sessionManager = SessionManager.inMemory(cwd);
-	const session: TodoSession = { sessionManager, setTodoPhases: () => {}, model };
+	const session = hostSession(sessionManager, model);
 	return {
 		cwd,
 		session,
-		call: (...lines: string[]) => runTodo(session, { input: document(...lines) }, parentCwd),
+		call: (...lines: string[]) => runPersisted(session, { input: document(...lines) }, parentCwd),
 		snapshot: (): TodoMoreSnapshot => toSnapshot(readTodoMore(sessionManager.getBranch())),
 	};
 }

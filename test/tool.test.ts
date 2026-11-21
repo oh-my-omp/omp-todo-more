@@ -3,7 +3,7 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
-import { readTodoMore } from "../src/branch.ts";
+import { branchFacts, readTodoMore } from "../src/branch.ts";
 import type { TodoSession } from "../src/commit.ts";
 import { DEFAULT_SETTINGS } from "../src/settings.ts";
 import {
@@ -11,11 +11,14 @@ import {
 	type ItemTime,
 	OVERTIME_TYPE,
 	TODO_MORE_ENTRY_TYPE,
+	TODO_MORE_NOTES_TYPE,
 	type TodoGoal,
 	type TodoMoreSnapshot,
+	type TodoNotes,
 	toSnapshot,
 } from "../src/state.ts";
 import { runTodo, type TodoMoreDetails } from "../src/tool.ts";
+import { todoResultMessage } from "./host.ts";
 
 const epoch = Date.parse("2026-10-15T12:00:00.000Z");
 const goal: TodoGoal = {
@@ -43,31 +46,62 @@ async function at<T>(time: number, invoke: () => Promise<T>, tick = 0): Promise<
 
 type Fixture = {
 	session: TodoSession;
+	/** Every list the plugin wrote to the host. */
 	projections: HostTodoPhase[][];
 	snapshot: () => TodoMoreSnapshot;
-	snapshots: () => SessionEntry[];
+	notesEntries: () => SessionEntry[];
+	/** Runs the tool, then persists its result the way the host does. */
+	run: (raw: unknown, parentCwd?: Parameters<typeof runTodo>[2], leafMaxMinutes?: number) => Promise<AgentToolResult<TodoMoreDetails>>;
 	call: (...lines: string[]) => Promise<AgentToolResult<TodoMoreDetails>>;
 	callAt: (time: number, ...lines: string[]) => Promise<AgentToolResult<TodoMoreDetails>>;
 };
 
+function notesOf(snapshot: TodoMoreSnapshot): TodoNotes {
+	return {
+		goal: snapshot.goal,
+		items: snapshot.phases.flatMap((phase) =>
+			phase.items.map((item) => ({
+				phase: phase.name,
+				title: item.title,
+				explanation: item.explanation,
+				time: item.time,
+				...(item.commit === undefined ? {} : { commit: item.commit }),
+			})),
+		),
+	};
+}
+
 function fixture(initial?: TodoMoreSnapshot): Fixture {
 	const sessionManager = SessionManager.inMemory("/tmp/todo-more-tool-tests");
 	const projections: HostTodoPhase[][] = [];
+	let list: HostTodoPhase[] = [];
 	const session: TodoSession = {
 		sessionManager,
 		model: undefined,
+		getTodoPhases: () => structuredClone(list),
 		setTodoPhases: (phases) => {
+			list = structuredClone(phases);
 			projections.push(phases);
 		},
 	};
-	if (initial !== undefined) sessionManager.appendCustomEntry(TODO_MORE_ENTRY_TYPE, initial);
+	if (initial !== undefined) {
+		list = projected(initial);
+		sessionManager.appendCustomEntry(TODO_MORE_NOTES_TYPE, notesOf(initial));
+		sessionManager.appendMessage(todoResultMessage({ op: "update", phases: projected(initial) }, epoch));
+	}
+	const run: Fixture["run"] = async (raw, parentCwd, leafMaxMinutes) => {
+		const result = await runTodo(session, raw, parentCwd, leafMaxMinutes);
+		sessionManager.appendMessage(todoResultMessage(result.details, Date.now(), result.isError === true));
+		return result;
+	};
 	const callAt = (time: number, ...lines: string[]): Promise<AgentToolResult<TodoMoreDetails>> =>
-		at(time, () => runTodo(session, { input: document(...lines) }));
+		at(time, () => run({ input: document(...lines) }));
 	return {
 		session,
 		projections,
 		snapshot: () => toSnapshot(readTodoMore(sessionManager.getBranch())),
-		snapshots: () => sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === TODO_MORE_ENTRY_TYPE),
+		notesEntries: () => sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === TODO_MORE_NOTES_TYPE),
+		run,
 		call: (...lines: string[]) => callAt(epoch, ...lines),
 		callAt,
 	};
@@ -84,19 +118,26 @@ function expectSaved(
 	harness: Fixture,
 	result: AgentToolResult<TodoMoreDetails>,
 	expected: TodoMoreSnapshot,
-	previousSnapshots: number,
 	previousProjections: number,
 ): void {
 	expect(result.isError).not.toBe(true);
 	expect(harness.snapshot()).toEqual(expected);
 	expect(result.details?.more).toEqual(expected);
 	expect(result.details?.phases).toStrictEqual(projected(expected));
-	expect(harness.snapshots()).toHaveLength(previousSnapshots + 1);
-	const entry = harness.snapshots().at(-1);
-	if (entry?.type !== "custom") throw new Error("Expected a persisted todo snapshot");
-	expect(entry.data).toEqual(expected);
+	expect(harness.session.getTodoPhases()).toStrictEqual(projected(expected));
+	expect(branchFacts(harness.session.sessionManager).notes).toEqual(notesOf(expected));
 	expect(harness.projections).toHaveLength(previousProjections + 1);
 	expect(harness.projections.at(-1)).toStrictEqual(projected(expected));
+	expectNoFullListEntry(harness);
+}
+
+/** The plugin's custom entries carry only what the host list cannot hold. */
+function expectNoFullListEntry(harness: Fixture): void {
+	for (const entry of harness.session.sessionManager.getBranch()) {
+		if (entry.type !== "custom" || !entry.customType.startsWith(TODO_MORE_ENTRY_TYPE)) continue;
+		expect(entry.customType).toBe(TODO_MORE_NOTES_TYPE);
+		expect(Object.keys(entry.data as object).sort()).toEqual(["goal", "items"]);
+	}
 }
 
 async function expectRejected(
@@ -104,7 +145,8 @@ async function expectRejected(
 	invoke: () => Promise<AgentToolResult<TodoMoreDetails>>,
 ): Promise<AgentToolResult<TodoMoreDetails>> {
 	const before = harness.snapshot();
-	const entries = structuredClone(harness.session.sessionManager.getBranch());
+	const notes = structuredClone(harness.notesEntries());
+	const list = harness.session.getTodoPhases();
 	const projections = structuredClone(harness.projections);
 	const result = await invoke();
 	expect(result.isError).toBe(true);
@@ -112,7 +154,8 @@ async function expectRejected(
 	expect(result.details?.phases).toStrictEqual(projected(before));
 	expect(result.details).not.toHaveProperty("changes");
 	expect(harness.snapshot()).toEqual(before);
-	expect(harness.session.sessionManager.getBranch()).toEqual(entries);
+	expect(harness.notesEntries()).toEqual(notes);
+	expect(harness.session.getTodoPhases()).toEqual(list);
 	expect(harness.projections).toEqual(projections);
 	return result;
 }
@@ -197,7 +240,6 @@ describe("atomic Todo document execution", () => {
 				],
 			},
 			0,
-			0,
 		);
 		expect(result.details?.op).toBe("init");
 		expect(result.details?.operations).toEqual(["init"]);
@@ -240,7 +282,6 @@ describe("atomic Todo document execution", () => {
 					},
 				],
 			},
-			0,
 			0,
 		);
 	});
@@ -296,7 +337,6 @@ describe("atomic Todo document execution", () => {
 				],
 			},
 			0,
-			0,
 		);
 	});
 
@@ -345,7 +385,6 @@ describe("atomic Todo document execution", () => {
 					},
 				],
 			},
-			1,
 			0,
 		);
 		expect(result.details?.op).toBe("batch");
@@ -369,7 +408,7 @@ describe("atomic Todo document execution", () => {
 		test(`late error discards an otherwise valid mutation prefix: ${lateCommand}`, async () => {
 			const harness = fixture(populated());
 			await expectRejected(harness, () => harness.call('DONE "Implement"', 'EXPLAIN "Review" "Would be replaced"', lateCommand));
-			expect(harness.snapshots()).toHaveLength(1);
+			expect(harness.notesEntries()).toHaveLength(1);
 		});
 	}
 
@@ -385,7 +424,7 @@ describe("atomic Todo document execution", () => {
 				'RM "Missing task"',
 			),
 		);
-		expect(harness.snapshots()).toHaveLength(1);
+		expect(harness.notesEntries()).toHaveLength(1);
 	});
 
 	test("completion promotes the earliest pending task", async () => {
@@ -393,7 +432,7 @@ describe("atomic Todo document execution", () => {
 		const expected = populated();
 		itemOf(expected, "Implement").status = "completed";
 		itemOf(expected, "Review").status = "in_progress";
-		expectSaved(harness, await harness.call('DONE "Implement"'), expected, 1, 0);
+		expectSaved(harness, await harness.call('DONE "Implement"'), expected, 0);
 	});
 
 	test("GOAL replaces only goal fields without normalizing imported statuses or clocks", async () => {
@@ -406,7 +445,6 @@ describe("atomic Todo document execution", () => {
 			harness,
 			await harness.callAt(epoch + 50_000, 'GOAL "New objective" "New measure" "New done boundary"'),
 			{ goal: replacement, phases: initial.phases },
-			1,
 			0,
 		);
 	});
@@ -419,13 +457,13 @@ describe("atomic Todo document execution", () => {
 		const expected = populated();
 		expected.goal = { objective: "New", measure: "Measured", doneWhen: "Complete" };
 		itemOf(expected, "Review").explanation = "Updated";
-		expectSaved(harness, await harness.call('GOAL "New" "Measured" "Complete"', 'EXPLAIN "Review" "Updated"'), expected, 1, 0);
+		expectSaved(harness, await harness.call('GOAL "New" "Measured" "Complete"', 'EXPLAIN "Review" "Updated"'), expected, 0);
 	});
 
 	test("GOAL on an empty list cannot manufacture a list or a saved goal", async () => {
 		const harness = fixture();
 		await expectRejected(harness, () => harness.call('GOAL "New" "Measured" "Complete"'));
-		expect(harness.snapshots()).toHaveLength(0);
+		expect(harness.notesEntries()).toHaveLength(0);
 	});
 
 	test("quoted ALL selects a task, while DONE ALL selects all phases", async () => {
@@ -449,7 +487,7 @@ describe("atomic Todo document execution", () => {
 		const selected = structuredClone(initial);
 		itemOf(selected, "ALL").status = "completed";
 		itemOf(selected, "Other").status = "in_progress";
-		expectSaved(harness, await harness.call('DONE "ALL"'), selected, 1, 0);
+		expectSaved(harness, await harness.call('DONE "ALL"'), selected, 0);
 		expectSaved(
 			harness,
 			await harness.call("DONE ALL"),
@@ -457,7 +495,6 @@ describe("atomic Todo document execution", () => {
 				goal,
 				phases: selected.phases.map((phase) => ({ ...phase, items: phase.items.map((item) => ({ ...item, status: "completed" })) })),
 			},
-			2,
 			1,
 		);
 	});
@@ -471,14 +508,8 @@ describe("atomic Todo document execution", () => {
 			goal,
 			phases: [{ ...initial.phases[0]!, items: initial.phases[0]!.items.map((item) => ({ ...item, status: "abandoned" })) }, verification],
 		};
-		expectSaved(harness, await harness.call('DROP PHASE "Delivery"'), dropped, 1, 0);
-		expectSaved(
-			harness,
-			await harness.call('RM PHASE "Delivery"'),
-			{ goal, phases: [{ name: "Delivery", items: [] }, verification] },
-			2,
-			1,
-		);
+		expectSaved(harness, await harness.call('DROP PHASE "Delivery"'), dropped, 0);
+		expectSaved(harness, await harness.call('RM PHASE "Delivery"'), { goal, phases: [{ name: "Delivery", items: [] }, verification] }, 1);
 	});
 
 	for (const remove of ["RM ALL", 'RM "Only task"']) {
@@ -494,7 +525,7 @@ describe("atomic Todo document execution", () => {
 			};
 			const harness = fixture(initial);
 			await expectRejected(harness, () => harness.call(remove, 'PHASE "Tasks"', 'ADD "Replacement" "Cannot inherit a cleared goal" 10'));
-			expectSaved(harness, await harness.call(remove), { goal: null, phases: [] }, 1, 0);
+			expectSaved(harness, await harness.call(remove), { goal: null, phases: [] }, 0);
 			await expectRejected(harness, () => harness.call('PHASE "Tasks"', 'ADD "Replacement" "Still cannot inherit a cleared goal" 10'));
 			const result = await harness.call(init, 'ADD "Replacement" "New list with its own goal" 10');
 			expectSaved(
@@ -516,7 +547,6 @@ describe("atomic Todo document execution", () => {
 						},
 					],
 				},
-				2,
 				1,
 			);
 		});
@@ -526,7 +556,7 @@ describe("atomic Todo document execution", () => {
 		const initial = timed();
 		itemOf(initial, "Implement").status = "pending";
 		const harness = fixture(initial);
-		const before = structuredClone(harness.session.sessionManager.getBranch());
+		const before = structuredClone(harness.notesEntries());
 		const result = await harness.callAt(epoch + 90_000, "VIEW");
 		expect(result.isError).not.toBe(true);
 		expect(result.details?.op).toBe("view");
@@ -534,8 +564,8 @@ describe("atomic Todo document execution", () => {
 		expect(result.details?.more).toEqual(initial);
 		expect(result.details?.phases).toStrictEqual(projected(initial));
 		expect(harness.snapshot()).toEqual(initial);
-		expect(harness.session.sessionManager.getBranch()).toEqual(before);
-		expect(harness.snapshots()).toHaveLength(1);
+		expect(harness.notesEntries()).toEqual(before);
+		expect(harness.notesEntries()).toHaveLength(1);
 		expect(harness.projections).toHaveLength(0);
 	});
 
@@ -546,7 +576,7 @@ describe("atomic Todo document execution", () => {
 			{ op: "view" },
 			{ goal, items: [{ title: "Replacement", explanation: "Must not be inferred", estimatedMinutes: 10 }] },
 		]) {
-			const result = await expectRejected(harness, () => runTodo(harness.session, raw));
+			const result = await expectRejected(harness, () => harness.run(raw));
 			expect(result.content.some((part) => part.type === "text" && /input|document|arguments/i.test(part.text))).toBe(true);
 		}
 	});
@@ -571,7 +601,51 @@ describe("atomic Todo document execution", () => {
 			'*** Begin Todo\nDONE "Implement"\nEXPLAIN "Review" "unfinished',
 			`${document('DONE "Implement"')}\nSTART "Review"`,
 		])
-			await expectRejected(harness, () => runTodo(harness.session, { input }));
+			await expectRejected(harness, () => harness.run({ input }));
+	});
+});
+
+describe("host list authority", () => {
+	test("a call that follows another before the first result reaches the branch works on the live host list", async () => {
+		const harness = fixture();
+		const first = await at(epoch, () =>
+			runTodo(harness.session, { input: document(init, 'ADD "First" "Open the list" 10', 'ADD "Second" "Follow it" 20') }),
+		);
+		expect(first.isError).not.toBe(true);
+		expect(harness.session.sessionManager.getBranch().some((entry) => entry.type === "message")).toBe(false);
+		const second = await at(epoch + 5_000, () =>
+			runTodo(harness.session, { input: document('DONE "First"', 'EXPLAIN "Second" "Now active"') }),
+		);
+		expect(second.isError).not.toBe(true);
+		expect(second.details?.phases).toStrictEqual([
+			{
+				name: "Tasks",
+				tasks: [
+					{ content: "First", status: "completed" },
+					{ content: "Second", status: "in_progress" },
+				],
+			},
+		]);
+		expect(harness.session.getTodoPhases()).toStrictEqual(second.details?.phases ?? []);
+		const more = second.details?.more;
+		expect(more?.goal).toEqual(goal);
+		expect(more?.phases[0]?.items.map((item) => item.explanation)).toEqual(["Open the list", "Now active"]);
+	});
+
+	test("a todo result and the notes together reproduce the list; the notes alone do not", async () => {
+		const harness = fixture();
+		await harness.call(init, 'ADD "First" "Open the list" 10', 'ADD "Second" "Follow it" 20');
+		const rebuilt = readTodoMore(harness.session.sessionManager.getBranch());
+		expect(toSnapshot(rebuilt)).toEqual(harness.snapshot());
+		const notesOnly = harness.session.sessionManager.getBranch().filter((entry) => entry.type === "custom");
+		expect(readTodoMore(notesOnly)).toEqual({ kind: "empty" });
+	});
+
+	test("a write never fails after the host list was accepted: the tool result is the list it wrote", async () => {
+		const harness = fixture(populated());
+		const result = await harness.call('DONE "Implement"');
+		expect(result.isError).not.toBe(true);
+		expect(resultText(result)).not.toMatch(/projection|did not accept/i);
 	});
 });
 
@@ -582,7 +656,7 @@ describe("atomic batch timing through the authority branch", () => {
 		const result = await at(
 			anchor,
 			() =>
-				runTodo(harness.session, {
+				harness.run({
 					input: document(
 						init,
 						'ADD "First" "Complete within the batch" 2',
@@ -616,7 +690,6 @@ describe("atomic batch timing through the authority branch", () => {
 				],
 			},
 			0,
-			0,
 		);
 		expect(result.details?.operations).toEqual(["init", "done", "drop", "explain"]);
 	});
@@ -628,7 +701,7 @@ describe("atomic batch timing through the authority branch", () => {
 		const result = await at(
 			anchor,
 			() =>
-				runTodo(harness.session, {
+				harness.run({
 					input: document('START "Review"', 'EXPLAIN "Review" "Continue with review"'),
 				}),
 			1_000,
@@ -640,7 +713,7 @@ describe("atomic batch timing through the authority branch", () => {
 			explanation: "Continue with review",
 			time: time("review-budget", 20, 500, anchor),
 		});
-		expectSaved(harness, result, expected, 1, 0);
+		expectSaved(harness, result, expected, 0);
 	});
 
 	test("START pauses the clock, paused ESTIMATE, resume, active ESTIMATE and DONE preserve only active elapsed time", async () => {
@@ -664,13 +737,13 @@ describe("atomic batch timing through the authority branch", () => {
 				initial.phases[1]!,
 			],
 		};
-		expectSaved(harness, await harness.callAt(epoch + 6_000, 'START "Review"'), paused, 1, 0);
+		expectSaved(harness, await harness.callAt(epoch + 6_000, 'START "Review"'), paused, 0);
 		const reestimated = await harness.callAt(epoch + 20_000, 'ESTIMATE "Implement" 12');
 		const changedBudget = createdTime(harness, "Implement", 12, null, 7_250);
 		expect(changedBudget.budgetId).not.toBe("implement-budget");
 		const changed = structuredClone(paused);
 		itemOf(changed, "Implement").time = changedBudget;
-		expectSaved(harness, reestimated, changed, 2, 1);
+		expectSaved(harness, reestimated, changed, 1);
 		expect(reestimated.details?.changes).toEqual([{ op: "estimate", task: "Implement", estimatedMinutes: 12 }]);
 		expect(elapsedTime(estimateOf(harness.snapshot(), "Implement"), epoch + 29_000)).toBe(7_250);
 
@@ -678,14 +751,14 @@ describe("atomic batch timing through the authority branch", () => {
 		expect(sameEstimate.isError).not.toBe(true);
 		expect(harness.snapshot()).toEqual(changed);
 		expect(sameEstimate.details?.more).toEqual(changed);
-		expect(harness.snapshots()).toHaveLength(3);
+		expect(harness.notesEntries()).toHaveLength(3);
 		expect(harness.projections).toHaveLength(3);
 		expect(harness.projections.at(-1)).toStrictEqual(projected(changed));
 
 		const resumed = structuredClone(changed);
 		Object.assign(itemOf(resumed, "Implement"), { status: "in_progress", time: time(changedBudget.budgetId, 12, 7_250, epoch + 30_000) });
 		Object.assign(itemOf(resumed, "Review"), { status: "pending", time: time("review-budget", 20, 24_500) });
-		expectSaved(harness, await harness.callAt(epoch + 30_000, 'START "Implement"'), resumed, 3, 3);
+		expectSaved(harness, await harness.callAt(epoch + 30_000, 'START "Implement"'), resumed, 3);
 		expect(elapsedTime(estimateOf(harness.snapshot(), "Implement"), epoch + 35_000)).toBe(12_250);
 
 		const activeEstimate = await harness.callAt(epoch + 32_000, 'ESTIMATE "Implement" 15');
@@ -694,12 +767,12 @@ describe("atomic batch timing through the authority branch", () => {
 		expect(activeBudget.budgetId).not.toBe("implement-budget");
 		const active = structuredClone(resumed);
 		itemOf(active, "Implement").time = activeBudget;
-		expectSaved(harness, activeEstimate, active, 4, 4);
+		expectSaved(harness, activeEstimate, active, 4);
 
 		const final = structuredClone(active);
 		Object.assign(itemOf(final, "Implement"), { status: "completed", time: time(activeBudget.budgetId, 15, 12_250) });
 		Object.assign(itemOf(final, "Review"), { status: "in_progress", time: time("review-budget", 20, 24_500, epoch + 35_000) });
-		expectSaved(harness, await harness.callAt(epoch + 35_000, 'DONE "Implement"'), final, 5, 5);
+		expectSaved(harness, await harness.callAt(epoch + 35_000, 'DONE "Implement"'), final, 5);
 	});
 
 	test("a transition leaves the time spent waiting on the user in ask out of elapsed time", async () => {
@@ -730,16 +803,16 @@ describe("atomic batch timing through the authority branch", () => {
 		expect(repeated.isError).not.toBe(true);
 		expect(harness.snapshot()).toEqual(before);
 		expect(repeated.details?.more).toEqual(before);
-		expect(harness.snapshots()).toHaveLength(1);
+		expect(harness.notesEntries()).toHaveLength(1);
 		expect(harness.projections).toStrictEqual([projected(before)]);
 		const explained = timed();
 		itemOf(explained, "Implement").explanation = "Accepted explanation";
-		expectSaved(harness, await harness.callAt(epoch + 4_000, 'EXPLAIN "Implement" "Accepted explanation"'), explained, 1, 1);
-		const branch = structuredClone(harness.session.sessionManager.getBranch());
+		expectSaved(harness, await harness.callAt(epoch + 4_000, 'EXPLAIN "Implement" "Accepted explanation"'), explained, 1);
+		const notes = structuredClone(harness.notesEntries());
 		const view = await harness.callAt(epoch + 8_000, "VIEW");
 		expect(view.details?.more).toEqual(explained);
 		expect(view.details).not.toHaveProperty("changes");
-		expect(harness.session.sessionManager.getBranch()).toEqual(branch);
+		expect(harness.notesEntries()).toEqual(notes);
 		expect(harness.projections).toHaveLength(2);
 		expect(estimateOf(harness.snapshot(), "Implement")).toEqual(time("implement-budget", 10, 1_250, epoch));
 		expect(elapsedTime(estimateOf(harness.snapshot(), "Implement"), epoch + 8_000)).toBe(9_250);
@@ -755,7 +828,7 @@ describe("atomic batch timing through the authority branch", () => {
 		expect(implement.budgetId).not.toBe(review.budgetId);
 		itemOf(expected, "Implement").time = implement;
 		itemOf(expected, "Review").time = review;
-		expectSaved(harness, result, expected, 1, 0);
+		expectSaved(harness, result, expected, 0);
 		expect(result.details?.changes).toEqual([
 			{ op: "estimate", task: "Implement", estimatedMinutes: 5 },
 			{ op: "estimate", task: "Review", estimatedMinutes: 6 },
@@ -803,8 +876,7 @@ describe("atomic batch timing through the authority branch", () => {
 
 	test("the configured per-item limit replaces the default", async () => {
 		const harness = fixture(timed());
-		const call = (line: string) =>
-			at(epoch + 1_000, () => runTodo(harness.session, { input: document('PHASE "Delivery"', line) }, undefined, 15));
+		const call = (line: string) => at(epoch + 1_000, () => harness.run({ input: document('PHASE "Delivery"', line) }, undefined, 15));
 		const over = await expectRejected(harness, () => call('ADD "Over" "Above the configured limit" 16'));
 		expect(resultText(over)).toContain("exceeds the 15-minute limit for one item");
 		const within = await call('ADD "Within" "At the configured limit" 15');
@@ -852,7 +924,7 @@ describe("atomic batch timing through the authority branch", () => {
 				),
 			);
 			expect(harness.snapshot()).toEqual(timed());
-			expect(harness.snapshots()).toHaveLength(1);
+			expect(harness.notesEntries()).toHaveLength(1);
 			expect(harness.projections).toHaveLength(0);
 		});
 	}

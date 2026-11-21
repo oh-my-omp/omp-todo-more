@@ -15,10 +15,12 @@ import {
 	explanationText,
 	goalLines,
 	TODO_MORE_ENTRY_TYPE,
+	TODO_MORE_NOTES_TYPE,
 	type TodoMoreSnapshot,
 	type TodoMoreState,
 	timeEstimateText,
 } from "../../src/state.ts";
+import { todoResultMessage } from "../host.ts";
 
 const REMINDER_TYPE = `${TODO_MORE_ENTRY_TYPE}.reminder`;
 const REMINDER_NOTICE_TYPE = `${TODO_MORE_ENTRY_TYPE}.reminder-notice`;
@@ -237,7 +239,24 @@ class Fixture {
 	}
 
 	appendSnapshot(snapshot: TodoMoreSnapshot): void {
-		this.manager.appendCustomEntry(TODO_MORE_ENTRY_TYPE, snapshot);
+		this.manager.appendCustomEntry(TODO_MORE_NOTES_TYPE, {
+			goal: snapshot.goal,
+			items: snapshot.phases.flatMap((phase) =>
+				phase.items.map((item) => ({ phase: phase.name, title: item.title, explanation: item.explanation, time: item.time })),
+			),
+		});
+		this.manager.appendMessage(
+			todoResultMessage(
+				{
+					op: "update",
+					phases: snapshot.phases.map((phase) => ({
+						name: phase.name,
+						tasks: phase.items.map((item) => ({ content: item.title, status: item.status })),
+					})),
+				},
+				Date.now(),
+			),
+		);
 	}
 }
 

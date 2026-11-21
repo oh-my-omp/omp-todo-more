@@ -2,7 +2,7 @@ import { describe, expect, setSystemTime, test } from "bun:test";
 import { AgentSession, type ExtensionAPI, type ExtensionContext, type ExtensionEvent, type SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
+import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { askWaits, readTodoMore } from "../src/branch.ts";
 import { commitTodoState } from "../src/commit.ts";
 import { registerOvertime } from "../src/overtime.ts";
@@ -12,18 +12,17 @@ import {
 	OVERTIME_TYPE,
 	overtimeDetailsSchema,
 	stateOf,
-	TODO_MORE_ENTRY_TYPE,
 	type TodoItem,
 	type TodoMoreState,
 	type TodoStatus,
-	toSnapshot,
+	transitionTime,
 } from "../src/state.ts";
+import { appendStateResult } from "./host.ts";
 
 const epoch = Date.parse("2026-10-15T12:00:00.000Z");
 const title = "Deliver the full task";
 type Estimate = Extract<ItemTime, { kind: "estimated" }>;
 type Warning = Extract<SessionEntry, { type: "custom_message" }>;
-type Projection = AgentSession["setTodoPhases"];
 type Handler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
 
 function estimatedState(minutes = 1, budgetId = "original-budget", runningSince = epoch, elapsedMs = 0): TodoMoreState {
@@ -136,16 +135,15 @@ class SchedulerFixture {
 	readonly errors: string[] = [];
 	readonly handlers = new Map<string, Handler[]>();
 	manager = SessionManager.inMemory("/tmp/overtime-regression");
-	projection: Projection = () => {};
+	phases: HostTodoPhase[] = [];
 
 	get session(): AgentSession {
 		const manager = this.manager;
 		const session = {
 			sessionManager: manager,
-			setTodoPhases: (phases: Parameters<Projection>[0]) => this.projection(phases),
-			commitTodoPhases: (phases: Parameters<Projection>[0]) => {
-				this.projection(phases);
-				manager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases });
+			getTodoPhases: () => structuredClone(this.phases),
+			setTodoPhases: (phases: HostTodoPhase[]) => {
+				this.phases = structuredClone(phases);
 			},
 		};
 		return Object.setPrototypeOf(session, AgentSession.prototype) as AgentSession;
@@ -189,9 +187,27 @@ class SchedulerFixture {
 		await Promise.resolve();
 	}
 
+	/** A `todo` call that left `state`: the writes the tool makes, then the result the host persists. */
 	async append(state: TodoMoreState): Promise<void> {
-		this.manager.appendCustomEntry(TODO_MORE_ENTRY_TYPE, toSnapshot(state));
+		commitTodoState(this.session, state);
+		appendStateResult(this.manager, state, this.clock.now);
 		await this.toolEnd("todo");
+	}
+
+	/** A `todo` call that moved the item to `status` at the current time. */
+	async moveTo(status: TodoStatus): Promise<void> {
+		const state = readTodoMore(this.manager.getBranch());
+		if (state.kind !== "list") throw new Error("Expected a list to move");
+		const now = this.clock.now;
+		await this.append(
+			stateOf(
+				state.goal,
+				state.phases.map((phase) => ({
+					...phase,
+					items: phase.items.map((item) => ({ ...item, status, time: transitionTime(item.time, status, now) })),
+				})),
+			),
+		);
 	}
 
 	async toolEnd(toolName: string): Promise<void> {
@@ -204,26 +220,6 @@ class SchedulerFixture {
 			details: undefined,
 			isError: false,
 		});
-	}
-
-	async native(status: TodoStatus, source: "edit" | "result"): Promise<void> {
-		if (source === "edit") {
-			this.bound.commitTodoPhases([{ name: "Delivery", tasks: [{ content: title, status }] }]);
-			await Promise.resolve();
-			return;
-		}
-		const phases = [{ name: "Delivery", tasks: [{ content: title, status }] }];
-		const message = {
-			role: "toolResult" as const,
-			toolName: "todo",
-			toolCallId: crypto.randomUUID(),
-			content: [{ type: "text" as const, text: "Task updated" }],
-			details: { op: "update", phases },
-			isError: false,
-			timestamp: this.clock.now,
-		};
-		this.manager.appendMessage(message);
-		await this.emit({ type: "message_end", message });
 	}
 
 	async askStart(toolCallId: string): Promise<void> {
@@ -292,36 +288,45 @@ describe("overtime deadline scheduling", () => {
 		});
 	});
 
-	for (const source of ["edit", "result"] as const) {
-		test(`native ${source} pauses and resumes the remaining budget, then completion leaves no timer`, async () => {
-			await withScheduler(async (fixture) => {
-				await fixture.append(estimatedState());
-				await fixture.clock.advanceTo(epoch + 20_000);
-				const beforePause = fixture.clock.captureNext();
-				await fixture.native("pending", source);
-				expect(itemOf(fixture.manager).status).toBe("pending");
-				expect(estimateOf(fixture.manager)).toMatchObject({ elapsedMs: 20_000, runningSince: null });
-				expect(fixture.clock.deadlines).toEqual([]);
-				await fixture.clock.advanceTo(epoch + 100_000);
-				beforePause();
-				expect(warnings(fixture.manager)).toEqual([]);
-				await fixture.native("in_progress", source);
-				expect(estimateOf(fixture.manager)).toMatchObject({ elapsedMs: 20_000, runningSince: epoch + 100_000 });
-				expect(fixture.clock.deadlines).toEqual([epoch + 140_000]);
-				await fixture.clock.advanceTo(epoch + 139_999);
-				expect(warnings(fixture.manager)).toEqual([]);
-				const beforeCompletion = fixture.clock.captureNext();
-				await fixture.native("completed", source);
-				expect(itemOf(fixture.manager).status).toBe("completed");
-				expect(elapsedTime(estimateOf(fixture.manager), fixture.clock.now)).toBe(59_999);
-				expect(fixture.clock.deadlines).toEqual([]);
-				await fixture.clock.advanceTo(epoch + 200_000);
-				beforeCompletion();
-				expect(warnings(fixture.manager)).toEqual([]);
-				expect(fixture.clock.deadlines).toEqual([]);
-			});
+	test("a status change pauses and resumes the remaining budget, then completion leaves no timer", async () => {
+		await withScheduler(async (fixture) => {
+			await fixture.append(estimatedState());
+			await fixture.clock.advanceTo(epoch + 20_000);
+			const beforePause = fixture.clock.captureNext();
+			await fixture.moveTo("pending");
+			expect(itemOf(fixture.manager).status).toBe("pending");
+			expect(estimateOf(fixture.manager)).toMatchObject({ elapsedMs: 20_000, runningSince: null });
+			expect(fixture.clock.deadlines).toEqual([]);
+			await fixture.clock.advanceTo(epoch + 100_000);
+			beforePause();
+			expect(warnings(fixture.manager)).toEqual([]);
+			await fixture.moveTo("in_progress");
+			expect(estimateOf(fixture.manager)).toMatchObject({ elapsedMs: 20_000, runningSince: epoch + 100_000 });
+			expect(fixture.clock.deadlines).toEqual([epoch + 140_000]);
+			await fixture.clock.advanceTo(epoch + 139_999);
+			expect(warnings(fixture.manager)).toEqual([]);
+			const beforeCompletion = fixture.clock.captureNext();
+			await fixture.moveTo("completed");
+			expect(itemOf(fixture.manager).status).toBe("completed");
+			expect(elapsedTime(estimateOf(fixture.manager), fixture.clock.now)).toBe(59_999);
+			expect(fixture.clock.deadlines).toEqual([]);
+			await fixture.clock.advanceTo(epoch + 200_000);
+			beforeCompletion();
+			expect(warnings(fixture.manager)).toEqual([]);
+			expect(fixture.clock.deadlines).toEqual([]);
 		});
-	}
+	});
+
+	test("the deadline follows the host list before the todo result reaches the branch", async () => {
+		await withScheduler(async (fixture) => {
+			commitTodoState(fixture.session, estimatedState());
+			await fixture.toolEnd("todo");
+			expect(fixture.manager.getBranch().some((entry) => entry.type === "message")).toBe(false);
+			expect(fixture.clock.deadlines).toEqual([epoch + 60_000]);
+			await fixture.clock.advanceTo(epoch + 60_000);
+			expect(warningDetails(fixture.manager)).toMatchObject({ budgetId: "original-budget", elapsedMs: 60_000 });
+		});
+	});
 
 	test("an earlier revised budget retains elapsed work and warns at its revised deadline", async () => {
 		await withScheduler(async (fixture) => {
@@ -356,23 +361,23 @@ describe("overtime deadline scheduling", () => {
 		});
 	});
 
-	for (const projection of ["no-op", "failed"] as const) {
-		test(`accepted rich commits schedule warnings despite ${projection} host projection`, async () => {
-			await withScheduler(async (fixture) => {
-				fixture.projection = () => {
-					if (projection === "failed") throw new Error("Projection unavailable");
-				};
-				const result = commitTodoState(fixture.session, estimatedState());
-				if (projection === "failed") expect(result).toMatchObject({ kind: "failed", stage: "projection" });
-				else expect(result.kind).toBe("saved");
-				await fixture.toolEnd("todo");
-				expect(itemOf(fixture.manager).status).toBe("in_progress");
-				expect(fixture.clock.deadlines).toEqual([epoch + 60_000]);
-				await fixture.clock.advanceTo(epoch + 60_000);
-				expect(warningDetails(fixture.manager)).toMatchObject({ budgetId: "original-budget", elapsedMs: 60_000 });
-			});
+	test("an accepted commit schedules the warning", async () => {
+		await withScheduler(async (fixture) => {
+			await fixture.append(estimatedState());
+			expect(itemOf(fixture.manager).status).toBe("in_progress");
+			expect(fixture.clock.deadlines).toEqual([epoch + 60_000]);
+			await fixture.clock.advanceTo(epoch + 60_000);
+			expect(warningDetails(fixture.manager)).toMatchObject({ budgetId: "original-budget", elapsedMs: 60_000 });
 		});
-	}
+	});
+
+	test("the overtime timer leaves the session's host write path untouched", async () => {
+		await withScheduler(async (fixture) => {
+			await fixture.append(estimatedState());
+			expect(Object.hasOwn(fixture.bound, "commitTodoPhases")).toBe(false);
+			expect(fixture.bound.commitTodoPhases).toBe(AgentSession.prototype.commitTodoPhases);
+		});
+	});
 
 	test("an old callback cannot dispatch into a newly bound session", async () => {
 		await withScheduler(async (fixture) => {

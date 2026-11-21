@@ -5,11 +5,13 @@
 ### Changed
 
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
-- Todo items now have four statuses: `pending`, `in_progress`, `completed`, `abandoned`. Items saved as `blocked` by earlier versions load as `pending` without their blocker text, keeping their time; earlier todo results that contain `BLOCK`/`UNBLOCK` changes still load, without those changes.
+- Todo items now have four statuses: `pending`, `in_progress`, `completed`, `abandoned`. Items saved as `blocked` by earlier versions load as `pending` without their blocker text; earlier todo results that contain `BLOCK`/`UNBLOCK` changes still load, without those changes.
+- A todo list's phases, titles, order and statuses are now recorded only in omp's own list. The plugin keeps its goal, item explanations, timers and commit records in a `mouriya.omp.todo-more.notes` session entry attached to the list's items by phase name and title, and no longer writes a second copy of the whole list or fails a `todo` call or `/todo-more` save on that copy. The `todo` tool and the `/todo-more` editor behave as before. Sessions saved by earlier versions keep their lists but their goal, explanations, timers and commit records are no longer restored.
 
 ### Removed
 
 - Removed the `BLOCK` and `UNBLOCK` commands and the item blocker text.
+- Removed the handling of list changes made outside the plugin's `todo` tool and `/todo-more` editor: the plugin no longer reads `user_todo_edit` entries or other `todo` results written by someone else, and the overtime timer no longer wraps `session.commitTodoPhases`.
 
 ## [0.2.3] - 2026-11-21
 
