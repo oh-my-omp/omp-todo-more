@@ -74,15 +74,6 @@ function uiStatus(status: TodoStatus): string {
 	}
 }
 
-function editErrorText(message: string): string {
-	if (message === "Authority branch did not accept the todo snapshot.")
-		return tr("Authority branch did not accept the Todo snapshot.", "权威分支未接受 Todo 快照。");
-	if (message.startsWith("Todo branch snapshot was not accepted: "))
-		return `${tr("Todo branch snapshot was not accepted", "Todo 分支快照未被接受")}${message.slice("Todo branch snapshot was not accepted".length)}`;
-	if (message.startsWith("Todo branch state accepted, but host projection failed: "))
-		return `${tr("Todo branch state accepted, but host projection failed", "Todo 分支状态已接受，但宿主投影失败")}${message.slice("Todo branch state accepted, but host projection failed".length)}`;
-	return message;
-}
 type DraftField = { editor: Editor; field: FormField };
 type Mode =
 	| { kind: "panel"; selected: number }
@@ -245,9 +236,8 @@ export class TodoPanel implements Component {
 				this.mode = { kind: "panel", selected: 0 };
 				this.error = undefined;
 				break;
-			case "failed":
 			case "rejected":
-				this.error = editErrorText(result.message);
+				this.error = result.message;
 				break;
 			default: {
 				const unreachable: never = result;

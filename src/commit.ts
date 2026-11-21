@@ -1,36 +1,31 @@
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { branchFacts } from "./branch.ts";
-import { errorText } from "./errors.ts";
 import type { ModelRef } from "./models.ts";
-import { hostPhases, recordOf, TODO_MORE_ENTRY_TYPE, type TodoMoreState, toSnapshot } from "./state.ts";
+import { hostPhases, joinHost, TODO_MORE_NOTES_TYPE, type TodoMoreState, toNotes } from "./state.ts";
 
-export type TodoSession = Pick<AgentSession, "sessionManager" | "setTodoPhases"> & { readonly model: ModelRef | undefined };
-
-export type TodoCommitResult =
-	| { kind: "saved"; state: TodoMoreState }
-	| { kind: "failed"; stage: "persist" | "projection"; message: string };
+export type HostListSession = Pick<AgentSession, "sessionManager" | "setTodoPhases" | "getTodoPhases">;
+export type TodoSession = HostListSession & {
+	readonly model: ModelRef | undefined;
+};
 
 /**
- * No await between reading the branch, appending its record and projecting it.
+ * The list as the host holds it right now, with the plugin's notes attached.
+ * A `todo` result reaches the branch asynchronously, so a call that follows
+ * another in the same turn reads the live host list, not the branch.
  */
-export function commitTodoState(session: TodoSession, next: TodoMoreState): TodoCommitResult {
-	try {
-		const manager = session.sessionManager;
-		if (!Bun.deepEquals(branchFacts(manager).state, next)) {
-			const id = manager.appendCustomEntry(TODO_MORE_ENTRY_TYPE, toSnapshot(next));
-			const written = manager.getLeafId() === id ? manager.getEntry(id) : undefined;
-			const record = written === undefined ? undefined : recordOf(written);
-			if (record?.kind !== "rich" || !Bun.deepEquals(record.state, next)) {
-				return { kind: "failed", stage: "persist", message: "Authority branch did not accept the todo snapshot." };
-			}
-		}
-	} catch (error) {
-		return { kind: "failed", stage: "persist", message: `Todo branch snapshot was not accepted: ${errorText(error)}` };
-	}
-	try {
-		session.setTodoPhases(hostPhases(next));
-	} catch (error) {
-		return { kind: "failed", stage: "projection", message: `Todo branch state accepted, but host projection failed: ${errorText(error)}` };
-	}
-	return { kind: "saved", state: next };
+export function liveState(session: Pick<AgentSession, "sessionManager" | "getTodoPhases">): TodoMoreState {
+	return joinHost(session.getTodoPhases(), branchFacts(session.sessionManager).notes);
+}
+
+/** Records the plugin's part of `next`; the entry is on the branch when this returns. */
+export function recordNotes(session: Pick<AgentSession, "sessionManager">, next: TodoMoreState): void {
+	const manager = session.sessionManager;
+	const notes = toNotes(next);
+	if (!Bun.deepEquals(branchFacts(manager).notes, notes)) manager.appendCustomEntry(TODO_MORE_NOTES_TYPE, notes);
+}
+
+/** Writes the host list and the plugin's part of it, with no await between. */
+export function commitTodoState(session: HostListSession, next: TodoMoreState): void {
+	recordNotes(session, next);
+	session.setTodoPhases(hostPhases(next));
 }

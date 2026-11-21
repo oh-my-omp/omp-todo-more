@@ -59,7 +59,7 @@ const INIT2 = todo(
 export const SCENARIOS: readonly Scenario[] = [
 	{
 		name: "smoke-init",
-		expect: ["mouriya.omp.todo-more", "session-stop-continuation"],
+		expect: ["mouriya.omp.todo-more", "You stopped with 1 incomplete todo item(s)"],
 		steps: [
 			{
 				kind: "prompt",
@@ -358,34 +358,8 @@ export const SCENARIOS: readonly Scenario[] = [
 	},
 
 	{
-		name: "native-writes",
-		expect: ["user_todo_edit", "has no goal", "no time estimate", "no explanation yet", "The list has no goal"],
-		steps: [
-			{
-				kind: "rpc",
-				command: { type: "set_todos", phases: [{ name: "Ghost", tasks: [{ content: "Ghost task", status: "in_progress" }] }] },
-				settle: false,
-			},
-			{ kind: "prompt", text: "/todo", turns: [] },
-			{ kind: "prompt", text: "/todo append Build Task Alpha", turns: [] },
-			{ kind: "prompt", text: "/todo append Build Task Beta", turns: [] },
-			{ kind: "prompt", text: "/todo done Alpha", turns: [] },
-			{
-				kind: "prompt",
-				text: "Try a mutation on the native list.",
-				turns: [todo('START "Task Beta"'), todo('GOAL "Ship" "tests" "merged"'), say("Goal set."), say("Reminder turn.")],
-			},
-			{
-				kind: "prompt",
-				text: "Inspect and finish.",
-				turns: [todo("VIEW"), todo('PHASE "Extra"', 'ADD "Gamma" "g work" 4'), todo("VIEW"), todo("DONE ALL"), say("Finished.")],
-			},
-		],
-	},
-
-	{
 		name: "stop-reminder",
-		expect: ["session-stop-continuation", "1 incomplete todo - reminder 1/3", "(Reminder 1/3)"],
+		expect: ["You stopped with 1 incomplete todo item(s)", "(Reminder 1/3)"],
 		steps: [
 			{
 				kind: "prompt",
@@ -397,7 +371,7 @@ export const SCENARIOS: readonly Scenario[] = [
 	{
 		name: "stop-reminder-max",
 		todo: { remindersMax: 1 },
-		expect: ["reminder 1/1", "session-stop-continuation"],
+		expect: ["You stopped with 1 incomplete todo item(s)", "(Reminder 1/1)"],
 		steps: [
 			{
 				kind: "prompt",
@@ -419,7 +393,7 @@ export const SCENARIOS: readonly Scenario[] = [
 	},
 	{
 		name: "mid-run-nudge",
-		expect: ["mid-run-nudge", "todo item still open"],
+		expect: ["mid-run-todo-nudge", "todo item still open"],
 		steps: [
 			{
 				kind: "prompt",
@@ -442,7 +416,7 @@ export const SCENARIOS: readonly Scenario[] = [
 	{
 		name: "eager-preferred",
 		todo: { eager: "preferred" },
-		expect: ["eager-prelude", "todo` first"],
+		expect: ["eager-todo-prelude", "todo` first"],
 		steps: [
 			{
 				kind: "prompt",
@@ -461,7 +435,7 @@ export const SCENARIOS: readonly Scenario[] = [
 	{
 		name: "eager-always",
 		todo: { eager: "always" },
-		expect: ["eager-prelude", '"toolChoice"', "MUST call"],
+		expect: ["eager-todo-prelude", '"toolChoice"', "MUST call"],
 		steps: [
 			{
 				kind: "prompt",
@@ -690,7 +664,7 @@ export const SCENARIOS: readonly Scenario[] = [
 	{
 		name: "zh",
 		lang: "zh",
-		expect: ["个待办未完成 - 提醒", "没有待发的待办提醒", "session-stop-continuation"],
+		expect: ["没有待发的待办提醒", "You stopped with 1 incomplete todo item(s)"],
 		steps: [
 			{
 				kind: "prompt",

@@ -1,16 +1,19 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type ExtensionContext, type SessionEntry, type SessionManager, z } from "@oh-my-pi/pi-coding-agent";
+import { SESSION_EXIT_CUSTOM_TYPE, TOOL_EXECUTION_START_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
+import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import {
 	type AskWait,
 	EMPTY,
-	joinNative,
+	joinHost,
 	type ListRecord,
-	type NativeRecord,
+	NO_NOTES,
 	OVERTIME_TYPE,
 	overtimeDetailsSchema,
 	REMINDER_TYPE,
 	recordOf,
 	type TodoMoreState,
+	type TodoNotes,
 } from "./state.ts";
 
 export type HumanMark =
@@ -26,6 +29,7 @@ export type HumanMark =
 /** Callers MUST NOT mutate the collections. */
 export type BranchFacts = {
 	readonly state: TodoMoreState;
+	readonly notes: TodoNotes;
 	readonly waits: readonly AskWait[];
 	readonly overtimeWarned: ReadonlySet<string>;
 	readonly remindersSinceUserMessage: number;
@@ -36,6 +40,8 @@ export type BranchFacts = {
 type Accumulator = {
 	length: number;
 	lastId: string | undefined;
+	phases: HostTodoPhase[];
+	notes: TodoNotes;
 	state: TodoMoreState;
 	readonly openAsks: Map<string, number>;
 	readonly closedWaits: AskWait[];
@@ -51,6 +57,8 @@ function emptyAccumulator(): Accumulator {
 	return {
 		length: 0,
 		lastId: undefined,
+		phases: [],
+		notes: NO_NOTES,
 		state: EMPTY,
 		openAsks: new Map(),
 		closedWaits: [],
@@ -63,8 +71,6 @@ function emptyAccumulator(): Accumulator {
 	};
 }
 
-const TOOL_EXECUTION_START = "tool_execution_start";
-const SESSION_EXIT = "session_exit";
 const toolStartSchema = z.object({ toolCallId: z.string(), toolName: z.string(), startedAt: z.string() });
 
 function waitsOf(acc: Accumulator): AskWait[] {
@@ -79,7 +85,7 @@ export function isHumanMessage(message: AgentMessage): message is Extract<AgentM
 }
 
 function foldAsk(acc: Accumulator, entry: SessionEntry): void {
-	if (entry.type === "custom" && entry.customType === TOOL_EXECUTION_START) {
+	if (entry.type === "custom" && entry.customType === TOOL_EXECUTION_START_CUSTOM_TYPE) {
 		const parsed = toolStartSchema.safeParse(entry.data);
 		const start = parsed.success && parsed.data.toolName === "ask" ? Date.parse(parsed.data.startedAt) : Number.NaN;
 		if (parsed.success && Number.isFinite(start)) acc.openAsks.set(parsed.data.toolCallId, start);
@@ -88,7 +94,7 @@ function foldAsk(acc: Accumulator, entry: SessionEntry): void {
 		if (start === undefined) return;
 		acc.openAsks.delete(entry.message.toolCallId);
 		acc.closedWaits.push({ start, end: entry.message.timestamp });
-	} else if (entry.type === "custom" && entry.customType === SESSION_EXIT) {
+	} else if (entry.type === "custom" && entry.customType === SESSION_EXIT_CUSTOM_TYPE) {
 		const end = Date.parse(entry.timestamp);
 		for (const start of acc.openAsks.values()) acc.closedWaits.push({ start, end });
 		acc.openAsks.clear();
@@ -98,26 +104,23 @@ function foldAsk(acc: Accumulator, entry: SessionEntry): void {
 function foldState(acc: Accumulator, record: ListRecord | undefined): void {
 	if (record === undefined) return;
 	switch (record.kind) {
-		case "rich":
-			acc.state = record.state;
-			return;
-		case "native":
-			acc.state = joinNative(record.phases, nativeBase(acc.state, record), record.at, waitsOf(acc));
-			return;
+		case "notes":
+			acc.notes = record.notes;
+			break;
+		case "phases":
+			acc.phases = record.phases;
+			break;
 		default: {
 			const unreachable: never = record;
 			throw new Error(`Unexpected todo record: ${String(unreachable)}`);
 		}
 	}
-}
-
-function nativeBase(state: TodoMoreState, record: NativeRecord): TodoMoreState {
-	return record.phases.every((phase) => phase.tasks.length === 0) ? EMPTY : state;
+	acc.state = joinHost(acc.phases, acc.notes);
 }
 
 function commitShasOf(record: ListRecord | undefined): string[] {
-	if (record?.kind !== "rich" || record.state.kind !== "list") return [];
-	return record.state.phases.flatMap((phase) => phase.items.flatMap((item) => (item.commit === undefined ? [] : [item.commit.sha])));
+	if (record?.kind !== "notes") return [];
+	return record.notes.items.flatMap((note) => (note.commit === undefined ? [] : [note.commit.sha]));
 }
 
 function foldModels(acc: Accumulator, entry: SessionEntry, record: ListRecord | undefined): void {
@@ -182,6 +185,7 @@ function foldFrom(acc: Accumulator, entries: readonly SessionEntry[]): void {
 function factsOf(acc: Accumulator): BranchFacts {
 	acc.facts ??= {
 		state: acc.state,
+		notes: acc.notes,
 		waits: waitsOf(acc),
 		overtimeWarned: acc.overtimeWarned,
 		remindersSinceUserMessage: acc.remindersSinceUserMessage,
