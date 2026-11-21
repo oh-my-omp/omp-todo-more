@@ -22,7 +22,7 @@ function uiTimeEstimate(item: TodoMoreSnapshot["phases"][number]["items"][number
 		: tr("(no time estimate yet: add one with ESTIMATE)", "（尚无时间估计：请使用 ESTIMATE 添加）");
 }
 
-function checklistStatus(status: TodoStatus): "pending" | "active" | "done" | "dropped" | "blocked" {
+function checklistStatus(status: TodoStatus): "pending" | "active" | "done" | "dropped" {
 	switch (status) {
 		case "pending":
 			return "pending";
@@ -32,8 +32,6 @@ function checklistStatus(status: TodoStatus): "pending" | "active" | "done" | "d
 			return "done";
 		case "abandoned":
 			return "dropped";
-		case "blocked":
-			return "blocked";
 		default: {
 			const unreachable: never = status;
 			throw new Error(`Unexpected todo status: ${String(unreachable)}`);
@@ -50,7 +48,7 @@ function checklistPhases(snapshot: TodoMoreSnapshot) {
 			id: item.title,
 			text: item.title,
 			status: checklistStatus(item.status),
-			note: `${uiTimeEstimate(item)}\n${tr("Explanation", "说明")}: ${item.explanation ?? tr("[explanation missing]", "[缺少说明]")}${item.blocker === undefined ? "" : `\n${tr("Blocker", "阻塞原因")}: ${item.blocker}`}${item.commit === undefined ? "" : `\n${tr("Commit", "提交")}: ${commitRecordText(item.commit)}`}`,
+			note: `${uiTimeEstimate(item)}\n${tr("Explanation", "说明")}: ${item.explanation ?? tr("[explanation missing]", "[缺少说明]")}${item.commit === undefined ? "" : `\n${tr("Commit", "提交")}: ${commitRecordText(item.commit)}`}`,
 		})),
 	}));
 }
@@ -126,8 +124,6 @@ export function describeTodoHud(snapshot: TodoMoreSnapshot, expanded = false): N
 					break;
 				case "pending":
 					pending ??= item.title;
-					break;
-				case "blocked":
 					break;
 				default: {
 					const unreachable: never = item.status;

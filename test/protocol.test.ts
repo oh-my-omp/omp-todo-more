@@ -78,24 +78,27 @@ describe("Todo document consumption", () => {
 	});
 
 	test("accepts CRLF documents and distinguishes title, phase, and ALL selectors", () => {
-		const input = document(
-			'DONE "ALL"',
-			'DROP PHASE "Delivery"',
-			"RM ALL",
-			'BLOCK "Wait" "Waiting for service"',
-			'UNBLOCK PHASE "Verification"',
-		).replaceAll("\n", "\r\n");
+		const input = document('DONE "ALL"', 'DROP PHASE "Delivery"', "RM ALL").replaceAll("\n", "\r\n");
 		expect(parseTodo(input)).toEqual({
 			kind: "ok",
 			commands: [
 				{ kind: "done", target: { kind: "task", title: "ALL" } },
 				{ kind: "drop", target: { kind: "phase", name: "Delivery" } },
 				{ kind: "rm", target: { kind: "all" } },
-				{ kind: "block", target: { kind: "task", title: "Wait" }, reason: "Waiting for service" },
-				{ kind: "unblock", target: { kind: "phase", name: "Verification" } },
 			],
 		});
 	});
+
+	for (const { line, command } of [
+		{ line: 'BLOCK "Wait" "Waiting for service"', command: "BLOCK" },
+		{ line: 'UNBLOCK PHASE "Verification"', command: "UNBLOCK" },
+	]) {
+		test(`retired command ${command} is a line-level command error`, () => {
+			expectInvalid(document(line));
+			const preview = previewTodo(`*** Begin Todo\n${line}\n*** End Todo`);
+			expect(preview.error).toEqual({ kind: "line", line: 2, error: { kind: "command", command } });
+		});
+	}
 
 	test("accepts a commit clause on DONE and reads scope and message from its strings", () => {
 		expect(
@@ -213,8 +216,6 @@ describe("Todo document consumption", () => {
 		{ label: "VIEW mixed with mutations", input: document("VIEW", 'DONE "Task"') },
 		{ label: "VIEW following mutations", input: document('DONE "Task"', "VIEW") },
 		{ label: "VIEW following estimate", input: document('ESTIMATE "Task" 6', "VIEW") },
-		{ label: "BLOCK ALL", input: document("BLOCK ALL") },
-		{ label: "UNBLOCK ALL", input: document("UNBLOCK ALL") },
 		{ label: "empty task selector", input: document('DONE ""') },
 		{ label: "empty phase selector", input: document('RM PHASE ""') },
 		{ label: "ADD missing estimate", input: document('ADD "Task" "Reason"') },

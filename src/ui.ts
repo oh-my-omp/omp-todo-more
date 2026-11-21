@@ -67,8 +67,6 @@ function uiStatus(status: TodoStatus): string {
 			return tr("completed", "已完成");
 		case "abandoned":
 			return tr("abandoned", "已放弃");
-		case "blocked":
-			return tr("blocked", "已阻塞");
 		default: {
 			const unreachable: never = status;
 			throw new Error(`Unexpected todo status: ${String(unreachable)}`);
@@ -425,7 +423,6 @@ export class TodoPanel implements Component {
 								`${item.title} [${uiStatus(item.status)}]`,
 								uiTimeEstimate(item.time),
 								item.explanation.kind === "explained" ? item.explanation.text : tr("[explanation missing]", "[缺少说明]"),
-								`${tr("Blocker", "阻塞原因")}: ${item.blocker ?? tr("(none)", "（无）")}`,
 							);
 							labels.push(`${tr("Edit explanation", "编辑说明")}: ${item.title}`);
 						}

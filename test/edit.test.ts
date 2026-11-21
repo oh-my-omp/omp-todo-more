@@ -33,8 +33,7 @@ function currentPhases(): readonly TodoPhase[] {
 				{
 					title: "Check runtime",
 					explanation: { kind: "explained", text: "Wait for the environment" },
-					status: "blocked",
-					blocker: "Runtime is unavailable",
+					status: "pending",
 					time: { kind: "estimated", budgetId: "check-runtime-budget", minutes: 6, elapsedMs: 35_000, runningSince: null },
 				},
 				{
@@ -79,15 +78,13 @@ describe("applyTodoEdit", () => {
 			title: "Verify resume",
 			explanation: { kind: "explained", text: "Earlier draft" },
 			status: "completed",
-			blocker: "Previously waiting for runtime",
 			time: { kind: "estimated", budgetId: "completed-resume-budget", minutes: 2, elapsedMs: 105_000, runningSince: null },
 		},
 		{
 			title: "Verify resume",
 			explanation: { kind: "explained", text: "Earlier draft" },
-			status: "blocked",
-			blocker: "Runtime is unavailable",
-			time: { kind: "estimated", budgetId: "blocked-resume-budget", minutes: 5, elapsedMs: 45_000, runningSince: null },
+			status: "pending",
+			time: { kind: "estimated", budgetId: "pending-resume-budget", minutes: 5, elapsedMs: 45_000, runningSince: null },
 		},
 		{
 			title: "Verify resume",
@@ -98,7 +95,7 @@ describe("applyTodoEdit", () => {
 	];
 
 	for (const latestItem of latestItems) {
-		test(`explanation edit preserves latest ${latestItem.status} status ${latestItem.blocker === undefined ? "without" : "with"} blocker`, () => {
+		test(`explanation edit preserves latest ${latestItem.status} status`, () => {
 			const phases = currentPhases();
 			const state = stateOf({ kind: "set", goal }, [
 				...phases,
@@ -119,7 +116,6 @@ describe("applyTodoEdit", () => {
 								explanation: "Verified after resume",
 								status: latestItem.status,
 								time: latestItem.time,
-								...(latestItem.blocker === undefined ? {} : { blocker: latestItem.blocker }),
 							},
 						],
 					},
