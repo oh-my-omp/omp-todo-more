@@ -31,7 +31,7 @@ function variantSettings(variant: Variant, todo: TodoSettings): { config: Frame;
 		case "baseline":
 			return { config: { todo: { enabled: false, ...todo } }, plugin: {} };
 		case "candidate":
-			return { config: { todo: { enabled: true } }, plugin: { ...todo } };
+			return { config: { todo: { enabled: true, ...todo } }, plugin: {} };
 		default: {
 			const unreachable: never = variant;
 			return unreachable;
