@@ -4,6 +4,7 @@
 
 ### Changed
 
+- `DONE` now commits through the host's selective commit on a private index instead of staging the shared index. `DONE "title" "<message>"` commits only the changes the host's change record attributes to this agent and its subagents; `DONE "title" "<paths>" "<message>"` commits every change in the named git pathspecs, resolved by git from the session directory as `git add -- <pathspec>` would. Neither takes another writer's staged or unstaged changes outside the commit. A `DONE` without a clause is rejected only when this agent has uncommitted work (another writer's changes no longer trigger it). When HEAD moves while the commit is built, the commit lands on the new HEAD if the selection still applies; otherwise `DONE` fails naming the move and the paths and the task stays open. In a session that keeps no change record, the message-only form fails and asks for paths, and a clause-less `DONE` in a dirty checkout is rejected with the path form alone.
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 - Subagents get `todo` back with the enabled tools in the shared canonical order (builtins in registry order, the rest by Unicode code point), the same order other omomp plugins write; the repository declares `omomp-shared/active-tools.ts`, so the check compares it with oh-my-omp/shared.
 - Todo card rendering, collapsed-row selection, phase numbering, text sanitizing and the session-exit/tool-start entry types now come from the host's exports instead of in-repo copies; the card looks the same.

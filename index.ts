@@ -51,7 +51,7 @@ const parentCwdOf =
 
 async function executeTodo(session: AgentSession, params: unknown, ctx: ExtensionContext) {
 	const settings = await readSettings({ logger }, ctx);
-	return runTodo(session, params, parentCwdOf(ctx), settings.leafMaxMinutes);
+	return runTodo(session, params, parentCwdOf(ctx), settings.leafMaxMinutes, ctx.agent);
 }
 
 async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promise<void> {
