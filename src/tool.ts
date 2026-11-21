@@ -1,8 +1,9 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
 import { type BranchFacts, branchFacts } from "./branch.ts";
 import { commitTodoState, type TodoSession } from "./commit.ts";
-import { commitCompletion, sharedWorktreeRoot, worktreeState } from "./git.ts";
+import { type AgentRef, commitCompletion, sharedWorktreeRoot, workState } from "./git.ts";
 import { participatingModels } from "./models.ts";
 import { customFormat, parametersSchema, parseTodo, type TodoCommand, type TodoCommitClause, type TodoTarget } from "./protocol.ts";
 import { DEFAULT_SETTINGS } from "./settings.ts";
@@ -40,7 +41,7 @@ Any error rejects the whole document. The call fails unless:
 - ESTIMATE cannot change the estimate of an item that already received an overtime warning; add its remaining work as new items with PHASE and ADD.
 - Status commands target an existing "title" or PHASE "name", matched exactly (DONE, DROP and RM also take ALL); never use IDs or guess a title.
 - VIEW is the only command in its document.
-- In a git checkout with uncommitted work, DONE carries a commit clause — DONE "title" "<message>" or DONE "title" "<paths>" "<message>" — and the tool runs git commit itself.
+- In a git checkout where this agent has uncommitted work, DONE carries a commit clause — DONE "title" "<message>" to commit this agent's changes or DONE "title" "<paths>" "<message>" to commit those paths — and the tool runs git commit itself.
 
 Topics — read the one a call needs before making it:
 - \`xd://todo/protocol\` — before writing a Todo document, choosing selectors, or completing tasks with commits
@@ -597,14 +598,17 @@ export function previewTodo(
 export type ParentCwd = () => string | undefined;
 
 const TOP_LEVEL: ParentCwd = () => undefined;
+const MAIN_AGENT: AgentRef = { id: MAIN_AGENT_ID, parentId: undefined };
 
 async function completeWithCommit(
 	session: TodoSession,
 	clause: TodoCommitClause | undefined,
 	closed: readonly WorkItem[],
 	parentCwd: ParentCwd,
+	agent: AgentRef,
 ): Promise<{ kind: "ok"; note?: string } | { kind: "refused"; message: string }> {
 	const cwd = session.sessionManager.getCwd();
+	const artifactsDir = session.sessionManager.getArtifactsDir();
 	const parent = parentCwd();
 	const shared = parent === undefined ? null : sharedWorktreeRoot(cwd, parent);
 	if (shared !== null) {
@@ -615,16 +619,34 @@ async function completeWithCommit(
 	}
 	const named = closed.length === 1 ? `Task ${JSON.stringify(closed[0]!.title)}` : `${closed.length} completed tasks`;
 	if (clause === undefined) {
-		const state = await worktreeState(cwd);
-		if (state.kind === "failed") return { kind: "refused", message: state.message };
-		if (state.kind !== "dirty") return { kind: "ok" };
-		return {
-			kind: "refused",
-			message: `${named} would leave uncommitted work in ${state.root}: re-issue DONE "title" "<message>" to commit every change, or DONE "title" "<paths>" "<message>" to commit a scope.`,
-		};
+		const state = await workState(cwd, artifactsDir, agent);
+		switch (state.kind) {
+			case "failed":
+				return { kind: "refused", message: state.message };
+			case "no-repository":
+			case "clean":
+			case "foreign":
+				return { kind: "ok" };
+			case "own":
+				return {
+					kind: "refused",
+					message: `${named} would leave this agent's uncommitted work in ${state.root}: re-issue DONE "title" "<message>" to commit this agent's changes, or DONE "title" "<paths>" "<message>" to commit a scope.`,
+				};
+			case "unattributed":
+				return {
+					kind: "refused",
+					message: `${named} would leave uncommitted work in ${state.root}, and this session keeps no change record to tell whose it is: re-issue DONE "title" "<paths>" "<message>" to commit named paths.`,
+				};
+			default: {
+				const unreachable: never = state;
+				throw new Error(`Unexpected work state: ${String(unreachable)}`);
+			}
+		}
 	}
 	const outcome = await commitCompletion(
 		cwd,
+		artifactsDir,
+		agent,
 		clause.scope,
 		clause.message,
 		participatingModels(branchFacts(session.sessionManager), session.model),
@@ -637,13 +659,7 @@ async function completeWithCommit(
 				note: `Committed ${commitRecordText(outcome.commit)} (${commitScopeText(outcome.commit.scope)}) in ${outcome.root}.`,
 			};
 		case "inert":
-			return {
-				kind: "ok",
-				note:
-					outcome.because === "no-repository"
-						? "No git repository here: the commit clause committed nothing."
-						: "Nothing to commit: the working tree is clean, so the commit clause committed nothing.",
-			};
+			return { kind: "ok", note: INERT_NOTES[outcome.because] };
 		case "failed":
 			return { kind: "refused", message: outcome.message };
 		default: {
@@ -653,11 +669,18 @@ async function completeWithCommit(
 	}
 }
 
+const INERT_NOTES = {
+	"no-repository": "No git repository here: the commit clause committed nothing.",
+	clean: "Nothing to commit: the working tree is clean, so the commit clause committed nothing.",
+	foreign: "Nothing to commit: none of the uncommitted changes are this agent's, so the commit clause committed nothing.",
+} as const;
+
 export async function runTodo(
 	session: TodoSession,
 	raw: unknown,
 	parentCwd: ParentCwd = TOP_LEVEL,
 	leafMaxMinutes: number = DEFAULT_SETTINGS.leafMaxMinutes,
+	agent: AgentRef = MAIN_AGENT,
 ): Promise<AgentToolResult<TodoMoreDetails>> {
 	const facts = branchFacts(session.sessionManager);
 	const previous = facts.state;
@@ -694,7 +717,7 @@ export async function runTodo(
 				.flatMap((phase) => phase.items)
 				.filter((item) => item.status === "completed" && !alreadyCompleted.has(item.title));
 			if (closed.length > 0) {
-				const step = await completeWithCommit(session, params.commit, closed, parentCwd);
+				const step = await completeWithCommit(session, params.commit, closed, parentCwd, agent);
 				if (step.kind === "refused") {
 					return result(session, previous, formatSummary(previous, [step.message], true), { op, operations: ops, isError: true });
 				}

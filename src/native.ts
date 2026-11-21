@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { type NativeChild, type NativeNode, node, stableKey } from "@oh-my-pi/pi-tui";
+import { isClosedTodo } from "@oh-my-pi/pi-tui/tools/todo";
 import { tr } from "../omomp-shared/i18n.ts";
 import type { parametersSchema } from "./protocol.ts";
 import {
@@ -7,7 +8,6 @@ import {
 	compactRemovedLabel,
 	compactTodoLabel,
 	detailsSchema,
-	isClosed,
 	parseCall,
 	progressCounts,
 	type ReadTodoDetails,
@@ -318,7 +318,7 @@ function resultPanel(details: ReadTodoDetails, args: unknown, expanded: boolean)
 	const checklistPhases = phases.map((phase, p) => ({
 		id: `p${p}`,
 		title: phase.name,
-		collapsed: !expanded && phase.items.every(isClosed),
+		collapsed: !expanded && phase.items.every(isClosedTodo),
 		items: phase.items.map((item, t) => ({
 			id: `p${p}.${t}`,
 			text: compactTodoLabel(item),
