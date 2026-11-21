@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
-import { branchFacts } from "./branch.ts";
+import { type BranchFacts, branchFacts } from "./branch.ts";
 import { commitTodoState, type TodoSession } from "./commit.ts";
 import { type AgentRef, commitCompletion, sharedWorktreeRoot, workState } from "./git.ts";
 import { participatingModels } from "./models.ts";
@@ -534,6 +534,68 @@ function operations(commands: TodoCommand[]): Operations {
 	return { kind: "ok", params };
 }
 
+function batchOf(raw: unknown): Operations {
+	const input = parametersSchema.safeParse(raw);
+	if (!input.success) return { kind: "invalid", message: `Invalid todo arguments: ${input.error.message}` };
+	const parsed = parseTodo(input.data.input);
+	if (parsed.kind === "invalid") return { kind: "invalid", message: parsed.message };
+	return operations(parsed.commands);
+}
+
+type Step = { kind: "rejected"; errors: string[] } | { kind: "applied"; phases: WorkPhase[] };
+
+/** The rule checks and the operation itself for one command of a batch; `phases` is edited in place. */
+function applyStep(phases: WorkPhase[], next: TodoMoreState, params: Params, rules: BudgetRules): Step {
+	const errors = ruleErrors(params, next, rules);
+	if (params.op === "goal" && next.kind === "empty") errors.push("GOAL requires a non-empty list; use INIT to create one");
+	const applied = errors.length === 0 ? applyOp(phases, params, errors) : phases;
+	return errors.length > 0 ? { kind: "rejected", errors } : { kind: "applied", phases: applied };
+}
+
+/** The state a batch has reached once `params` has been applied to `phases`. */
+function settleStep(phases: WorkPhase[], next: TodoMoreState, params: Params, waits: BranchFacts["waits"], now: number): TodoMoreState {
+	if (params.op !== "goal") {
+		normalizeInProgress(phases);
+		for (const phase of phases) {
+			for (const item of phase.items) item.time = transitionTime(item.time, item.status, now, waits);
+		}
+	}
+	const goal: GoalState =
+		params.goal !== undefined ? { kind: "set", goal: params.goal } : next.kind === "list" ? next.goal : { kind: "missing" };
+	return stateOf(goal, phases);
+}
+
+export type TodoPreview = { kind: "state"; state: TodoMoreState } | { kind: "rejected" };
+
+/**
+ * The state `raw` would leave behind `previous`, from the parse and rule checks `runTodo` runs and without executing its effects.
+ * `rejected` means `batchOf` or `applyStep` fails, so `runTodo` fails too. `state` does not promise that `runTodo` succeeds: the preview
+ * does not model `completeWithCommit` (a `DONE` that closes an item is refused while this agent has uncommitted work, or the session
+ * keeps no change record to tell, and the `DONE` carries no commit clause, or when its commit fails) nor `commitTodoState` (the branch
+ * write); both leave the list as it was.
+ */
+export function previewTodo(
+	facts: Pick<BranchFacts, "waits" | "overtimeWarned">,
+	previous: TodoMoreState,
+	raw: unknown,
+	leafMaxMinutes: number,
+): TodoPreview {
+	const batch = batchOf(raw);
+	if (batch.kind === "invalid") return { kind: "rejected" };
+	if (batch.params.length === 1 && batch.params[0]!.op === "view") return { kind: "state", state: previous };
+	const rules: BudgetRules = { leafMaxMinutes, overtimeWarned: facts.overtimeWarned };
+	const now = Date.now();
+	let phases = working(previous);
+	let next = previous;
+	for (const params of batch.params) {
+		const applied = applyStep(phases, next, params, rules);
+		if (applied.kind === "rejected") return { kind: "rejected" };
+		phases = applied.phases;
+		next = settleStep(phases, next, params, facts.waits, now);
+	}
+	return { kind: "state", state: next };
+}
+
 export type ParentCwd = () => string | undefined;
 
 const TOP_LEVEL: ParentCwd = () => undefined;
@@ -623,11 +685,7 @@ export async function runTodo(
 ): Promise<AgentToolResult<TodoMoreDetails>> {
 	const facts = branchFacts(session.sessionManager);
 	const previous = facts.state;
-	const input = parametersSchema.safeParse(raw);
-	if (!input.success) return result(session, previous, `Invalid todo arguments: ${input.error.message}`, { isError: true });
-	const parsed = parseTodo(input.data.input);
-	if (parsed.kind === "invalid") return result(session, previous, parsed.message, { isError: true });
-	const batch = operations(parsed.commands);
+	const batch = batchOf(raw);
 	if (batch.kind === "invalid") return result(session, previous, batch.message, { isError: true });
 	const ops = batch.params.map((params) => params.op);
 	const op = ops.length === 1 ? ops[0]! : "batch";
@@ -641,8 +699,6 @@ export async function runTodo(
 	const waits = facts.waits;
 	const rules: BudgetRules = { leafMaxMinutes, overtimeWarned: facts.overtimeWarned };
 	for (const params of batch.params) {
-		const errors = ruleErrors(params, next, rules);
-		if (params.op === "goal" && next.kind === "empty") errors.push("GOAL requires a non-empty list; use INIT to create one");
 		const alreadyCompleted =
 			params.op === "done"
 				? new Set(
@@ -652,8 +708,11 @@ export async function runTodo(
 							.map((item) => item.title),
 					)
 				: undefined;
-		if (errors.length === 0) phases = applyOp(phases, params, errors);
-		if (errors.length > 0) return result(session, previous, formatSummary(previous, errors, true), { op, operations: ops, isError: true });
+		const applied = applyStep(phases, next, params, rules);
+		if (applied.kind === "rejected") {
+			return result(session, previous, formatSummary(previous, applied.errors, true), { op, operations: ops, isError: true });
+		}
+		phases = applied.phases;
 		if (alreadyCompleted !== undefined) {
 			const closed = phases
 				.flatMap((phase) => phase.items)
@@ -666,15 +725,7 @@ export async function runTodo(
 				if (step.note !== undefined) notes.push(step.note);
 			}
 		}
-		if (params.op !== "goal") {
-			normalizeInProgress(phases);
-			for (const phase of phases) {
-				for (const item of phase.items) item.time = transitionTime(item.time, item.status, now, waits);
-			}
-		}
-		const goal: GoalState =
-			params.goal !== undefined ? { kind: "set", goal: params.goal } : next.kind === "list" ? next.goal : { kind: "missing" };
-		next = stateOf(goal, phases);
+		next = settleStep(phases, next, params, waits, now);
 	}
 	const committed = commitTodoState(session, next);
 	if (committed.kind === "failed") {
