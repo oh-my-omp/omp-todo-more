@@ -567,8 +567,10 @@ function settleStep(phases: WorkPhase[], next: TodoMoreState, params: Params, wa
 export type TodoPreview = { kind: "state"; state: TodoMoreState } | { kind: "rejected" };
 
 /**
- * The state `raw` would leave behind `previous`, from the parse and rule checks `runTodo` runs and without executing its commits.
- * `rejected` is exactly the case where `runTodo` fails before committing.
+ * The state `raw` would leave behind `previous`, from the parse and rule checks `runTodo` runs and without executing its effects.
+ * `rejected` means `batchOf` or `applyStep` fails, so `runTodo` fails too. `state` does not promise that `runTodo` succeeds: the preview
+ * does not model `completeWithCommit` (a `DONE` that closes an item is refused on a dirty worktree without a commit clause, or when
+ * its commit fails) nor `commitTodoState` (the branch write); both leave the list as it was.
  */
 export function previewTodo(
 	facts: Pick<BranchFacts, "waits" | "overtimeWarned">,
