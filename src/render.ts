@@ -1,36 +1,38 @@
+import { z } from "@oh-my-pi/omptype/zod";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { type ToolRenderResultOptions, z } from "@oh-my-pi/pi-coding-agent";
+import type { ToolRenderResultOptions } from "@oh-my-pi/pi-coding-agent";
 import { type Component, replaceTabs, Text, type Theme } from "@oh-my-pi/pi-tui";
 import { renderOutputBlock } from "@oh-my-pi/pi-tui/render/output-block";
 import { renderStatusLine } from "@oh-my-pi/pi-tui/render/status-line";
 import { isClosedTodo, phaseRomanNumeral, selectCollapsedTodos } from "@oh-my-pi/pi-tui/tools/todo";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import { language, tr } from "../omomp-shared/i18n.ts";
-import { formatTodoParseError, previewTodo, type TodoCommand, type TodoPreview, type TodoTarget } from "./protocol.ts";
-import {
-	commitScopeSchema,
-	commitScopeText,
-	persistedStatusSchema,
-	type TodoMoreSnapshot,
-	todoGoalSchema,
-	todoMoreSnapshotSchema,
-} from "./state.ts";
+import { tr } from "../omomp-shared/i18n.ts";
+import { previewTodoArgs, type TodoPreview } from "./protocol.ts";
+import { commitScopeSchema, persistedStatusSchema, type TodoMoreSnapshot, todoGoalSchema, todoMoreSnapshotSchema } from "./state.ts";
 import { OPS, type Op, RESULT_OPS } from "./tool.ts";
 
 const itemParamSchema = z.object({
+	id: z.string().optional(),
 	title: z.string(),
 	explanation: z.string(),
 	estimatedMinutes: z.number(),
 });
 
-// Results written before BLOCK and UNBLOCK were removed still name those operations; they are dropped where a result is read.
+// Results written before the DSL and BLOCK/UNBLOCK were retired still name those operations.
+const HISTORICAL_OPS = ["append", "rm", "view"] as const;
 const LEGACY_OPS = ["block", "unblock"] as const;
+type HistoricalOp = (typeof HISTORICAL_OPS)[number];
 type LegacyOp = (typeof LEGACY_OPS)[number];
+type StoredOp = Op | HistoricalOp;
+const ALL_STORED_OPS = [...OPS, ...HISTORICAL_OPS] as const;
+const ALL_RESULT_OPS = [...RESULT_OPS, ...HISTORICAL_OPS, "update"] as const;
 const isLegacyOp = (op: string): op is LegacyOp => (LEGACY_OPS as readonly string[]).includes(op);
-const currentOp = (op: Op | LegacyOp): op is Op => !isLegacyOp(op);
+const currentOp = (op: StoredOp | LegacyOp): op is StoredOp => !isLegacyOp(op);
 
 const changeSchema = z.object({
-	op: z.enum([...OPS, ...LEGACY_OPS]),
+	op: z.enum([...ALL_STORED_OPS, ...LEGACY_OPS]),
+	id: z.string().optional(),
+	title: z.string().optional(),
 	goal: todoGoalSchema.optional(),
 	list: z.array(z.object({ phase: z.string(), items: z.array(itemParamSchema) })).optional(),
 	task: z.string().optional(),
@@ -45,17 +47,17 @@ type Change = z.infer<typeof changeSchema>;
 
 export const detailsSchema = z.object({
 	op: z
-		.enum([...RESULT_OPS, ...LEGACY_OPS])
+		.enum([...ALL_RESULT_OPS, ...LEGACY_OPS])
 		.optional()
 		.transform((op) => (op === undefined || isLegacyOp(op) ? undefined : op)),
 	operations: z
-		.array(z.enum([...OPS, ...LEGACY_OPS]))
+		.array(z.enum([...ALL_STORED_OPS, ...LEGACY_OPS]))
 		.optional()
 		.transform((operations) => operations?.filter(currentOp)),
 	changes: z
 		.array(changeSchema)
 		.optional()
-		.transform((changes) => changes?.filter((change): change is Change & { op: Op } => currentOp(change.op))),
+		.transform((changes) => changes?.filter((change): change is Change & { op: StoredOp } => currentOp(change.op))),
 	phases: z.array(z.object({ name: z.string(), tasks: z.array(z.object({ content: z.string(), status: persistedStatusSchema })) })),
 	storage: z.enum(["session", "memory"]),
 	completedTasks: z.array(z.object({ phase: z.string(), content: z.string() })).optional(),
@@ -82,90 +84,55 @@ function goalUiLines(goal: TodoMoreSnapshot["goal"]): string[] {
 	];
 }
 
-const callSchema = z.object({ input: z.string().optional() });
 type Call = TodoPreview;
 export function parseCall(args: unknown): Call {
-	const parsed = callSchema.safeParse(args);
-	if (!parsed.success) return { commands: [], pending: "", complete: false, error: { kind: "input" } };
-	return previewTodo(parsed.data.input ?? "");
+	return previewTodoArgs(args);
 }
 
-function previewTarget(target: TodoTarget): string {
-	switch (target.kind) {
-		case "task":
-			return `${tr("task", "任务")}: ${target.title}`;
-		case "phase":
-			return `${tr("phase", "阶段")}: ${target.name}`;
-		case "all":
-			return tr("all todos", "全部待办");
-		default: {
-			const unreachable: never = target;
-			throw new Error(`Unexpected todo target: ${String(unreachable)}`);
-		}
-	}
-}
-
-function commandPreviewLines(command: TodoCommand): string[] {
-	switch (command.kind) {
-		case "init":
-		case "goal":
-			return [
-				`${command.kind.toUpperCase()} ${tr("goal", "目标")}`,
-				`  ${tr("Objective", "目标")}: ${command.goal.objective}`,
-				`  ${tr("Measure", "衡量方式")}: ${command.goal.measure}`,
-				`  ${tr("Done when", "完成条件")}: ${command.goal.doneWhen}`,
-			];
-		case "phase":
-			return [`PHASE: ${command.name} (${tr("ADD context", "ADD 上下文")})`];
-		case "add":
-			return [
-				`ADD ${tr("task", "任务")}: ${command.title}`,
-				`  ${tr("Explanation", "说明")}: ${command.explanation}`,
-				`  ${tr("Estimate", "预计")}: ${command.estimatedMinutes}${tr("m", "分钟")}`,
-			];
-		case "explain":
-			return [`EXPLAIN ${tr("task", "任务")}: ${command.title}`, `  ${tr("Explanation", "说明")}: ${command.explanation}`];
-		case "estimate":
-			return [
-				`ESTIMATE ${tr("task", "任务")}: ${command.title}`,
-				`  ${tr("Estimate", "预计")}: ${command.estimatedMinutes}${tr("m", "分钟")}`,
-			];
-		case "start":
-			return [`START ${tr("task", "任务")}: ${command.title}`];
-		case "done":
-			return [
-				`DONE ${previewTarget(command.target)}`,
-				...(command.commit === undefined
-					? []
-					: [
-							`  ${tr("Commit", "提交")} ${
-								command.commit.scope.kind === "all" ? tr("this agent's changes", "本 agent 的更改") : commitScopeText(command.commit.scope)
-							}: ${command.commit.message}`,
-						]),
-			];
-		case "drop":
-		case "rm":
-			return [`${command.kind.toUpperCase()} ${previewTarget(command.target)}`];
-		case "view":
-			return [command.target === undefined ? `VIEW ${tr("open todos", "未完成待办")}` : `VIEW ${previewTarget(command.target)}`];
-		default: {
-			const unreachable: never = command;
-			throw new Error(`Unexpected todo command: ${String(unreachable)}`);
-		}
-	}
+export function previewOperationCount(call: Call): number {
+	return (
+		(call.goal === undefined ? 0 : 1) +
+		call.add.length +
+		(call.start_id === undefined ? 0 : 1) +
+		call.explain.length +
+		call.estimate.length +
+		call.done_ids.length +
+		call.drop_ids.length
+	);
 }
 
 export function callPreviewLines(call: Call): string[] {
 	const lines = [tr("Preview only — not committed.", "仅预览 — 未提交。")];
-	for (const command of call.commands) lines.push(...commandPreviewLines(command));
-	if (call.commands.length === 0) lines.push(tr("Waiting for complete command lines.", "等待完整命令行。"));
-	if (call.error) lines.push(`${tr("Invalid preview", "预览无效")}: ${formatTodoParseError(call.error, language())}`);
-	if (!call.complete && call.pending !== "")
-		lines.push(`${tr("Pending line — unfinished, not executable", "待处理行 — 未完成，无法执行")}: ${call.pending}`);
+	if (call.goal !== undefined) {
+		lines.push(
+			`goal`,
+			`  ${tr("Objective", "目标")}: ${call.goal.title ?? ""}`,
+			`  ${tr("Measure", "衡量方式")}: ${call.goal.summary ?? ""}`,
+			`  ${tr("Done when", "完成条件")}: ${call.goal.acceptance ?? ""}`,
+		);
+	}
+	for (const item of call.add) {
+		lines.push(
+			`add [${item.phase ?? "Tasks"}] ${item.title ?? ""}`,
+			...(item.detail === undefined ? [] : [`  ${tr("Explanation", "说明")}: ${item.detail}`]),
+			...(item.minutes === undefined ? [] : [`  ${tr("Estimate", "预计")}: ${item.minutes}${tr("m", "分钟")}`]),
+		);
+	}
+	if (call.start_id !== undefined) lines.push(`start_id: ${call.start_id}`);
+	for (const entry of call.explain) {
+		lines.push(`explain ${entry.id ?? ""}`, ...(entry.note === undefined ? [] : [`  ${tr("Explanation", "说明")}: ${entry.note}`]));
+	}
+	for (const entry of call.estimate) {
+		lines.push(`estimate ${entry.id ?? ""}: ${entry.minutes ?? ""}${tr("m", "分钟")}`);
+	}
+	if (call.done_ids.length > 0) lines.push(`done_ids: ${call.done_ids.join(", ")}`);
+	if (call.drop_ids.length > 0) lines.push(`drop_ids: ${call.drop_ids.join(", ")}`);
+	if (previewOperationCount(call) === 0) lines.push(tr("Waiting for todo arguments.", "等待待办参数。"));
+	if (call.error !== undefined) lines.push(`${tr("Invalid preview", "预览无效")}: ${call.error}`);
 	lines.push(
 		call.complete
-			? tr("Document complete; awaiting execution.", "文档完整；等待执行。")
-			: tr("Generating — awaiting a complete Todo document.", "正在生成 — 等待完整 Todo 文档。"),
+			? tr("Arguments complete; awaiting execution.", "参数完整；等待执行。")
+			: tr("Generating — awaiting complete todo arguments.", "正在生成 — 等待完整待办参数。"),
 	);
 	return lines.map(forDisplay);
 }
@@ -216,6 +183,14 @@ export function compactRemovedLabel(title: string): string {
 	return `${forDisplay(title)} · ${tr("removed", "已删除")}`;
 }
 
+function titleById(more: TodoMoreSnapshot, id: string): string | undefined {
+	for (const phase of more.phases) {
+		const found = phase.items.find((item) => item.id === id);
+		if (found) return found.title;
+	}
+	return undefined;
+}
+
 export function resultView(details: ReadTodoDetails, args: unknown, expanded: boolean): ResultView {
 	if (expanded) return { kind: "full" };
 	const call = parseCall(args);
@@ -223,8 +198,7 @@ export function resultView(details: ReadTodoDetails, args: unknown, expanded: bo
 		details.op === "init" ||
 		details.op === "view" ||
 		details.operations?.includes("init") ||
-		details.changes?.some((change) => change.op === "init" || change.op === "view") ||
-		call.commands.some((command) => command.kind === "init" || command.kind === "view")
+		details.changes?.some((change) => change.op === "init" || change.op === "view")
 	) {
 		return { kind: "full" };
 	}
@@ -243,23 +217,29 @@ export function resultView(details: ReadTodoDetails, args: unknown, expanded: bo
 				case "goal":
 					goalChanged = true;
 					break;
+				case "add":
 				case "append":
 					for (const item of change.items ?? []) touchedTasks.add(item.title);
 					break;
 				case "start":
-				case "estimate":
-					if (change.task !== undefined) touchedTasks.add(change.task);
+				case "estimate": {
+					const name = change.title ?? change.task ?? (change.id === undefined ? undefined : titleById(details.more, change.id));
+					if (name !== undefined) touchedTasks.add(name);
 					break;
-				case "explain":
-					if (change.task !== undefined) {
-						touchedTasks.add(change.task);
-						explainedTasks.add(change.task);
+				}
+				case "explain": {
+					const name = change.title ?? change.task ?? (change.id === undefined ? undefined : titleById(details.more, change.id));
+					if (name !== undefined) {
+						touchedTasks.add(name);
+						explainedTasks.add(name);
 					}
 					break;
+				}
 				case "done":
-				case "drop":
-					if (change.task !== undefined) {
-						touchedTasks.add(change.task);
+				case "drop": {
+					const name = change.title ?? change.task ?? (change.id === undefined ? undefined : titleById(details.more, change.id));
+					if (name !== undefined) {
+						touchedTasks.add(name);
 					} else if (change.phase !== undefined) {
 						const phase = details.more.phases.find((candidate) => candidate.name === change.phase);
 						if (phase) for (const item of phase.items) touchedTasks.add(item.title);
@@ -267,6 +247,7 @@ export function resultView(details: ReadTodoDetails, args: unknown, expanded: bo
 						for (const phase of details.more.phases) for (const item of phase.items) touchedTasks.add(item.title);
 					}
 					break;
+				}
 				case "rm":
 					if (change.task !== undefined) removedTaskCandidates.push(change.task);
 					else if (change.phase !== undefined) removedPhaseCandidates.push(change.phase);
@@ -277,56 +258,31 @@ export function resultView(details: ReadTodoDetails, args: unknown, expanded: bo
 				}
 			}
 		}
-	} else if (call.commands.length > 0) {
-		for (const command of call.commands) {
-			switch (command.kind) {
-				case "init":
-				case "view":
-					return { kind: "full" };
-				case "goal":
-					goalChanged = true;
-					break;
-				case "phase":
-					break;
-				case "add":
-				case "start":
-				case "estimate":
-					touchedTasks.add(command.title);
-					break;
-				case "explain":
-					touchedTasks.add(command.title);
-					explainedTasks.add(command.title);
-					break;
-				case "done":
-				case "drop":
-					switch (command.target.kind) {
-						case "task":
-							touchedTasks.add(command.target.title);
-							break;
-						case "phase": {
-							const name = command.target.name;
-							const phase = details.more.phases.find((candidate) => candidate.name === name);
-							if (phase) for (const item of phase.items) touchedTasks.add(item.title);
-							break;
-						}
-						case "all":
-							for (const phase of details.more.phases) for (const item of phase.items) touchedTasks.add(item.title);
-							break;
-						default: {
-							const unreachable: never = command.target;
-							throw new Error(`Unexpected todo target: ${String(unreachable)}`);
-						}
-					}
-					break;
-				case "rm":
-					if (command.target.kind === "task") removedTaskCandidates.push(command.target.title);
-					else if (command.target.kind === "phase") removedPhaseCandidates.push(command.target.name);
-					break;
-				default: {
-					const unreachable: never = command;
-					throw new Error(`Unexpected todo command: ${String(unreachable)}`);
-				}
+	} else if (previewOperationCount(call) > 0) {
+		if (call.goal !== undefined) goalChanged = true;
+		for (const item of call.add) if (item.title !== undefined) touchedTasks.add(item.title);
+		if (call.start_id !== undefined) {
+			const name = titleById(details.more, call.start_id);
+			if (name !== undefined) touchedTasks.add(name);
+		}
+		for (const entry of call.explain) {
+			const name = entry.id === undefined ? undefined : titleById(details.more, entry.id);
+			if (name !== undefined) {
+				touchedTasks.add(name);
+				explainedTasks.add(name);
 			}
+		}
+		for (const entry of call.estimate) {
+			const name = entry.id === undefined ? undefined : titleById(details.more, entry.id);
+			if (name !== undefined) touchedTasks.add(name);
+		}
+		for (const id of call.done_ids) {
+			const name = titleById(details.more, id);
+			if (name !== undefined) touchedTasks.add(name);
+		}
+		for (const id of call.drop_ids) {
+			const name = titleById(details.more, id);
+			if (name !== undefined) touchedTasks.add(name);
 		}
 	}
 	const phases: DeltaPhase[] = [];
@@ -455,7 +411,7 @@ export function renderTodoResult(
 							lines.push(`  ${branch} ${formatItem(item, theme, completionKeys.has(`${phase.name}\u0000${item.title}`), spinnerFrame)}`);
 							if (phase.explained.has(item.title)) {
 								const explanation = forDisplay(
-									item.explanation ?? tr("(no explanation yet: add one with EXPLAIN)", "（尚无说明：请使用 EXPLAIN 添加）"),
+									item.explanation ?? tr("(no explanation yet: add one with explain)", "（尚无说明：请使用 explain 添加）"),
 								);
 								for (const line of explanation.split("\n")) lines.push(`  ${theme.fg("dim", continued)}  ${theme.fg("dim", line)}`);
 							}
@@ -514,7 +470,7 @@ export function renderTodoResult(
 				lines.push(`  ${branch} ${formatItem(item, theme, completionKeys.has(`${phase.name}\u0000${item.title}`), spinnerFrame)}`);
 				if (expanded && !isClosedTodo(item)) {
 					const explanation = forDisplay(
-						item.explanation ?? tr("(no explanation yet: add one with EXPLAIN)", "（尚无说明：请使用 EXPLAIN 添加）"),
+						item.explanation ?? tr("(no explanation yet: add one with explain)", "（尚无说明：请使用 explain 添加）"),
 					);
 					for (const line of explanation.split("\n")) lines.push(`  ${theme.fg("dim", continued)}  ${theme.fg("dim", line)}`);
 				}

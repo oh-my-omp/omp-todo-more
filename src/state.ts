@@ -1,4 +1,5 @@
-import { type SessionEntry, z } from "@oh-my-pi/pi-coding-agent";
+import { z } from "@oh-my-pi/omptype/zod";
+import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 
 export const TODO_MORE_ENTRY_TYPE = "mouriya.omp.todo-more";
@@ -143,6 +144,7 @@ export function transitionTimestamps(
 }
 
 export type TodoItem = {
+	readonly id?: string;
 	readonly title: string;
 	readonly explanation: Explanation;
 	readonly status: TodoStatus;
@@ -169,6 +171,7 @@ export const persistedStatusSchema = z
 	.transform((status): TodoStatus => (status === "blocked" ? "pending" : status));
 
 const itemSnapshotSchema = z.object({
+	id: z.string().min(1).optional(),
 	title: z.string(),
 	explanation: z.string().nullable(),
 	status: persistedStatusSchema,
@@ -184,6 +187,7 @@ export const todoMoreSnapshotSchema = z.object({
 export type TodoMoreSnapshot = z.infer<typeof todoMoreSnapshotSchema>;
 
 const itemNoteSchema = z.object({
+	id: z.string().min(1).optional(),
 	phase: z.string(),
 	title: z.string(),
 	explanation: z.string().nullable(),
@@ -232,6 +236,7 @@ export function toSnapshot(state: TodoMoreState): TodoMoreSnapshot {
 				phases: state.phases.map((phase) => ({
 					name: phase.name,
 					items: phase.items.map((item) => ({
+						...(item.id === undefined ? {} : { id: item.id }),
 						title: item.title,
 						explanation: item.explanation.kind === "explained" ? item.explanation.text : null,
 						status: item.status,
@@ -253,6 +258,7 @@ export function snapshotToState(snapshot: TodoMoreSnapshot): TodoMoreState {
 		name: phase.name,
 		items: phase.items.map(
 			(item): TodoItem => ({
+				...(item.id === undefined ? {} : { id: item.id }),
 				title: item.title,
 				explanation: item.explanation === null ? { kind: "missing" } : { kind: "explained", text: item.explanation },
 				status: item.status,
@@ -293,6 +299,7 @@ export function joinHost(phases: readonly HostTodoPhase[], notes: TodoNotes): To
 		items: phase.tasks.map((task): TodoItem => {
 			const note = known.get(noteKey(phase.name, task.content));
 			return {
+				...(note?.id === undefined ? {} : { id: note.id }),
 				title: task.content,
 				explanation: note?.explanation == null ? { kind: "missing" } : { kind: "explained", text: note.explanation },
 				time: note?.time ?? { kind: "missing" },
@@ -314,6 +321,7 @@ export function toNotes(state: TodoMoreState): TodoNotes {
 				goal: state.goal.kind === "set" ? state.goal.goal : null,
 				items: state.phases.flatMap((phase) =>
 					phase.items.map((item) => ({
+						...(item.id === undefined ? {} : { id: item.id }),
 						phase: phase.name,
 						title: item.title,
 						explanation: item.explanation.kind === "explained" ? item.explanation.text : null,
@@ -367,12 +375,53 @@ export function explanationText(item: TodoItem): string {
 		case "explained":
 			return item.explanation.text;
 		case "missing":
-			return "(no explanation yet: add one with EXPLAIN)";
+			return "(no explanation yet: add one with explain)";
 		default: {
 			const unreachable: never = item.explanation;
 			throw new Error(`Unexpected explanation: ${String(unreachable)}`);
 		}
 	}
+}
+
+export function phaseSlug(name: string): string {
+	const slug = name
+		.trim()
+		.toLowerCase()
+		.replace(/[\s_]+/g, "-")
+		.replace(/[^\p{L}\p{N}-]+/gu, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return slug || encodeURIComponent(name.trim().toLowerCase());
+}
+
+export function itemDisplayIds(phases: readonly TodoPhase[]): WeakMap<TodoItem, string> {
+	const used = new Set<string>();
+	let maxNum = 0;
+	for (const phase of phases) {
+		for (const item of phase.items) {
+			if (item.id !== undefined) {
+				used.add(item.id);
+				const match = /^t(\d+)$/.exec(item.id);
+				if (match?.[1] !== undefined) maxNum = Math.max(maxNum, Number(match[1]));
+			}
+		}
+	}
+	const ids = new WeakMap<TodoItem, string>();
+	for (const phase of phases) {
+		for (const item of phase.items) {
+			if (item.id !== undefined) {
+				ids.set(item, item.id);
+			} else {
+				let candidate: string;
+				do {
+					candidate = `t${++maxNum}`;
+				} while (used.has(candidate));
+				used.add(candidate);
+				ids.set(item, candidate);
+			}
+		}
+	}
+	return ids;
 }
 
 export function commitRecordText(commit: CommitRecord): string {

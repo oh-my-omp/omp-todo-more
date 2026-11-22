@@ -54,7 +54,7 @@ function uiGoalLines(goal: TodoGoal): string[] {
 function uiTimeEstimate(time: ItemTime): string {
 	return time.kind === "estimated"
 		? `${tr("Estimate", "预计")}: ${time.minutes} ${tr("min", "分钟")}`
-		: tr("(no time estimate yet: add one with ESTIMATE)", "（尚无时间估计：请使用 ESTIMATE 添加）");
+		: tr("(no time estimate yet: add one with estimate)", "（尚无时间估计：请使用 estimate 添加）");
 }
 
 function uiStatus(status: TodoStatus): string {

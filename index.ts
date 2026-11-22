@@ -1,11 +1,12 @@
 import type { AgentTool, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession, ExtensionAPI, ExtensionContext, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import type { ToolRenderer } from "@oh-my-pi/pi-tui/tools/renderer";
 import { logger } from "@oh-my-pi/pi-utils";
 import { canonicalToolOrder } from "./omomp-shared/active-tools.ts";
 import { tr } from "./omomp-shared/i18n.ts";
+import { registerInternalScheme } from "./omomp-shared/internal-url.ts";
 import { errorText } from "./src/errors.ts";
 import { describeTodoCall, describeTodoResult } from "./src/native.ts";
 import { registerOvertime } from "./src/overtime.ts";
@@ -16,8 +17,8 @@ import { registerReviewApi } from "./src/review-api.ts";
 import { sessionOf } from "./src/session.ts";
 import { readSettings } from "./src/settings.ts";
 import { initializeTernPlugin } from "./src/tern-plugin-install.ts";
-import { customFormat, DESCRIPTION, type ParentCwd, parametersSchema, runTodo, type TodoMoreDetails } from "./src/tool.ts";
-import { todoDocTopics } from "./src/topics.ts";
+import { todoScheme } from "./src/todo-scheme.ts";
+import { DESCRIPTION, parametersSchema, runTodo, type TodoMoreDetails } from "./src/tool.ts";
 import { registerUi } from "./src/ui.ts";
 
 const TOOL_NAME = "todo";
@@ -27,11 +28,8 @@ const TOOL_FIELDS = {
 	summary: "Write a structured todo list with a goal to track progress within a session",
 	description: DESCRIPTION,
 	parameters: parametersSchema,
-	docTopics: todoDocTopics,
-	customFormat,
 	approval: "read" as const,
-	loadMode: "discoverable" as const,
-	strict: true,
+	loadMode: "essential" as const,
 	concurrency: "exclusive" as const,
 	mergeCallAndResult: true,
 	describeCall: describeTodoCall,
@@ -42,16 +40,9 @@ const TOOL_FIELDS = {
 
 const ownSession = (ctx: ExtensionContext): AgentSession | undefined => sessionOf(ctx.agent.id);
 
-const parentCwdOf =
-	(ctx: ExtensionContext): ParentCwd =>
-	() => {
-		const parentId = ctx.agent.parentId;
-		return parentId === undefined ? undefined : AgentRegistry.global().get(parentId)?.session?.sessionManager.getCwd();
-	};
-
 async function executeTodo(session: AgentSession, params: unknown, ctx: ExtensionContext) {
 	const settings = await readSettings({ logger }, ctx);
-	return runTodo(session, params, parentCwdOf(ctx), settings.leafMaxMinutes, ctx.agent);
+	return runTodo(session, params, settings.leafMaxMinutes);
 }
 
 async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promise<void> {
@@ -74,7 +65,7 @@ async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promis
 
 const guardedSessions = new WeakSet<AgentSession>();
 
-function guardSubagent(pi: ExtensionAPI, ctx: ExtensionContext): void {
+function guardSubagent(ctx: ExtensionContext): void {
 	if (ctx.agent.kind !== "sub") return;
 	const session = ownSession(ctx);
 	if (session === undefined || guardedSessions.has(session)) return;
@@ -83,7 +74,7 @@ function guardSubagent(pi: ExtensionAPI, ctx: ExtensionContext): void {
 		try {
 			await restoreTodo(session, ctx);
 		} catch (error) {
-			pi.logger.warn("todo-more could not install todo", { error: errorText(error) });
+			logger.warn("todo-more could not install todo", { error: errorText(error) });
 		}
 	});
 }
@@ -104,14 +95,35 @@ export const TODO_TOOL_DEFINITION = {
 		if (session === undefined) throw new Error(`todo: no session registered for agent ${ctx.agent.id}`);
 		return executeTodo(session, params, ctx);
 	},
-} satisfies ToolDefinition<typeof parametersSchema, TodoMoreDetails> & { docTopics(): Readonly<Record<string, string>> };
+} satisfies ToolDefinition<typeof parametersSchema, TodoMoreDetails>;
+
+function registerScheme(pi: ExtensionAPI): void {
+	const result = registerInternalScheme(InternalUrlRouter.instance(), "omp-todo-more", todoScheme);
+	switch (result.kind) {
+		case "registered":
+			return;
+		case "builtin":
+		case "held":
+			pi.logger.warn(`omp-todo-more: ${result.reason}`);
+			return;
+		default: {
+			const unreachable: never = result;
+			throw new Error(`Unhandled register result ${String(unreachable)}`);
+		}
+	}
+}
 
 export default async function todoMore(pi: ExtensionAPI): Promise<void> {
+	try {
+		registerScheme(pi);
+	} catch (error) {
+		pi.logger.warn("omp-todo-more: todo:// registration failed", { error: errorText(error) });
+	}
 	pi.registerTool(TODO_TOOL_DEFINITION);
 
 	pi.on("before_agent_start", (_event, ctx) => {
 		try {
-			guardSubagent(pi, ctx);
+			guardSubagent(ctx);
 		} catch (error) {
 			pi.logger.warn("todo-more could not guard todo", { error: errorText(error) });
 		}

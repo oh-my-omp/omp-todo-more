@@ -1,14 +1,8 @@
+import { z } from "@oh-my-pi/omptype/zod";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import {
-	type AgentSession,
-	type ExtensionAPI,
-	type ExtensionContext,
-	type MessageRenderer,
-	type SessionEntry,
-	Text,
-	z,
-} from "@oh-my-pi/pi-coding-agent";
+import type { AgentSession, ExtensionAPI, ExtensionContext, MessageRenderer, SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import { Text } from "@oh-my-pi/pi-coding-agent";
 import { EAGER_TODO_PRELUDE_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/todo-tracker";
 import { cfgTodoEnabled, cfgTodoReminders, cfgTodoRemindersMax } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { type NativeNode, node, span } from "@oh-my-pi/pi-tui";
@@ -99,7 +93,7 @@ function goalBlock(state: ListState): string[] {
 		case "set":
 			return ["Goal:", ...goalLines(state.goal.goal).map((line) => `  ${line}`)];
 		case "missing":
-			return ["Goal: none yet — put GOAL first in the next Todo document."];
+			return ["Goal: none yet — pass goal ({ title, summary, acceptance }) on the next todo call."];
 		default: {
 			const unreachable: never = state.goal;
 			throw new Error(`Unexpected goal state: ${String(unreachable)}`);
@@ -111,7 +105,7 @@ function unexplainedLines(state: ListState): string[] {
 	const unexplained = unexplainedItems(state);
 	if (unexplained.length === 0) return [];
 	return [
-		`Items without an explanation (${unexplained.length}); batch EXPLAIN commands: ${unexplained.map((item) => JSON.stringify(item.title)).join(", ")}`,
+		`Items without an explanation (${unexplained.length}); pass explain: ${unexplained.map((item) => JSON.stringify(item.id ?? item.title)).join(", ")}`,
 	];
 }
 
@@ -139,7 +133,8 @@ function reminderText(
 				`- ${phase.name}\n${phase.items
 					.map((item) => {
 						const time = itemTimeSummary(item, now, waits, "inline");
-						return `  - ${item.title}\n    ${explanationText(item).replaceAll("\n", "\n    ")}${time === undefined ? "" : `\n    ${time}`}`;
+						const idPrefix = item.id === undefined ? "" : `[${item.id}] `;
+						return `  - ${idPrefix}${item.title}\n    ${explanationText(item).replaceAll("\n", "\n    ")}${time === undefined ? "" : `\n    ${time}`}`;
 					})
 					.join("\n")}`,
 		)
@@ -164,15 +159,14 @@ function eagerTodoText(todo: string, forced: boolean, now: number): string {
 		? `Before substantive work, create a phased todo.
 
 You MUST call \`${todo}\` first in this turn.
-You MUST initialize the entire todo list in one complete document with INIT "objective" "measure" "doneWhen": what this work is, how its result is measured, how far it must go to count as done.
+You MUST initialize the entire todo list in one call with \`goal\` ({ title, summary, acceptance }) and \`add\` ([{ phase, title, detail, minutes }]).
 You MUST cover the entire request from investigation through implementation and verification — not just the immediate next step.
-Use PHASE "name" and ADD "title" "explanation" minutes lines. Each title MUST be a concise, specific 5-10 word label; each explanation says what the item covers and what shows it is finished. Estimate every item yourself in positive integer minutes; no fractions or defaults.
-Wrap all commands in *** Begin Todo and *** End Todo, JSON-quote strings, and do not invent fields or call separately per item. Partial input is not saved.
+Each title MUST be a concise, specific 5-10 word label; each detail says what the item covers and what shows it is finished. Estimate every item yourself in positive integer minutes (<= leafMaxMinutes, default 60).
 
 After \`${todo}\` succeeds, continue the request in the same turn.
 NEVER call \`${todo}\` again unless task state has materially changed.`
-		: `If this request is work (it changes files, config, git or external state), call \`${todo}\` first to lay out a phased plan in one complete Todo document; discussion, investigation, explanation and questions need no todo. Cover the whole request — investigation through implementation and verification — not just the next step.
-Use INIT "objective" "measure" "doneWhen", PHASE "name", and ADD "title" "explanation" minutes between *** Begin Todo and *** End Todo. Use JSON-quoted strings, specific titles, complete explanations and your own positive integer minute estimates; no fractions or defaults.
+		: `If this request is work (it changes files, config, git or external state), call \`${todo}\` first with \`goal\` ({ title, summary, acceptance }) and \`add\` ([{ phase, title, detail, minutes }]); discussion, investigation, explanation and questions need no todo. Cover the whole request — investigation through implementation and verification — not just the next step.
+Use specific titles, complete details, and your own positive integer minute estimates (<= leafMaxMinutes, default 60).
 If you create the list, continue the request in the same turn and avoid re-calling \`${todo}\` unless task state materially changes.`;
 	return `<system-reminder>\n${currentTimeLine(now)}\n${body}\n</system-reminder>\n`;
 }
@@ -181,14 +175,16 @@ function midRunNudgeText(todo: string, incompleteCount: number, state: ListState
 	const goal =
 		state.goal.kind === "set"
 			? `Goal objective: ${state.goal.goal.objective}`
-			: `The list has no goal yet: put GOAL first in the next \`${todo}\` document.`;
+			: `The list has no goal yet: pass \`goal\` on the next \`${todo}\` call.`;
 	const active = state.phases.flatMap((phase) => phase.items).find((item) => item.status === "in_progress");
 	const activeTime = active === undefined ? undefined : itemTimeSummary(active, now, waits, "inline");
 	const activeLine =
-		active === undefined ? "" : `\nActive item: ${JSON.stringify(active.title)}${activeTime === undefined ? "" : ` (${activeTime})`}`;
+		active === undefined
+			? ""
+			: `\nActive item: ${active.id === undefined ? "" : `[${active.id}] `}${JSON.stringify(active.title)}${activeTime === undefined ? "" : ` (${activeTime})`}`;
 	return `<system-reminder>
 ${currentTimeLine(now)}
-${incompleteCount} todo item${incompleteCount !== 1 ? "s" : ""} still open. If you finished a task since last \`${todo}\` update, mark it done now so progress stays visible; otherwise keep working.
+${incompleteCount} todo item${incompleteCount !== 1 ? "s" : ""} still open. If you finished a task since last \`${todo}\` update, mark it done with \`done_ids\` now so progress stays visible; otherwise keep working.
 ${goal}${activeLine}
 </system-reminder>
 `;
@@ -227,18 +223,19 @@ function goalTodoContext(session: AgentSession, state: TodoMoreState, now: numbe
 			}
 			const time = itemTimeSummary(item, now, waits, "inline");
 			const timeSuffix = time === undefined ? "" : `; ${sanitizeGoalTodoText(time)}`;
-			return `  - [${item.status}] ${sanitizeGoalTodoText(item.title)}: ${sanitizeGoalTodoText(explanationText(item))}${timeSuffix}`;
+			const idPrefix = item.id === undefined ? "" : `[${sanitizeGoalTodoText(item.id)}] `;
+			return `  - [${item.status}] ${idPrefix}${sanitizeGoalTodoText(item.title)}: ${sanitizeGoalTodoText(explanationText(item))}${timeSuffix}`;
 		}),
 	]);
 	const goal =
 		state.goal.kind === "set"
 			? goalLines(state.goal.goal).map((line) => sanitizeGoalTodoText(line))
-			: [`Goal: none yet — put GOAL first in the next \`${todoToolRef(session)}\` document.`];
+			: [`Goal: none yet — pass \`goal\` on the next \`${todoToolRef(session)}\` call.`];
 
 	return `<todo_context>
 ${currentTimeLine(now)}
 Persisted todos: live progress state for current goal, not old transcript decoration; goal continuations lack visible user nudge → treat as live state.
-Before substantial work: compare next action with todos. If item stale, already finished, or no longer active pointer, call \`${todoToolRef(session)}\` first: mark done or rewrite list. Do not leave stale in_progress while working on later phases.
+Before substantial work: compare next action with todos. If item stale, already finished, or no longer active pointer, call \`${todoToolRef(session)}\` first: pass \`done_ids\`, \`start_id\`, or \`add\`. Do not leave stale in_progress while working on later phases.
 
 Todo list goal:
 ${goal.join("\n")}

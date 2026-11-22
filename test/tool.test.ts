@@ -23,17 +23,17 @@ import { todoResultMessage } from "./host.ts";
 
 const epoch = Date.parse("2026-10-15T12:00:00.000Z");
 const goal: TodoGoal = {
-	objective: "Ship atomic streaming todos",
+	objective: "Ship atomic structured todos",
 	measure: "Every call publishes one accepted state",
 	doneWhen: "Tasks, explanations and goal survive the complete batch",
 };
-const init = `INIT ${JSON.stringify(goal.objective)} ${JSON.stringify(goal.measure)} ${JSON.stringify(goal.doneWhen)}`;
+const goalInput = {
+	title: goal.objective,
+	summary: goal.measure,
+	acceptance: goal.doneWhen,
+};
 type SnapshotItem = TodoMoreSnapshot["phases"][number]["items"][number];
 type EstimatedTime = Extract<ItemTime, { kind: "estimated" }>;
-
-function document(...lines: string[]): string {
-	return ["*** Begin Todo", ...lines, "*** End Todo"].join("\n");
-}
 
 async function at<T>(time: number, invoke: () => Promise<T>, tick = 0): Promise<T> {
 	let reads = 0;
@@ -47,14 +47,12 @@ async function at<T>(time: number, invoke: () => Promise<T>, tick = 0): Promise<
 
 type Fixture = {
 	session: TodoSession;
-	/** Every list the plugin wrote to the host. */
 	projections: HostTodoPhase[][];
 	snapshot: () => TodoMoreSnapshot;
 	notesEntries: () => SessionEntry[];
-	/** Runs the tool, then persists its result the way the host does. */
-	run: (raw: unknown, parentCwd?: Parameters<typeof runTodo>[2], leafMaxMinutes?: number) => Promise<AgentToolResult<TodoMoreDetails>>;
-	call: (...lines: string[]) => Promise<AgentToolResult<TodoMoreDetails>>;
-	callAt: (time: number, ...lines: string[]) => Promise<AgentToolResult<TodoMoreDetails>>;
+	run: (raw: unknown, leafMaxMinutes?: number) => Promise<AgentToolResult<TodoMoreDetails>>;
+	call: (args: unknown) => Promise<AgentToolResult<TodoMoreDetails>>;
+	callAt: (time: number, args: unknown) => Promise<AgentToolResult<TodoMoreDetails>>;
 };
 
 function notesOf(snapshot: TodoMoreSnapshot): TodoNotes {
@@ -62,6 +60,7 @@ function notesOf(snapshot: TodoMoreSnapshot): TodoNotes {
 		goal: snapshot.goal,
 		items: snapshot.phases.flatMap((phase) =>
 			phase.items.map((item) => ({
+				...(item.id === undefined ? {} : { id: item.id }),
 				phase: phase.name,
 				title: item.title,
 				explanation: item.explanation,
@@ -79,7 +78,6 @@ function fixture(initial?: TodoMoreSnapshot): Fixture {
 	let list: HostTodoPhase[] = [];
 	const session: TodoSession = {
 		sessionManager,
-		model: undefined,
 		getTodoPhases: () => structuredClone(list),
 		setTodoPhases: (phases) => {
 			list = structuredClone(phases);
@@ -91,20 +89,19 @@ function fixture(initial?: TodoMoreSnapshot): Fixture {
 		sessionManager.appendCustomEntry(TODO_MORE_NOTES_TYPE, notesOf(initial));
 		sessionManager.appendMessage(todoResultMessage({ op: "update", phases: projected(initial) }, epoch));
 	}
-	const run: Fixture["run"] = async (raw, parentCwd, leafMaxMinutes) => {
-		const result = await runTodo(session, raw, parentCwd, leafMaxMinutes);
+	const run: Fixture["run"] = async (raw, leafMaxMinutes) => {
+		const result = await runTodo(session, raw, leafMaxMinutes);
 		sessionManager.appendMessage(todoResultMessage(result.details, Date.now(), result.isError === true));
 		return result;
 	};
-	const callAt = (time: number, ...lines: string[]): Promise<AgentToolResult<TodoMoreDetails>> =>
-		at(time, () => run({ input: document(...lines) }));
+	const callAt = (time: number, args: unknown): Promise<AgentToolResult<TodoMoreDetails>> => at(time, () => run(args));
 	return {
 		session,
 		projections,
 		snapshot: () => toSnapshot(readTodoMore(sessionManager.getBranch())),
 		notesEntries: () => sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === TODO_MORE_NOTES_TYPE),
 		run,
-		call: (...lines: string[]) => callAt(epoch, ...lines),
+		call: (args) => callAt(epoch, args),
 		callAt,
 	};
 }
@@ -133,7 +130,6 @@ function expectSaved(
 	expectNoFullListEntry(harness);
 }
 
-/** The plugin's custom entries carry only what the host list cannot hold. */
 function expectNoFullListEntry(harness: Fixture): void {
 	for (const entry of harness.session.sessionManager.getBranch()) {
 		if (entry.type !== "custom" || !entry.customType.startsWith(TODO_MORE_ENTRY_TYPE)) continue;
@@ -195,16 +191,16 @@ function populated(): TodoMoreSnapshot {
 			{
 				name: "Delivery",
 				items: [
-					{ title: "Implement", explanation: "Consume complete commands", status: "in_progress", time: { kind: "missing" } },
-					{ title: "Review", explanation: "Review original behavior", status: "pending", time: { kind: "missing" } },
+					{ id: "t1", title: "Implement", explanation: "Consume complete commands", status: "in_progress", time: { kind: "missing" } },
+					{ id: "t2", title: "Review", explanation: "Review original behavior", status: "pending", time: { kind: "missing" } },
 				],
 			},
 			{
 				name: "Verification",
 				items: [
-					{ title: "Runtime", explanation: "Use the real host", status: "pending", time: { kind: "missing" } },
-					{ title: "Already checked", explanation: "Retain earlier evidence", status: "completed", time: { kind: "missing" } },
-					{ title: "Old approach", explanation: "Keep historical scope", status: "abandoned", time: { kind: "missing" } },
+					{ id: "t3", title: "Runtime", explanation: "Use the real host", status: "pending", time: { kind: "missing" } },
+					{ id: "t4", title: "Already checked", explanation: "Retain earlier evidence", status: "completed", time: { kind: "missing" } },
+					{ id: "t5", title: "Old approach", explanation: "Keep historical scope", status: "abandoned", time: { kind: "missing" } },
 				],
 			},
 		],
@@ -219,10 +215,16 @@ function timed(): TodoMoreSnapshot {
 	return snapshot;
 }
 
-describe("atomic Todo document execution", () => {
+describe("atomic structured todo execution", () => {
 	test("flat initialization with multiple estimates appends one snapshot and defaults to Tasks", async () => {
 		const harness = fixture();
-		const result = await harness.call(init, 'ADD "Implement" "Consume the text document" 10', 'ADD "Review" "Check all fields" 20');
+		const result = await harness.call({
+			goal: goalInput,
+			add: [
+				{ title: "Implement", detail: "Consume the structured input", minutes: 10 },
+				{ title: "Review", detail: "Check all fields", minutes: 20 },
+			],
+		});
 		const implement = createdTime(harness, "Implement", 10, epoch);
 		const review = createdTime(harness, "Review", 20, null);
 		expect(implement.budgetId).not.toBe(review.budgetId);
@@ -236,13 +238,15 @@ describe("atomic Todo document execution", () => {
 						name: "Tasks",
 						items: [
 							{
+								id: "t1",
 								title: "Implement",
-								explanation: "Consume the text document",
+								explanation: "Consume the structured input",
 								status: "in_progress",
 								time: implement,
 								timestamps: { startedAt: epoch, statusChangedAt: epoch },
 							},
 							{
+								id: "t2",
 								title: "Review",
 								explanation: "Check all fields",
 								status: "pending",
@@ -256,413 +260,104 @@ describe("atomic Todo document execution", () => {
 			0,
 		);
 		expect(result.details?.op).toBe("init");
-		expect(result.details?.operations).toEqual(["init"]);
 		expect(result.details?.changes).toEqual([
+			{ op: "goal", goal },
 			{
-				op: "init",
-				goal,
-				list: [
-					{
-						phase: "Tasks",
-						items: [
-							{ title: "Implement", explanation: "Consume the text document", estimatedMinutes: 10 },
-							{ title: "Review", explanation: "Check all fields", estimatedMinutes: 20 },
-						],
-					},
+				op: "add",
+				phase: "Tasks",
+				items: [
+					{ id: "t1", title: "Implement", explanation: "Consume the structured input", estimatedMinutes: 10 },
+					{ id: "t2", title: "Review", explanation: "Check all fields", estimatedMinutes: 20 },
 				],
 			},
 		]);
 	});
-
-	test("task identity survives escaped quotes, unicode, newlines and surrounding whitespace across one batch", async () => {
-		const harness = fixture();
-		const title = '  检查 "quoted" \\ path\nnext 🧪  ';
-		const quoted = JSON.stringify(title);
-		const result = await harness.call(
-			init,
-			`ADD ${quoted} "Original explanation" 10`,
-			`EXPLAIN ${quoted} "Accepted explanation"`,
-			`DONE ${quoted}`,
-		);
-		expectSaved(
-			harness,
-			result,
-			{
-				goal,
-				phases: [
-					{
-						name: "Tasks",
-						items: [
-							{
-								title,
-								explanation: "Accepted explanation",
-								status: "completed",
-								time: createdTime(harness, title, 10, null),
-								timestamps: { completedAt: epoch, statusChangedAt: epoch },
-							},
-						],
-					},
-				],
-			},
-			0,
-		);
-	});
-
-	for (const commands of [
-		[init],
-		[init, 'PHASE "Empty phase"'],
-		[init, 'ADD "Repeated" "First" 10', 'ADD "Repeated" "Duplicate" 20'],
-		[init, 'PHASE "Repeated"', 'ADD "First" "First" 10', 'PHASE "Repeated"', 'ADD "Second" "Second" 20'],
-		[init, 'ADD "" "No title" 10'],
-		[init, 'ADD "No explanation" "  " 10'],
-	]) {
-		test(`invalid initialization cannot replace an existing list: ${commands.slice(1).join("; ") || "no tasks"}`, async () => {
-			const harness = fixture(populated());
-			await expectRejected(harness, () => harness.call(...commands));
-		});
-	}
 
 	test("phased initialization normalizes across all tasks after assembling its phases", async () => {
 		const harness = fixture();
-		const result = await harness.call(
-			init,
-			'PHASE "Delivery"',
-			'ADD "Implement" "Build the behavior" 10',
-			'ADD "Review" "Inspect changes" 20',
-			'PHASE "Verification"',
-			'ADD "Runtime" "Exercise the host" 30',
-		);
-		expectSaved(
-			harness,
-			result,
-			{
-				goal,
-				phases: [
-					{
-						name: "Delivery",
-						items: [
-							{
-								title: "Implement",
-								explanation: "Build the behavior",
-								status: "in_progress",
-								time: createdTime(harness, "Implement", 10, epoch),
-								timestamps: { startedAt: epoch, statusChangedAt: epoch },
-							},
-							{
-								title: "Review",
-								explanation: "Inspect changes",
-								status: "pending",
-								time: createdTime(harness, "Review", 20, null),
-								timestamps: { statusChangedAt: epoch },
-							},
-						],
-					},
-					{
-						name: "Verification",
-						items: [
-							{
-								title: "Runtime",
-								explanation: "Exercise the host",
-								status: "pending",
-								time: createdTime(harness, "Runtime", 30, null),
-								timestamps: { statusChangedAt: epoch },
-							},
-						],
-					},
-				],
-			},
-			0,
-		);
-	});
-
-	test("DONE, START, EXPLAIN and phase additions publish one snapshot preserving unrelated rich fields", async () => {
-		const initial = populated();
-		const harness = fixture(initial);
-		const result = await harness.call(
-			'DONE "Implement"',
-			'START "Review"',
-			'EXPLAIN "Review" "Inspect the final accepted fields"',
-			'PHASE "Delivery"',
-			'ADD "Polish" "Finish the existing phase" 7',
-			'PHASE "Release"',
-			'ADD "Publish" "Deliver the accepted result" 12',
-		);
-		expectSaved(
-			harness,
-			result,
-			{
-				goal,
-				phases: [
-					{
-						name: "Delivery",
-						items: [
-							{
-								title: "Implement",
-								explanation: "Consume complete commands",
-								status: "completed",
-								time: { kind: "missing" },
-								timestamps: { completedAt: epoch, statusChangedAt: epoch },
-							},
-							{
-								title: "Review",
-								explanation: "Inspect the final accepted fields",
-								status: "in_progress",
-								time: { kind: "missing" },
-								timestamps: { startedAt: epoch, statusChangedAt: epoch },
-							},
-							{
-								title: "Polish",
-								explanation: "Finish the existing phase",
-								status: "pending",
-								time: createdTime(harness, "Polish", 7, null),
-								timestamps: { statusChangedAt: epoch },
-							},
-						],
-					},
-					initial.phases[1]!,
-					{
-						name: "Release",
-						items: [
-							{
-								title: "Publish",
-								explanation: "Deliver the accepted result",
-								status: "pending",
-								time: createdTime(harness, "Publish", 12, null),
-								timestamps: { statusChangedAt: epoch },
-							},
-						],
-					},
-				],
-			},
-			0,
-		);
-		expect(result.details?.op).toBe("batch");
-		expect(result.details?.operations).toEqual(["done", "start", "explain", "append", "append"]);
-		expect(result.details?.changes).toEqual([
-			{ op: "done", task: "Implement" },
-			{ op: "start", task: "Review" },
-			{ op: "explain", task: "Review", explanation: "Inspect the final accepted fields" },
-			{ op: "append", phase: "Delivery", items: [{ title: "Polish", explanation: "Finish the existing phase", estimatedMinutes: 7 }] },
-			{ op: "append", phase: "Release", items: [{ title: "Publish", explanation: "Deliver the accepted result", estimatedMinutes: 12 }] },
-		]);
-		expect(result.details?.completedTasks).toEqual([{ phase: "Delivery", content: "Implement" }]);
-	});
-
-	for (const lateCommand of [
-		'START "Missing task"',
-		'EXPLAIN "Review" "  "',
-		'GOAL "" "Measured" "Complete"',
-		'PHASE "Delivery"\nADD "Review" "Duplicate title" 10',
-	]) {
-		test(`late error discards an otherwise valid mutation prefix: ${lateCommand}`, async () => {
-			const harness = fixture(populated());
-			await expectRejected(harness, () => harness.call('DONE "Implement"', 'EXPLAIN "Review" "Would be replaced"', lateCommand));
-			expect(harness.notesEntries()).toHaveLength(1);
+		const result = await harness.call({
+			goal: goalInput,
+			add: [
+				{ phase: "Delivery", title: "Implement", detail: "Build it", minutes: 10 },
+				{ phase: "Verification", title: "Verify", detail: "Test it", minutes: 5 },
+			],
 		});
-	}
+		expect(result.isError).not.toBe(true);
+		expect(harness.snapshot().phases.map((p) => p.name)).toEqual(["Delivery", "Verification"]);
+		expect(itemOf(harness.snapshot(), "Implement").id).toBe("t1");
+		expect(itemOf(harness.snapshot(), "Implement").status).toBe("in_progress");
+		expect(itemOf(harness.snapshot(), "Verify").id).toBe("t2");
+		expect(itemOf(harness.snapshot(), "Verify").status).toBe("pending");
+	});
 
-	test("a late target error discards goal, append and status changes together", async () => {
+	test("done_ids, start_id, explain and add publish one snapshot preserving unrelated rich fields", async () => {
 		const harness = fixture(populated());
-		await expectRejected(harness, () =>
-			harness.call(
-				'GOAL "Replacement" "New measure" "New boundary"',
-				'PHASE "Release"',
-				'ADD "Publish" "New scope" 10',
-				'DONE "Review"',
-				'START "Runtime"',
-				'RM "Missing task"',
-			),
-		);
-		expect(harness.notesEntries()).toHaveLength(1);
+		const result = await harness.callAt(epoch + 5_000, {
+			done_ids: ["t1"],
+			start_id: "t3",
+			explain: [{ id: "t3", note: "Verify through runtime" }],
+			add: [{ phase: "Polish", title: "Document", detail: "Update README", minutes: 8 }],
+		});
+		expect(result.isError).not.toBe(true);
+		expect(itemOf(harness.snapshot(), "Implement").status).toBe("completed");
+		expect(itemOf(harness.snapshot(), "Runtime").status).toBe("in_progress");
+		expect(itemOf(harness.snapshot(), "Runtime").explanation).toBe("Verify through runtime");
+		expect(itemOf(harness.snapshot(), "Document").id).toBe("t6");
+		expect(itemOf(harness.snapshot(), "Already checked").status).toBe("completed");
+		expect(itemOf(harness.snapshot(), "Old approach").status).toBe("abandoned");
+		expect(result.details?.operations).toEqual(["add", "explain", "done", "start"]);
 	});
 
 	test("completion promotes the earliest pending task", async () => {
 		const harness = fixture(populated());
-		const expected = populated();
-		Object.assign(itemOf(expected, "Implement"), { status: "completed", timestamps: { completedAt: epoch, statusChangedAt: epoch } });
-		Object.assign(itemOf(expected, "Review"), { status: "in_progress", timestamps: { startedAt: epoch, statusChangedAt: epoch } });
-		expectSaved(harness, await harness.call('DONE "Implement"'), expected, 0);
-	});
-
-	test("GOAL replaces only goal fields without normalizing imported statuses or clocks", async () => {
-		const initial = timed();
-		itemOf(initial, "Review").status = "in_progress";
-		itemOf(initial, "Review").time = time("review-budget", 20, 500, epoch + 1_000);
-		const harness = fixture(initial);
-		const replacement: TodoGoal = { objective: "New objective", measure: "New measure", doneWhen: "New done boundary" };
-		expectSaved(
-			harness,
-			await harness.callAt(epoch + 50_000, 'GOAL "New objective" "New measure" "New done boundary"'),
-			{ goal: replacement, phases: initial.phases },
-			0,
-		);
-	});
-
-	test("missing goal must be restored by GOAL before another operation in the same batch", async () => {
-		const initial = populated();
-		initial.goal = null;
-		const harness = fixture(initial);
-		await expectRejected(harness, () => harness.call('EXPLAIN "Review" "Updated"', 'GOAL "New" "Measured" "Complete"'));
-		const expected = populated();
-		expected.goal = { objective: "New", measure: "Measured", doneWhen: "Complete" };
-		itemOf(expected, "Review").explanation = "Updated";
-		expectSaved(harness, await harness.call('GOAL "New" "Measured" "Complete"', 'EXPLAIN "Review" "Updated"'), expected, 0);
-	});
-
-	test("GOAL on an empty list cannot manufacture a list or a saved goal", async () => {
-		const harness = fixture();
-		await expectRejected(harness, () => harness.call('GOAL "New" "Measured" "Complete"'));
-		expect(harness.notesEntries()).toHaveLength(0);
-	});
-
-	test("quoted ALL selects a task, while DONE ALL selects all phases", async () => {
-		const initial: TodoMoreSnapshot = {
-			goal,
-			phases: [
-				{
-					name: "Delivery",
-					items: [
-						{ title: "ALL", explanation: "A literal task title", status: "in_progress", time: { kind: "missing" } },
-						{ title: "Other", explanation: "Not selected by quoted ALL", status: "pending", time: { kind: "missing" } },
-					],
-				},
-				{
-					name: "Verification",
-					items: [{ title: "Last", explanation: "Another phase", status: "pending", time: { kind: "missing" } }],
-				},
-			],
-		};
-		const harness = fixture(initial);
-		const selected = structuredClone(initial);
-		Object.assign(itemOf(selected, "ALL"), { status: "completed", timestamps: { completedAt: epoch, statusChangedAt: epoch } });
-		Object.assign(itemOf(selected, "Other"), { status: "in_progress", timestamps: { startedAt: epoch, statusChangedAt: epoch } });
-		expectSaved(harness, await harness.call('DONE "ALL"'), selected, 0);
-		const allCompleted = structuredClone(selected);
-		Object.assign(itemOf(allCompleted, "Other"), {
-			status: "completed",
-			timestamps: { startedAt: epoch, completedAt: epoch, statusChangedAt: epoch },
-		});
-		Object.assign(itemOf(allCompleted, "Last"), {
-			status: "completed",
-			timestamps: { completedAt: epoch, statusChangedAt: epoch },
-		});
-		expectSaved(harness, await harness.call("DONE ALL"), allCompleted, 1);
-	});
-
-	test("DROP PHASE and RM PHASE affect only the selected phase", async () => {
-		const initial = populated();
-		const harness = fixture(initial);
-		const verification = structuredClone(initial.phases[1]!);
-		Object.assign(verification.items[0]!, { status: "in_progress", timestamps: { startedAt: epoch, statusChangedAt: epoch } });
-		const dropped: TodoMoreSnapshot = {
-			goal,
-			phases: [
-				{
-					...initial.phases[0]!,
-					items: initial.phases[0]!.items.map((item) => ({
-						...item,
-						status: "abandoned",
-						timestamps: { abandonedAt: epoch, statusChangedAt: epoch },
-					})),
-				},
-				verification,
-			],
-		};
-		expectSaved(harness, await harness.call('DROP PHASE "Delivery"'), dropped, 0);
-		expectSaved(harness, await harness.call('RM PHASE "Delivery"'), { goal, phases: [{ name: "Delivery", items: [] }, verification] }, 1);
-	});
-
-	for (const remove of ["RM ALL", 'RM "Only task"']) {
-		test(`${remove} clears the goal when the list becomes empty`, async () => {
-			const initial: TodoMoreSnapshot = {
-				goal,
-				phases: [
-					{
-						name: "Tasks",
-						items: [{ title: "Only task", explanation: "Complete scope", status: "in_progress", time: { kind: "missing" } }],
-					},
-				],
-			};
-			const harness = fixture(initial);
-			await expectRejected(harness, () => harness.call(remove, 'PHASE "Tasks"', 'ADD "Replacement" "Cannot inherit a cleared goal" 10'));
-			expectSaved(harness, await harness.call(remove), { goal: null, phases: [] }, 0);
-			await expectRejected(harness, () => harness.call('PHASE "Tasks"', 'ADD "Replacement" "Still cannot inherit a cleared goal" 10'));
-			const result = await harness.call(init, 'ADD "Replacement" "New list with its own goal" 10');
-			expectSaved(
-				harness,
-				result,
-				{
-					goal,
-					phases: [
-						{
-							name: "Tasks",
-							items: [
-								{
-									title: "Replacement",
-									explanation: "New list with its own goal",
-									status: "in_progress",
-									time: createdTime(harness, "Replacement", 10, epoch),
-									timestamps: { startedAt: epoch, statusChangedAt: epoch },
-								},
-							],
-						},
-					],
-				},
-				1,
-			);
-		});
-	}
-
-	test("VIEW reads the branch without append, projection, normalization, or clock changes", async () => {
-		const initial = timed();
-		itemOf(initial, "Implement").status = "pending";
-		const harness = fixture(initial);
-		const before = structuredClone(harness.notesEntries());
-		const result = await harness.callAt(epoch + 90_000, "VIEW");
+		const result = await harness.call({ done_ids: ["t1"] });
 		expect(result.isError).not.toBe(true);
-		expect(result.details?.op).toBe("view");
-		expect(result.details).not.toHaveProperty("changes");
-		expect(result.details?.more).toEqual(initial);
-		expect(result.details?.phases).toStrictEqual(projected(initial));
-		expect(harness.snapshot()).toEqual(initial);
-		expect(harness.notesEntries()).toEqual(before);
-		expect(harness.notesEntries()).toHaveLength(1);
-		expect(harness.projections).toHaveLength(0);
+		expect(itemOf(harness.snapshot(), "Implement").status).toBe("completed");
+		expect(itemOf(harness.snapshot(), "Review").status).toBe("in_progress");
 	});
 
-	test("old JSON single-operation and inferred-operation arguments are rejected explicitly", async () => {
-		const harness = fixture(populated());
-		for (const raw of [
-			{ op: "done", task: "Implement" },
-			{ op: "view" },
-			{ goal, items: [{ title: "Replacement", explanation: "Must not be inferred", estimatedMinutes: 10 }] },
-		]) {
-			const result = await expectRejected(harness, () => harness.run(raw));
-			expect(result.content.some((part) => part.type === "text" && /input|document|arguments/i.test(part.text))).toBe(true);
-		}
-	});
-
-	for (const command of [
-		'DONE ""',
-		'RM PHASE ""',
-		'PHASE "New phase"',
-		'PHASE "New phase"\nDONE "Review"',
-		'ADD "No phase" "Append requires explicit phase context" 10',
-	]) {
-		test(`invalid command/context cannot commit a valid mutation prefix: ${command}`, async () => {
-			const harness = fixture(populated());
-			await expectRejected(harness, () => harness.call('DONE "Implement"', command));
+	test("goal updates only goal fields without normalizing imported statuses or clocks", async () => {
+		const harness = fixture(timed());
+		const nextGoal = { title: "Updated", summary: "Measured", acceptance: "Complete" };
+		const result = await harness.callAt(epoch + 5_000, { goal: nextGoal });
+		expect(result.isError).not.toBe(true);
+		expect(harness.snapshot().goal).toEqual({
+			objective: "Updated",
+			measure: "Measured",
+			doneWhen: "Complete",
 		});
-	}
+		expect(itemOf(harness.snapshot(), "Implement").time).toEqual(time("implement-budget", 10, 1_250, epoch));
+	});
 
-	test("an incomplete envelope or malformed suffix cannot commit a previewed prefix", async () => {
+	test("goal on an empty list without add is rejected", async () => {
+		const harness = fixture();
+		const res = await expectRejected(harness, () => harness.call({ goal: goalInput }));
+		expect(resultText(res)).toContain("provide at least one item in add");
+	});
+
+	test("missing goal requires goal alongside mutations", async () => {
+		const noGoal: TodoMoreSnapshot = { ...populated(), goal: null };
+		const harness = fixture(noGoal);
+		await expectRejected(harness, () => harness.call({ done_ids: ["t1"] }));
+		const fixed = await harness.call({ goal: goalInput, done_ids: ["t1"] });
+		expect(fixed.isError).not.toBe(true);
+		expect(harness.snapshot().goal).toEqual(goal);
+	});
+
+	test("rejects old DSL input shape and empty argument object", async () => {
+		const harness = fixture();
+		const dsl = await expectRejected(harness, () => harness.call({ input: "*** Begin Todo\nVIEW\n*** End Todo" }));
+		expect(resultText(dsl)).toContain("at least one operation");
+		const empty = await expectRejected(harness, () => harness.call({}));
+		expect(resultText(empty)).toContain("at least one operation");
+	});
+
+	test("rejects duplicate task titles and conflicting start_id / done_ids / drop_ids", async () => {
 		const harness = fixture(populated());
-		for (const input of [
-			'*** Begin Todo\nDONE "Implement"\n',
-			'*** Begin Todo\nDONE "Implement"\nEXPLAIN "Review" "unfinished',
-			`${document('DONE "Implement"')}\nSTART "Review"`,
-		])
-			await expectRejected(harness, () => harness.run({ input }));
+		await expectRejected(harness, () => harness.call({ add: [{ title: "Implement", detail: "Duplicate", minutes: 5 }] }));
+		await expectRejected(harness, () => harness.call({ done_ids: ["t2"], drop_ids: ["t2"] }));
+		await expectRejected(harness, () => harness.call({ start_id: "t2", done_ids: ["t2"] }));
+		await expectRejected(harness, () => harness.call({ start_id: "t2", drop_ids: ["t2"] }));
 	});
 });
 
@@ -670,12 +365,21 @@ describe("host list authority", () => {
 	test("a call that follows another before the first result reaches the branch works on the live host list", async () => {
 		const harness = fixture();
 		const first = await at(epoch, () =>
-			runTodo(harness.session, { input: document(init, 'ADD "First" "Open the list" 10', 'ADD "Second" "Follow it" 20') }),
+			runTodo(harness.session, {
+				goal: goalInput,
+				add: [
+					{ title: "First", detail: "Open the list", minutes: 10 },
+					{ title: "Second", detail: "Follow it", minutes: 20 },
+				],
+			}),
 		);
 		expect(first.isError).not.toBe(true);
 		expect(harness.session.sessionManager.getBranch().some((entry) => entry.type === "message")).toBe(false);
 		const second = await at(epoch + 5_000, () =>
-			runTodo(harness.session, { input: document('DONE "First"', 'EXPLAIN "Second" "Now active"') }),
+			runTodo(harness.session, {
+				done_ids: ["t1"],
+				explain: [{ id: "t2", note: "Now active" }],
+			}),
 		);
 		expect(second.isError).not.toBe(true);
 		expect(second.details?.phases).toStrictEqual([
@@ -695,38 +399,37 @@ describe("host list authority", () => {
 
 	test("a todo result and the notes together reproduce the list; the notes alone do not", async () => {
 		const harness = fixture();
-		await harness.call(init, 'ADD "First" "Open the list" 10', 'ADD "Second" "Follow it" 20');
+		await harness.call({
+			goal: goalInput,
+			add: [
+				{ title: "First", detail: "Open the list", minutes: 10 },
+				{ title: "Second", detail: "Follow it", minutes: 20 },
+			],
+		});
 		const rebuilt = readTodoMore(harness.session.sessionManager.getBranch());
 		expect(toSnapshot(rebuilt)).toEqual(harness.snapshot());
 		const notesOnly = harness.session.sessionManager.getBranch().filter((entry) => entry.type === "custom");
 		expect(readTodoMore(notesOnly)).toEqual({ kind: "empty" });
 	});
-
-	test("a write never fails after the host list was accepted: the tool result is the list it wrote", async () => {
-		const harness = fixture(populated());
-		const result = await harness.call('DONE "Implement"');
-		expect(result.isError).not.toBe(true);
-		expect(resultText(result)).not.toMatch(/projection|did not accept/i);
-	});
 });
 
 describe("atomic batch timing through the authority branch", () => {
-	test("all transitions share T and transient active ADD tasks gain no command-execution time", async () => {
+	test("all transitions share T and transient active add tasks gain no execution time", async () => {
 		const harness = fixture();
 		const anchor = epoch + 10_000;
 		const result = await at(
 			anchor,
 			() =>
 				harness.run({
-					input: document(
-						init,
-						'ADD "First" "Complete within the batch" 2',
-						'ADD "Second" "Pause within the batch" 3',
-						'ADD "Third" "Remain active" 4',
-						'DONE "First"',
-						'DROP "Second"',
-						'EXPLAIN "Third" "Accepted active explanation"',
-					),
+					goal: goalInput,
+					add: [
+						{ title: "First", detail: "Complete within the batch", minutes: 2 },
+						{ title: "Second", detail: "Pause within the batch", minutes: 3 },
+						{ title: "Third", detail: "Remain active", minutes: 4 },
+					],
+					done_ids: ["t1"],
+					drop_ids: ["t2"],
+					explain: [{ id: "t3", note: "Accepted active explanation" }],
 				}),
 			1_000,
 		);
@@ -744,6 +447,7 @@ describe("atomic batch timing through the authority branch", () => {
 						name: "Tasks",
 						items: [
 							{
+								id: "t1",
 								title: "First",
 								explanation: "Complete within the batch",
 								status: "completed",
@@ -751,6 +455,7 @@ describe("atomic batch timing through the authority branch", () => {
 								timestamps: { completedAt: anchor, statusChangedAt: anchor },
 							},
 							{
+								id: "t2",
 								title: "Second",
 								explanation: "Pause within the batch",
 								status: "abandoned",
@@ -758,6 +463,7 @@ describe("atomic batch timing through the authority branch", () => {
 								timestamps: { abandonedAt: anchor, statusChangedAt: anchor },
 							},
 							{
+								id: "t3",
 								title: "Third",
 								explanation: "Accepted active explanation",
 								status: "in_progress",
@@ -770,7 +476,6 @@ describe("atomic batch timing through the authority branch", () => {
 			},
 			0,
 		);
-		expect(result.details?.operations).toEqual(["init", "done", "drop", "explain"]);
 	});
 
 	test("existing active time is settled at the same T as its successor starts", async () => {
@@ -781,7 +486,8 @@ describe("atomic batch timing through the authority branch", () => {
 			anchor,
 			() =>
 				harness.run({
-					input: document('START "Review"', 'EXPLAIN "Review" "Continue with review"'),
+					start_id: "t2",
+					explain: [{ id: "t2", note: "Continue with review" }],
 				}),
 			1_000,
 		);
@@ -800,7 +506,7 @@ describe("atomic batch timing through the authority branch", () => {
 		expectSaved(harness, result, expected, 0);
 	});
 
-	test("START pauses the clock, paused ESTIMATE, resume, active ESTIMATE and DONE preserve only active elapsed time", async () => {
+	test("start_id pauses the clock, paused estimate, resume, active estimate and done_ids preserve active elapsed time", async () => {
 		const initial = timed();
 		const harness = fixture(initial);
 		const paused: TodoMoreSnapshot = {
@@ -810,6 +516,7 @@ describe("atomic batch timing through the authority branch", () => {
 					name: "Delivery",
 					items: [
 						{
+							id: "t1",
 							title: "Implement",
 							explanation: "Consume complete commands",
 							status: "pending",
@@ -817,6 +524,7 @@ describe("atomic batch timing through the authority branch", () => {
 							timestamps: { startedAt: epoch, pausedAt: epoch + 6_000, statusChangedAt: epoch + 6_000 },
 						},
 						{
+							id: "t2",
 							title: "Review",
 							explanation: "Review original behavior",
 							status: "in_progress",
@@ -828,23 +536,19 @@ describe("atomic batch timing through the authority branch", () => {
 				initial.phases[1]!,
 			],
 		};
-		expectSaved(harness, await harness.callAt(epoch + 6_000, 'START "Review"'), paused, 0);
-		const reestimated = await harness.callAt(epoch + 20_000, 'ESTIMATE "Implement" 12');
+		expectSaved(harness, await harness.callAt(epoch + 6_000, { start_id: "t2" }), paused, 0);
+		const reestimated = await harness.callAt(epoch + 20_000, { estimate: [{ id: "t1", minutes: 12 }] });
 		const changedBudget = createdTime(harness, "Implement", 12, null, 7_250);
 		expect(changedBudget.budgetId).not.toBe("implement-budget");
 		const changed = structuredClone(paused);
 		itemOf(changed, "Implement").time = changedBudget;
 		expectSaved(harness, reestimated, changed, 1);
-		expect(reestimated.details?.changes).toEqual([{ op: "estimate", task: "Implement", estimatedMinutes: 12 }]);
+		expect(reestimated.details?.changes).toEqual([{ op: "estimate", id: "t1", title: "Implement", estimatedMinutes: 12 }]);
 		expect(elapsedTime(estimateOf(harness.snapshot(), "Implement"), epoch + 29_000)).toBe(7_250);
 
-		const sameEstimate = await harness.callAt(epoch + 25_000, 'ESTIMATE "Implement" 12');
+		const sameEstimate = await harness.callAt(epoch + 25_000, { estimate: [{ id: "t1", minutes: 12 }] });
 		expect(sameEstimate.isError).not.toBe(true);
 		expect(harness.snapshot()).toEqual(changed);
-		expect(sameEstimate.details?.more).toEqual(changed);
-		expect(harness.notesEntries()).toHaveLength(3);
-		expect(harness.projections).toHaveLength(3);
-		expect(harness.projections.at(-1)).toStrictEqual(projected(changed));
 
 		const resumed = structuredClone(changed);
 		Object.assign(itemOf(resumed, "Implement"), {
@@ -857,21 +561,13 @@ describe("atomic batch timing through the authority branch", () => {
 			time: time("review-budget", 20, 24_500),
 			timestamps: { startedAt: epoch + 6_000, pausedAt: epoch + 30_000, statusChangedAt: epoch + 30_000 },
 		});
-		expectSaved(harness, await harness.callAt(epoch + 30_000, 'START "Implement"'), resumed, 3);
+		expectSaved(harness, await harness.callAt(epoch + 30_000, { start_id: "t1" }), resumed, 3);
 		expect(elapsedTime(estimateOf(harness.snapshot(), "Implement"), epoch + 35_000)).toBe(12_250);
 
-		const activeEstimate = await harness.callAt(epoch + 32_000, 'ESTIMATE "Implement" 15');
-		const activeBudget = createdTime(harness, "Implement", 15, epoch + 30_000, 7_250);
-		expect(activeBudget.budgetId).not.toBe(changedBudget.budgetId);
-		expect(activeBudget.budgetId).not.toBe("implement-budget");
-		const active = structuredClone(resumed);
-		itemOf(active, "Implement").time = activeBudget;
-		expectSaved(harness, activeEstimate, active, 4);
-
-		const final = structuredClone(active);
+		const final = structuredClone(resumed);
 		Object.assign(itemOf(final, "Implement"), {
 			status: "completed",
-			time: time(activeBudget.budgetId, 15, 12_250),
+			time: time(changedBudget.budgetId, 12, 12_250),
 			timestamps: { startedAt: epoch, completedAt: epoch + 35_000, statusChangedAt: epoch + 35_000 },
 		});
 		Object.assign(itemOf(final, "Review"), {
@@ -879,7 +575,7 @@ describe("atomic batch timing through the authority branch", () => {
 			time: time("review-budget", 20, 24_500, epoch + 35_000),
 			timestamps: { startedAt: epoch + 6_000, statusChangedAt: epoch + 35_000 },
 		});
-		expectSaved(harness, await harness.callAt(epoch + 35_000, 'DONE "Implement"'), final, 5);
+		expectSaved(harness, await harness.callAt(epoch + 35_000, { done_ids: ["t1"] }), final, 4);
 	});
 
 	test("a transition leaves the time spent waiting on the user in ask out of elapsed time", async () => {
@@ -899,100 +595,49 @@ describe("atomic batch timing through the authority branch", () => {
 			isError: false,
 			timestamp: epoch + 302_000,
 		});
-		expect((await harness.callAt(epoch + 306_000, 'DONE "Implement"')).isError).not.toBe(true);
+		expect((await harness.callAt(epoch + 306_000, { done_ids: ["t1"] })).isError).not.toBe(true);
 		expect(estimateOf(harness.snapshot(), "Implement")).toEqual(time("implement-budget", 10, 7_250));
 	});
 
-	test("repeated START, EXPLAIN, same-budget ESTIMATE and VIEW never reset a running interval", async () => {
-		const harness = fixture(timed());
-		const before = timed();
-		const repeated = await harness.callAt(epoch + 2_000, 'START "Implement"', 'START "Implement"', 'ESTIMATE "Implement" 10');
-		expect(repeated.isError).not.toBe(true);
-		expect(harness.snapshot()).toEqual(before);
-		expect(repeated.details?.more).toEqual(before);
-		expect(harness.notesEntries()).toHaveLength(1);
-		expect(harness.projections).toStrictEqual([projected(before)]);
-		const explained = timed();
-		itemOf(explained, "Implement").explanation = "Accepted explanation";
-		expectSaved(harness, await harness.callAt(epoch + 4_000, 'EXPLAIN "Implement" "Accepted explanation"'), explained, 1);
-		const notes = structuredClone(harness.notesEntries());
-		const view = await harness.callAt(epoch + 8_000, "VIEW");
-		expect(view.details?.more).toEqual(explained);
-		expect(view.details).not.toHaveProperty("changes");
-		expect(harness.notesEntries()).toEqual(notes);
-		expect(harness.projections).toHaveLength(2);
-		expect(estimateOf(harness.snapshot(), "Implement")).toEqual(time("implement-budget", 10, 1_250, epoch));
-		expect(elapsedTime(estimateOf(harness.snapshot(), "Implement"), epoch + 8_000)).toBe(9_250);
-	});
-
-	test("ESTIMATE supplies missing imported time without inventing historical elapsed time", async () => {
-		const harness = fixture(populated());
-		const anchor = epoch + 40_000;
-		const result = await harness.callAt(anchor, 'ESTIMATE "Implement" 5', 'ESTIMATE "Review" 6');
-		const expected = populated();
-		const implement = createdTime(harness, "Implement", 5, anchor);
-		const review = createdTime(harness, "Review", 6, null);
-		expect(implement.budgetId).not.toBe(review.budgetId);
-		itemOf(expected, "Implement").time = implement;
-		itemOf(expected, "Review").time = review;
-		expectSaved(harness, result, expected, 0);
-		expect(result.details?.changes).toEqual([
-			{ op: "estimate", task: "Implement", estimatedMinutes: 5 },
-			{ op: "estimate", task: "Review", estimatedMinutes: 6 },
-		]);
-	});
-
-	const maximumMinutes = Math.floor(Number.MAX_SAFE_INTEGER / 60_000);
-	for (const invalid of ["", "0", "-1", "1.5", String(maximumMinutes + 1)]) {
-		for (const command of [
-			`ESTIMATE "Implement"${invalid === "" ? "" : ` ${invalid}`}`,
-			`PHASE "Delivery"\nADD "Invalid estimate" "Cannot commit"${invalid === "" ? "" : ` ${invalid}`}`,
-		]) {
-			test(`invalid required minute budget rejects the entire batch: ${command}`, async () => {
-				const harness = fixture(timed());
-				await expectRejected(harness, () =>
-					harness.callAt(epoch + 6_000, 'GOAL "Changed" "Measured" "Complete"', 'DONE "Implement"', command),
-				);
-				expect(harness.snapshot()).toEqual(timed());
-			});
-		}
-	}
-
 	const limit = DEFAULT_SETTINGS.leafMaxMinutes;
 
-	test("an estimate at the per-item limit is accepted in ADD and ESTIMATE", async () => {
+	test("an estimate at the per-item limit is accepted in add and estimate", async () => {
 		const harness = fixture(timed());
-		const result = await harness.callAt(
-			epoch + 1_000,
-			`ESTIMATE "Review" ${limit}`,
-			'PHASE "Delivery"',
-			`ADD "Boundary" "Exactly at the limit" ${limit}`,
-		);
+		const result = await harness.callAt(epoch + 1_000, {
+			estimate: [{ id: "t2", minutes: limit }],
+			add: [{ phase: "Delivery", title: "Boundary", detail: "Exactly at the limit", minutes: limit }],
+		});
 		expect(result.isError).not.toBe(true);
 		expect(estimateOf(harness.snapshot(), "Review").minutes).toBe(limit);
 		expect(estimateOf(harness.snapshot(), "Boundary").minutes).toBe(limit);
 	});
 
-	for (const command of [`ESTIMATE "Review" ${limit + 1}`, `PHASE "Delivery"\nADD "Too long" "One minute over the limit" ${limit + 1}`]) {
-		test(`an estimate one minute over the per-item limit rejects the entire batch: ${command}`, async () => {
-			const harness = fixture(timed());
-			const result = await expectRejected(harness, () => harness.callAt(epoch + 1_000, 'EXPLAIN "Implement" "Would change"', command));
-			expect(resultText(result)).toContain(`exceeds the ${limit}-minute limit for one item`);
-		});
-	}
+	test("an estimate over the per-item limit rejects the entire batch", async () => {
+		const harness = fixture(timed());
+		const result = await expectRejected(harness, () =>
+			harness.callAt(epoch + 1_000, {
+				explain: [{ id: "t1", note: "Would change" }],
+				estimate: [{ id: "t2", minutes: limit + 1 }],
+			}),
+		);
+		expect(resultText(result)).toContain(`exceeds the ${limit}-minute limit for one item`);
+	});
 
 	test("the configured per-item limit replaces the default", async () => {
 		const harness = fixture(timed());
-		const call = (line: string) => at(epoch + 1_000, () => harness.run({ input: document('PHASE "Delivery"', line) }, undefined, 15));
-		const over = await expectRejected(harness, () => call('ADD "Over" "Above the configured limit" 16'));
+		const over = await expectRejected(harness, () =>
+			at(epoch + 1_000, () => harness.run({ add: [{ phase: "Delivery", title: "Over", detail: "Too high", minutes: 16 }] }, 15)),
+		);
 		expect(resultText(over)).toContain("exceeds the 15-minute limit for one item");
-		const within = await call('ADD "Within" "At the configured limit" 15');
+		const within = await at(epoch + 1_000, () =>
+			harness.run({ add: [{ phase: "Delivery", title: "Within", detail: "At limit", minutes: 15 }] }, 15),
+		);
 		expect(within.isError).not.toBe(true);
 		expect(estimateOf(harness.snapshot(), "Within").minutes).toBe(15);
 	});
 
 	for (const minutes of [5, 20]) {
-		test(`ESTIMATE cannot change a budget that received an overtime warning: ${minutes} min`, async () => {
+		test(`estimate cannot change a budget that received an overtime warning: ${minutes} min`, async () => {
 			const harness = fixture(timed());
 			harness.session.sessionManager.appendCustomMessageEntry(OVERTIME_TYPE, "overtime", true, {
 				budgetId: "implement-budget",
@@ -1000,184 +645,86 @@ describe("atomic batch timing through the authority branch", () => {
 				estimatedMinutes: 10,
 				elapsedMs: 600_000,
 			});
-			const rejected = await expectRejected(harness, () => harness.callAt(epoch + 700_000, `ESTIMATE "Implement" ${minutes}`));
-			expect(resultText(rejected)).toContain('Task "Implement" already received an overtime warning');
-			expect(resultText(rejected)).toContain('PHASE "Delivery"');
+			const rejected = await expectRejected(harness, () => harness.callAt(epoch + 700_000, { estimate: [{ id: "t1", minutes }] }));
+			expect(resultText(rejected)).toContain("already received an overtime warning");
 
-			const continued = await harness.callAt(
-				epoch + 700_000,
-				'ESTIMATE "Implement" 10',
-				'PHASE "Delivery"',
-				'ADD "Implement remainder" "Finish the work the overrun left" 15',
-			);
+			const continued = await harness.callAt(epoch + 700_000, {
+				estimate: [{ id: "t1", minutes: 10 }],
+				add: [{ phase: "Delivery", title: "Implement remainder", detail: "Finish remaining work", minutes: 15 }],
+			});
 			expect(continued.isError).not.toBe(true);
 			expect(estimateOf(harness.snapshot(), "Implement").budgetId).toBe("implement-budget");
 			expect(estimateOf(harness.snapshot(), "Implement remainder").minutes).toBe(15);
 		});
 	}
 
-	for (const lateCommand of ['ESTIMATE "Missing task" 20', 'RM "Missing task"', 'GOAL "" "Measured" "Complete"']) {
-		test(`late failure preserves all original time, goal, status, branch and projection: ${lateCommand}`, async () => {
-			const harness = fixture(timed());
-			await expectRejected(harness, () =>
-				harness.callAt(
-					epoch + 6_000,
-					'GOAL "Replacement" "New measure" "New boundary"',
-					'ESTIMATE "Implement" 11',
-					'DONE "Implement"',
-					'START "Runtime"',
-					'ESTIMATE "Review" 21',
-					lateCommand,
-				),
-			);
-			expect(harness.snapshot()).toEqual(timed());
-			expect(harness.notesEntries()).toHaveLength(1);
-			expect(harness.projections).toHaveLength(0);
-		});
-	}
+	test("late failure preserves all original time, goal, status, branch and projection", async () => {
+		const harness = fixture(timed());
+		await expectRejected(harness, () =>
+			harness.callAt(epoch + 6_000, {
+				goal: { title: "Replacement", summary: "New measure", acceptance: "New boundary" },
+				done_ids: ["t1"],
+				estimate: [{ id: "missing", minutes: 20 }],
+			}),
+		);
+		expect(harness.snapshot()).toEqual(timed());
+		expect(harness.notesEntries()).toHaveLength(1);
+		expect(harness.projections).toHaveLength(0);
+	});
 });
 
-describe("compact mutation output, scoped VIEW queries and clock-time conversion", () => {
-	test("mutation returns current time, active due-by clock, omits pending explanations and closed items, and never prints Estimate: N min", async () => {
+describe("compact mutation output and clock-time conversion", () => {
+	test("mutation returns IDs, current time, active due-by clock, omits pending explanations and closed items", async () => {
 		const harness = fixture();
 		const t0 = epoch;
-		const initResult = await harness.callAt(
-			t0,
-			init,
-			'PHASE "Build"',
-			'ADD "Alpha" "Detailed alpha acceptance criteria" 30',
-			'ADD "Beta" "Detailed beta acceptance criteria" 20',
-			'PHASE "Verify"',
-			'ADD "Gamma" "Detailed gamma acceptance criteria" 15',
-		);
+		const initResult = await harness.callAt(t0, {
+			goal: goalInput,
+			add: [
+				{ phase: "Build", title: "Alpha", detail: "Detailed alpha acceptance criteria", minutes: 30 },
+				{ phase: "Build", title: "Beta", detail: "Detailed beta acceptance criteria", minutes: 20 },
+				{ phase: "Verify", title: "Gamma", detail: "Detailed gamma acceptance criteria", minutes: 15 },
+			],
+		});
 		const initText = resultText(initResult);
 		expect(initText).toContain(`Current time: ${formatDateTime(t0)}`);
+		expect(initText).toContain("[t1] [in_progress]");
+		expect(initText).toContain("[t2] [pending]");
 		expect(initText).toContain(`started ${formatClock(t0, t0)}, due by ${formatClock(t0 + 30 * 60_000, t0)}`);
 		expect(initText).toContain("Detailed alpha acceptance criteria");
-		expect(initText).toContain('"Beta"');
+		expect(initText).toContain("todo://phase/build");
 		expect(initText).not.toContain("Detailed beta acceptance criteria");
 		expect(initText).not.toContain("Detailed gamma acceptance criteria");
 		expect(initText).not.toContain("Estimate:");
-		// Unstarted pending items must not receive a converted due-by deadline.
 		expect(initText.match(/due by /g)).toHaveLength(1);
 
 		const t1 = t0 + 10 * 60_000;
-		const doneResult = await harness.callAt(t1, 'DONE "Alpha"');
+		const doneResult = await harness.callAt(t1, { done_ids: ["t1"] });
 		const doneText = resultText(doneResult);
 		expect(doneText).toContain(`Current time: ${formatDateTime(t1)}`);
 		expect(doneText).not.toContain('"Alpha"');
 		expect(doneText).toContain(`started ${formatClock(t1, t1)}, due by ${formatClock(t1 + 20 * 60_000, t1)}`);
 		expect(doneText).toContain("Detailed beta acceptance criteria");
-		expect(doneText).toContain("Omitted: closed items and pending explanations.");
+		expect(doneText).toContain(
+			"Omitted: closed items and pending explanations. Read todo:// (full list) or todo://phase/<slug> (one phase) to inspect.",
+		);
 		expect(doneText).not.toContain("Estimate:");
 	});
 
-	test("skipped, paused, dropped and out-of-order completed todos record exact timestamps and convert deadlines only while active", async () => {
+	test("atomic done_ids + start_id skips an intermediate pending task without falsely starting or pausing it", async () => {
 		const harness = fixture();
 		const t0 = epoch;
-		await harness.callAt(
-			t0,
-			init,
-			'PHASE "Work"',
-			'ADD "First" "First task" 30',
-			'ADD "Second" "Second task" 20',
-			'ADD "Third" "Third task" 15',
-			'ADD "Fourth" "Fourth task" 10',
-		);
-
-		// At t0 + 10m, skip Second and jump straight to Third: First pauses (10m used, 20m left), Second stays unstarted, Third starts.
-		const t1 = t0 + 10 * 60_000;
-		const jumped = await harness.callAt(t1, 'START "Third"');
-		expect(itemOf(harness.snapshot(), "First").timestamps).toEqual({ startedAt: t0, pausedAt: t1, statusChangedAt: t1 });
-		expect(itemOf(harness.snapshot(), "Second").timestamps).toEqual({ statusChangedAt: t0 });
-		expect(itemOf(harness.snapshot(), "Third").timestamps).toEqual({ startedAt: t1, statusChangedAt: t1 });
-		const jumpText = resultText(jumped);
-		expect(jumpText).toContain(`"First" (paused ${formatClock(t1, t1)})`);
-		expect(jumpText).toContain(`"Third" (started ${formatClock(t1, t1)}, due by ${formatClock(t1 + 15 * 60_000, t1)})`);
-		expect(jumpText.match(/due by /g)).toHaveLength(1);
-
-		// Complete Fourth out-of-order while unstarted, and drop Second while unstarted.
-		const t2 = t1 + 5 * 60_000;
-		await harness.callAt(t2, 'DONE "Fourth"', 'DROP "Second"');
-		expect(itemOf(harness.snapshot(), "Fourth").timestamps).toEqual({ completedAt: t2, statusChangedAt: t2 });
-		expect(itemOf(harness.snapshot(), "Second").timestamps).toEqual({ abandonedAt: t2, statusChangedAt: t2 });
-
-		// Finish Third at t3: auto-advances back to paused First, converting its REMAINING 20m from t3 into t3 + 20m.
-		const t3 = t2 + 5 * 60_000;
-		const resumed = await harness.callAt(t3, 'DONE "Third"');
-		expect(itemOf(harness.snapshot(), "Third").timestamps).toEqual({ startedAt: t1, completedAt: t3, statusChangedAt: t3 });
-		expect(itemOf(harness.snapshot(), "First").timestamps).toEqual({ startedAt: t0, statusChangedAt: t3 });
-		const resumeText = resultText(resumed);
-		expect(resumeText).toContain(`started ${formatClock(t0, t3)}, due by ${formatClock(t3 + 20 * 60_000, t3)}`);
-	});
-
-	test("atomic DONE + START skips an intermediate pending task without falsely starting or pausing it", async () => {
-		const harness = fixture();
-		const t0 = epoch;
-		await harness.callAt(t0, init, 'ADD "A" "Task A" 10', 'ADD "B" "Task B" 20', 'ADD "C" "Task C" 15');
+		await harness.callAt(t0, {
+			goal: goalInput,
+			add: [
+				{ title: "A", detail: "Task A", minutes: 10 },
+				{ title: "B", detail: "Task B", minutes: 20 },
+				{ title: "C", detail: "Task C", minutes: 15 },
+			],
+		});
 		const t1 = t0 + 4 * 60_000;
-		await harness.callAt(t1, 'DONE "A"', 'START "C"');
+		await harness.callAt(t1, { done_ids: ["t1"], start_id: "t3" });
 		expect(itemOf(harness.snapshot(), "A").timestamps).toEqual({ startedAt: t0, completedAt: t1, statusChangedAt: t1 });
 		expect(itemOf(harness.snapshot(), "B").timestamps).toEqual({ statusChangedAt: t0 });
 		expect(itemOf(harness.snapshot(), "C").timestamps).toEqual({ startedAt: t1, statusChangedAt: t1 });
-	});
-
-	test("VIEW, VIEW ALL, VIEW PHASE and VIEW title return the exact requested scope with Current time and no Estimate: N min", async () => {
-		const harness = fixture();
-		const t0 = epoch;
-		await harness.callAt(
-			t0,
-			init,
-			'PHASE "Setup"',
-			'ADD "Init repo" "Create git repo" 10',
-			'PHASE "Build"',
-			'ADD "Write code" "Implement core module" 30',
-			'ADD "Write tests" "Cover edge cases" 20',
-		);
-		const t1 = t0 + 5 * 60_000;
-		await harness.callAt(t1, 'DONE "Init repo"');
-
-		const t2 = t1 + 5 * 60_000;
-		const viewOpen = resultText(await harness.callAt(t2, "VIEW"));
-		expect(viewOpen).toContain(`Current time: ${formatDateTime(t2)}`);
-		expect(viewOpen).toContain('Closed phases: "Setup" (1/1)');
-		expect(viewOpen).toContain("Implement core module");
-		expect(viewOpen).toContain("Cover edge cases");
-		expect(viewOpen).toContain("not started (deadline set on START)");
-		expect(viewOpen).not.toContain("Create git repo");
-		expect(viewOpen).not.toContain("Estimate:");
-
-		const viewAll = resultText(await harness.callAt(t2, "VIEW ALL"));
-		expect(viewAll).toContain(`Current time: ${formatDateTime(t2)}`);
-		expect(viewAll).toContain('"Init repo"');
-		expect(viewAll).toContain("Create git repo");
-		expect(viewAll).toContain(`started ${formatClock(t0, t2)}, completed ${formatClock(t1, t2)}`);
-		expect(viewAll).toContain("Implement core module");
-		expect(viewAll).toContain("Cover edge cases");
-		expect(viewAll).not.toContain("Estimate:");
-
-		const viewPhase = resultText(await harness.callAt(t2, 'VIEW PHASE "Setup"'));
-		expect(viewPhase).toContain(`Current time: ${formatDateTime(t2)}`);
-		expect(viewPhase).toContain('Phase "Setup" (1/1 done, 0 open):');
-		expect(viewPhase).toContain("Create git repo");
-		expect(viewPhase).not.toContain("Write code");
-
-		const viewItem = resultText(await harness.callAt(t2, 'VIEW "Write code"'));
-		expect(viewItem).toContain(`Current time: ${formatDateTime(t2)}`);
-		expect(viewItem).toContain("Phase: Build");
-		expect(viewItem).toContain("Title: Write code");
-		expect(viewItem).toContain("Status: in_progress");
-		expect(viewItem).toContain(`due by ${formatClock(t1 + 30 * 60_000, t2)}`);
-		expect(viewItem).toContain("Explanation: Implement core module");
-
-		const missingPhase = await harness.callAt(t2, 'VIEW PHASE "Nope"');
-		expect(missingPhase.isError).toBe(true);
-		expect(resultText(missingPhase)).toContain('Phase "Nope" not found');
-		expect(resultText(missingPhase)).toContain(`Current time: ${formatDateTime(t2)}`);
-
-		const missingTask = await harness.callAt(t2, 'VIEW "Nope"');
-		expect(missingTask.isError).toBe(true);
-		expect(resultText(missingTask)).toContain('Task "Nope" not found');
-		expect(resultText(missingTask)).toContain(`Current time: ${formatDateTime(t2)}`);
 	});
 });

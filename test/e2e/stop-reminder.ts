@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { z } from "@oh-my-pi/pi-coding-agent";
+import { z } from "@oh-my-pi/omptype/zod";
 
 // Real omp in RPC mode with this plugin loaded. The host decides when the stop reminder appears (`todo_reminder`
 // event); the plugin only supplies its text. After the first host reminder the driver lets that reminder turn
@@ -10,12 +10,11 @@ const MODELS = ["futureppo-pool/ernie-5.5-flash-preview", "futureppo-pool/nemotr
 const SILENCE_MS = 30_000;
 const EXTENSION = path.resolve(import.meta.dir, "../../index.ts");
 const PROMPT = [
-	"Call the todo tool exactly once with this document, verbatim:",
-	"*** Begin Todo",
-	'INIT "Stop reminder e2e" "hello.txt exists" "File written"',
-	'PHASE "Work"',
-	'ADD "Write hello.txt" "Create the file with the word hello" 5',
-	"*** End Todo",
+	"Call the todo tool exactly once with these JSON arguments:",
+	JSON.stringify({
+		goal: { title: "Stop reminder e2e", summary: "hello.txt exists", acceptance: "File written" },
+		add: [{ phase: "Work", title: "Write hello.txt", detail: "Create the file with the word hello", minutes: 5 }],
+	}),
 	"After the tool result, reply with the single word STOP and end your turn. Do not write the file.",
 ].join("\n");
 

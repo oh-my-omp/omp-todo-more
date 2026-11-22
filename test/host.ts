@@ -3,9 +3,8 @@ import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { TodoSession } from "../src/commit.ts";
-import type { ModelRef } from "../src/models.ts";
 import { hostPhases, TODO_MORE_NOTES_TYPE, type TodoMoreState, toNotes } from "../src/state.ts";
-import { type ParentCwd, runTodo, type TodoMoreDetails } from "../src/tool.ts";
+import { runTodo, type TodoMoreDetails } from "../src/tool.ts";
 
 type Message = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -47,11 +46,10 @@ export function stateEntries(id: string, at: number, state: TodoMoreState): Sess
 }
 
 /** A session whose host list is a plain array, as the host's `TodoTracker` keeps it. */
-export function hostSession(sessionManager: SessionManager, model?: ModelRef): TodoSession {
+export function hostSession(sessionManager: SessionManager): TodoSession {
 	let list: HostTodoPhase[] = [];
 	return {
 		sessionManager,
-		model,
 		getTodoPhases: () => structuredClone(list),
 		setTodoPhases: (phases) => {
 			list = structuredClone(phases);
@@ -60,13 +58,8 @@ export function hostSession(sessionManager: SessionManager, model?: ModelRef): T
 }
 
 /** Runs the tool, then persists its result the way the host does. */
-export async function runPersisted(
-	session: TodoSession,
-	raw: unknown,
-	parentCwd?: ParentCwd,
-	leafMaxMinutes?: number,
-): Promise<AgentToolResult<TodoMoreDetails>> {
-	const result = await runTodo(session, raw, parentCwd, leafMaxMinutes);
+export async function runPersisted(session: TodoSession, raw: unknown, leafMaxMinutes?: number): Promise<AgentToolResult<TodoMoreDetails>> {
+	const result = await runTodo(session, raw, leafMaxMinutes);
 	session.sessionManager.appendMessage(todoResultMessage(result.details, Date.now(), result.isError === true));
 	return result;
 }

@@ -13,19 +13,19 @@ type Handler = (event: Record<string, unknown>, ctx: ExtensionContext) => unknow
 type PromptResult = { message: { customType: string; content: string; display: false; attribution: "agent" } } | undefined;
 type ToolResult = { additionalContext?: string } | undefined;
 
-const valid = '*** Begin Todo\nINIT "g" "m" "d"\nPHASE "P"\nADD "t" "e" 5\n*** End Todo';
-const multi = [
-	"*** Begin Todo",
-	'INIT "Ship compact planning" "Context stays small" "Verified end-to-end"',
-	'PHASE "Setup"',
-	'ADD "Done task" "Detailed explanation of already finished setup task" 10',
-	'PHASE "Build"',
-	'ADD "Active task" "Detailed explanation of current in-progress task" 30',
-	'ADD "Pending task" "Detailed explanation of upcoming pending task" 20',
-	'DONE "Done task"',
-	"*** End Todo",
-].join("\n");
-const document = (...lines: string[]): string => ["*** Begin Todo", ...lines, "*** End Todo"].join("\n");
+const valid = {
+	goal: { title: "g", summary: "m", acceptance: "d" },
+	add: [{ phase: "P", title: "t", detail: "e", minutes: 5 }],
+};
+const multi = {
+	goal: { title: "Ship compact planning", summary: "Context stays small", acceptance: "Verified end-to-end" },
+	add: [
+		{ phase: "Setup", title: "Done task", detail: "Detailed explanation of already finished setup task", minutes: 10 },
+		{ phase: "Build", title: "Active task", detail: "Detailed explanation of current in-progress task", minutes: 30 },
+		{ phase: "Build", title: "Pending task", detail: "Detailed explanation of upcoming pending task", minutes: 20 },
+	],
+	done_ids: ["t1"],
+};
 
 const registered: { id: string; ref: ReturnType<AgentRegistry["register"]> }[] = [];
 
@@ -93,36 +93,31 @@ describe("planning gate", () => {
 
 	test("lets edit follow a valid INIT of the same message", async () => {
 		const { call } = gate();
-		expect(await call("todo", { input: valid })).toBeUndefined();
+		expect(await call("todo", valid)).toBeUndefined();
 		expect(await call("edit", { input: "x" })).toBeUndefined();
 	});
 
 	test.each([
-		["unparsable", "not a todo document"],
-		["ADD without minutes", document('INIT "g" "m" "d"', 'PHASE "P"', 'ADD "t" "e"')],
-		["ADD over the item limit", document('INIT "g" "m" "d"', 'PHASE "P"', 'ADD "t" "e" 9999')],
-		["empty goal", document('INIT "" "m" "d"', 'PHASE "P"', 'ADD "t" "e" 5')],
-		["mutation of an empty list", document('START "t"')],
+		["unparsable", "not a todo object"],
+		["ADD without minutes", { goal: { title: "g", summary: "m", acceptance: "d" }, add: [{ phase: "P", title: "t", detail: "e" }] }],
+		[
+			"ADD over the item limit",
+			{ goal: { title: "g", summary: "m", acceptance: "d" }, add: [{ phase: "P", title: "t", detail: "e", minutes: 9999 }] },
+		],
+		["empty goal", { goal: { title: "", summary: "m", acceptance: "d" }, add: [{ phase: "P", title: "t", detail: "e", minutes: 5 }] }],
+		["mutation of an empty list", { start_id: "t1" }],
 	])("blocks edit after a rejected todo: %s", async (_name, input) => {
 		const { call } = gate();
-		expect(await call("todo", { input })).toBeUndefined();
-		expect((await call("edit", { input: "x" }))?.block).toBe(true);
-	});
-
-	test("blocks edit after a todo that empties the list", async () => {
-		const { call, session } = gate();
-		await runPersisted(session, { input: valid });
-		expect(await call("edit", { input: "x" })).toBeUndefined();
-		expect(await call("todo", { input: document("RM ALL") })).toBeUndefined();
+		expect(await call("todo", input as Record<string, unknown>)).toBeUndefined();
 		expect((await call("edit", { input: "x" }))?.block).toBe(true);
 	});
 
 	test("lets edit through once the list has items, and forgets the preview when a turn ends", async () => {
 		const { call, emit, session } = gate();
-		await call("todo", { input: valid });
+		await call("todo", valid);
 		await emit("turn_end", { type: "turn_end" });
 		expect((await call("edit", { input: "x" }))?.block).toBe(true);
-		await runPersisted(session, { input: valid });
+		await runPersisted(session, valid);
 		expect(await call("edit", { input: "x" })).toBeUndefined();
 	});
 
@@ -130,8 +125,8 @@ describe("planning gate", () => {
 	// still holds the previous list, the host list already holds the new one.
 	test("reads the host list, not the branch, once a todo call has executed but its result is not yet persisted", async () => {
 		const { call, afterTool, session } = gate();
-		expect(await call("todo", { input: valid })).toBeUndefined();
-		await runTodo(session, { input: valid });
+		expect(await call("todo", valid)).toBeUndefined();
+		await runTodo(session, valid);
 		await afterTool("todo");
 		expect(await call("edit", { input: "x" })).toBeUndefined();
 	});
@@ -154,14 +149,14 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		persistPromptMessage(initial);
 
 		// Same turn: todo INIT followed by edit before persistence
-		await call("todo", { input: multi });
-		await runTodo(session, { input: multi });
+		await call("todo", multi);
+		await runTodo(session, multi);
 		expect(await afterTool("todo")).toBeUndefined();
 		expect(await afterTool("edit")).toBeUndefined();
 
 		// Persist the todo result and start next turn; non-todo tools still get no redundant planning injection
 		await emit("turn_start", { type: "turn_start" });
-		await runPersisted(session, { input: document('EXPLAIN "Active task" "Refined active criteria"') });
+		await runPersisted(session, { explain: [{ id: "t2", note: "Refined active criteria" }] });
 		expect(await afterTool("todo")).toBeUndefined();
 		await emit("turn_start", { type: "turn_start" });
 		expect(await afterTool("read")).toBeUndefined();
@@ -171,7 +166,7 @@ describe("planning injection granularity, deduplication and recovery", () => {
 	test("atPrompt delivers compact active view when state changed and stays silent when only wall-clock time advances", async () => {
 		setSystemTime(t0);
 		const { prompt, persistPromptMessage, session } = gate();
-		await runPersisted(session, { input: multi });
+		await runPersisted(session, multi);
 
 		const first = await prompt();
 		expect(first).toBeDefined();
@@ -198,7 +193,7 @@ describe("planning injection granularity, deduplication and recovery", () => {
 	test("restores the full unabridged list (including completed/abandoned explanations) once after compaction at prompt or mid-run tool_result", async () => {
 		setSystemTime(t0);
 		const { prompt, afterTool, emit, persistPromptMessage, persistAdditionalContext, session, manager } = gate();
-		await runPersisted(session, { input: multi });
+		await runPersisted(session, multi);
 		const before = await prompt();
 		persistPromptMessage(before);
 
@@ -236,7 +231,7 @@ describe("planning injection granularity, deduplication and recovery", () => {
 	test("detects out-of-band /todo-more edit on a pending item and surfaces its updated explanation immediately", async () => {
 		setSystemTime(t0);
 		const { afterTool, prompt, persistPromptMessage, session } = gate();
-		await runPersisted(session, { input: multi });
+		await runPersisted(session, multi);
 		const first = await prompt();
 		persistPromptMessage(first);
 
@@ -258,7 +253,7 @@ describe("planning injection granularity, deduplication and recovery", () => {
 	test("restores the full list at before_agent_start after compaction and branch_summary, and stays silent on unreadable remote compaction", async () => {
 		setSystemTime(t0);
 		const { prompt, persistPromptMessage, session, manager } = gate();
-		await runPersisted(session, { input: multi });
+		await runPersisted(session, multi);
 		persistPromptMessage(await prompt());
 
 		// Compaction before next user prompt triggers full recovery at before_agent_start

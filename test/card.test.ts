@@ -13,13 +13,17 @@ const PANEL_ROLE = "todo-more.panel";
 const CHECKLIST_ROLE = "todo-more.list";
 const CARD_TOP = "╭";
 
-const document = `*** Begin Todo
-INIT "Stop the double render" "One card per call" "Native and ANSI verified"
-PHASE "Implementation"
-ADD "Read the merge path" "Follow the host view merge" 25
-ADD "Set the flag" "Declare mergeCallAndResult on the tool" 10
-*** End Todo
-`;
+const initArgs = {
+	goal: {
+		title: "Stop the double render",
+		summary: "One card per call",
+		acceptance: "Native and ANSI verified",
+	},
+	add: [
+		{ phase: "Implementation", title: "Read the merge path", detail: "Follow the host view merge", minutes: 25 },
+		{ phase: "Implementation", title: "Set the flag", detail: "Declare mergeCallAndResult on the tool", minutes: 10 },
+	],
+};
 
 const snapshot: TodoMoreSnapshot = {
 	goal: { objective: "Stop the double render", measure: "One card per call", doneWhen: "Native and ANSI verified" },
@@ -28,12 +32,14 @@ const snapshot: TodoMoreSnapshot = {
 			name: "Implementation",
 			items: [
 				{
+					id: "t1",
 					title: "Read the merge path",
 					explanation: "Follow the host view merge",
 					status: "in_progress",
 					time: { kind: "estimated", budgetId: "b1", minutes: 25, elapsedMs: 0, runningSince: null },
 				},
 				{
+					id: "t2",
 					title: "Set the flag",
 					explanation: "Declare mergeCallAndResult on the tool",
 					status: "pending",
@@ -47,8 +53,8 @@ const snapshot: TodoMoreSnapshot = {
 const result: { content: { type: "text"; text: string }[]; details: TodoMoreDetails } = {
 	content: [{ type: "text", text: "Todo list initialized." }],
 	details: {
-		op: "batch",
-		operations: ["init", "append", "append"],
+		op: "init",
+		operations: ["init"],
 		phases: [
 			{
 				name: "Implementation",
@@ -77,7 +83,7 @@ const renderedTool = new ExtensionToolWrapper(new RegisteredToolAdapter(register
 function component(): ToolExecutionComponent {
 	return new ToolExecutionComponent(
 		"todo",
-		{ input: document.slice(0, 40) },
+		{ goal: { title: "Stop the double render" } },
 		{ showImages: false, useBuiltInRenderer: false },
 		renderedTool,
 		headlessUi,
@@ -87,7 +93,7 @@ function component(): ToolExecutionComponent {
 }
 
 function settle(target: ToolExecutionComponent): void {
-	target.updateArgs({ input: document });
+	target.updateArgs(initArgs);
 	target.setArgsComplete();
 	target.setExecutionStarted();
 	target.updateResult({ content: result.content, details: result.details }, false, "todo-call");
@@ -151,7 +157,7 @@ describe("one card per todo call", () => {
 	});
 
 	test("an incremental update renders only the delta in ANSI and native cards until expanded", () => {
-		const deltaDoc = `*** Begin Todo\nDONE "Read the merge path"\n*** End Todo\n`;
+		const deltaArgs = { done_ids: ["t1"] };
 		const deltaSnapshot: TodoMoreSnapshot = {
 			goal: snapshot.goal,
 			phases: [
@@ -165,7 +171,7 @@ describe("one card per todo call", () => {
 			],
 		};
 		const target = component();
-		target.updateArgs({ input: deltaDoc });
+		target.updateArgs(deltaArgs);
 		target.setArgsComplete();
 		target.setExecutionStarted();
 		target.updateResult(
@@ -174,7 +180,7 @@ describe("one card per todo call", () => {
 				details: {
 					op: "done",
 					operations: ["done"],
-					changes: [{ op: "done", task: "Read the merge path" }],
+					changes: [{ op: "done", id: "t1", title: "Read the merge path" }],
 					completedTasks: [{ phase: "Implementation", content: "Read the merge path" }],
 					phases: [
 						{

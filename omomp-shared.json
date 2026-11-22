@@ -1,1 +1,4 @@
-{"directory": "omomp-shared", "files": ["active-tools.ts", "biome.base.json", "context-delta.ts", "i18n.ts", "tern-plugin.ts", "todo-read.ts"]}
+{
+	"directory": "omomp-shared",
+	"files": ["active-tools.ts", "biome.base.json", "context-delta.ts", "i18n.ts", "internal-url.ts", "tern-plugin.ts", "todo-read.ts"]
+}

@@ -112,10 +112,10 @@ async function todoPath(n: number): Promise<Sample> {
 	const manager = freshBranch(n);
 	const session = sessionOver(manager);
 	let k = 0;
-	const title = `Task ${Math.floor((n - Math.max(500, Math.floor(n * 0.08)) - 1) / 300) * 300}`;
+	const id = `t${Math.floor((n - Math.max(500, Math.floor(n * 0.08)) - 1) / 300) * 300 + 1}`;
 	return measure(manager, async () => {
 		const result = (await modules.runTodo(session, {
-			input: `*** Begin Todo\nEXPLAIN "${title}" "explanation ${k++}"\n*** End Todo`,
+			explain: [{ id, note: `explanation ${k++}` }],
 		})) as { isError?: boolean; content: { text: string }[] };
 		if (result.isError === true) throw new Error(`todo failed: ${result.content[0]?.text}`);
 	});

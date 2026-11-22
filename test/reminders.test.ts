@@ -6,7 +6,10 @@ import { contextMessages, continuation } from "../src/reminders.ts";
 import { runTodo } from "../src/tool.ts";
 import { hostSession, runPersisted } from "./host.ts";
 
-const valid = '*** Begin Todo\nINIT "Ship it" "m" "d"\nPHASE "P"\nADD "t" "e" 5\n*** End Todo';
+const valid = {
+	goal: { title: "Ship it", summary: "m", acceptance: "d" },
+	add: [{ phase: "P", title: "t", detail: "e", minutes: 5 }],
+};
 
 function nudge(): AgentMessage {
 	return {
@@ -29,7 +32,7 @@ describe("host reminders carry the plugin's content", () => {
 	test("an unpersisted nudge takes the host list, not a branch that lags the last todo call", async () => {
 		const manager = SessionManager.inMemory("/tmp/todo-more-reminders-tests");
 		const { host, session: own } = session(manager);
-		await runTodo(host, { input: valid });
+		await runTodo(host, valid);
 		const rewritten = contextMessages([nudge()], own, manager);
 		const text = JSON.stringify(rewritten);
 		expect(text).toContain("1 todo item still open");
@@ -42,7 +45,7 @@ describe("host reminders carry the plugin's content", () => {
 	test("a persisted list gives the same content", async () => {
 		const manager = SessionManager.inMemory("/tmp/todo-more-reminders-tests");
 		const { host, session: own } = session(manager);
-		await runPersisted(host, { input: valid });
+		await runPersisted(host, valid);
 		expect(JSON.stringify(contextMessages([nudge()], own, manager))).toContain("1 todo item still open");
 	});
 });
@@ -65,12 +68,12 @@ describe("the continuation reminder reads the live host list", () => {
 	test("a todo call whose result is not on the branch yet still gets its open items reminded", async () => {
 		const manager = SessionManager.inMemory("/tmp/todo-more-continuation-tests");
 		const { host, own, ctx } = stopped(manager);
-		await runTodo(host, { input: valid });
+		await runTodo(host, valid);
 		const completion = continuation(own, ctx);
 		expect(completion.kind).toBe("remind");
 		const text = completion.kind === "remind" ? completion.text : "";
 		expect(text).toContain("Current time:");
-		expect(text).toContain("You stopped with 1 incomplete todo item(s):\n- P\n  - t");
+		expect(text).toContain("You stopped with 1 incomplete todo item(s):\n- P\n  - [t1] t");
 		expect(text).toContain("due by ");
 		expect(text).not.toContain("Estimate:");
 	});

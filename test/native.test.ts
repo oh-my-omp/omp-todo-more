@@ -359,8 +359,8 @@ describe("native result card", () => {
 		crudResult.details.op = "batch";
 		crudResult.details.operations = ["done", "explain"];
 		crudResult.details.changes = [
-			{ op: "done", task: "Plan the replacement" },
-			{ op: "explain", task: "Implement the card", explanation: "Use the native checklist" },
+			{ op: "done", id: "t1", title: "Plan the replacement" },
+			{ op: "explain", id: "t2", title: "Implement the card", explanation: "Use the native checklist" },
 		];
 
 		const collapsedBody = resultBody(crudResult, false);
@@ -389,10 +389,13 @@ describe("native result card", () => {
 	test("RM delta shows only the removed task without listing surviving tasks", () => {
 		const remaining = structuredClone(snapshot);
 		remaining.phases[0]!.items = remaining.phases[0]!.items.slice(1);
-		const rmResult = resultFor(remaining);
-		rmResult.details.op = "rm";
-		rmResult.details.operations = ["rm"];
-		rmResult.details.changes = [{ op: "rm", task: "Plan the replacement" }];
+		const rmResult = resultFor(remaining) as Parameters<typeof describeTodoResult>[0];
+		rmResult.details = {
+			...(rmResult.details as Record<string, unknown>),
+			op: "rm",
+			operations: ["rm"],
+			changes: [{ op: "rm", task: "Plan the replacement" }],
+		} as unknown as TodoMoreDetails;
 
 		const body = resultBody(rmResult, false);
 		expect(checklist(body).phases.map((phase) => phase.title)).toEqual(["Removed"]);

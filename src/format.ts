@@ -5,6 +5,8 @@ import {
 	dueAtTime,
 	explanationText,
 	goalLines,
+	itemDisplayIds,
+	phaseSlug,
 	type TodoItem,
 	type TodoMoreState,
 	type TodoPhase,
@@ -49,7 +51,7 @@ export function itemTimeSummary(
 			const parts: string[] = [];
 			if (startedAt !== undefined) parts.push(`started ${formatClock(startedAt, now)}`);
 			if (item.time.kind === "missing") {
-				parts.push("no time estimate yet: add one with ESTIMATE");
+				parts.push("no time estimate yet: add one with estimate");
 			} else {
 				const due = dueAtTime(item.time, now, waits);
 				if (due !== undefined) {
@@ -67,14 +69,14 @@ export function itemTimeSummary(
 				parts.push(
 					pausedAt !== undefined
 						? detail === "full"
-							? `paused ${formatClock(pausedAt, now)} (deadline resumes on START)`
+							? `paused ${formatClock(pausedAt, now)} (deadline resumes on start)`
 							: `paused ${formatClock(pausedAt, now)}`
 						: "paused",
 				);
 			} else if (detail === "full" && item.time.kind === "estimated") {
-				parts.push("not started (deadline set on START)");
+				parts.push("not started (deadline set on start)");
 			}
-			if (item.time.kind === "missing") parts.push("no time estimate yet: add one with ESTIMATE");
+			if (item.time.kind === "missing") parts.push("no time estimate yet: add one with estimate");
 			return parts.length > 0 ? parts.join(", ") : undefined;
 		}
 		case "completed": {
@@ -104,7 +106,7 @@ function unestimatedItems(state: Extract<TodoMoreState, { kind: "list" }>): Todo
 
 function goalSection(state: Extract<TodoMoreState, { kind: "list" }>): string[] {
 	if (state.goal.kind === "set") return ["Goal:", ...goalLines(state.goal.goal).map((line) => `  ${line}`)];
-	return ["Goal: none yet — put GOAL first in the next Todo document."];
+	return ["Goal: none yet — pass goal ({ title, summary, acceptance }) on the next todo call."];
 }
 
 function overallLine(phases: readonly TodoPhase[]): string {
@@ -123,18 +125,18 @@ function closedPhasesLine(phases: readonly TodoPhase[]): string | undefined {
 	return `Closed phases: ${closedPhases.map((phase) => `${JSON.stringify(phase.name)} (${phase.items.length}/${phase.items.length})`).join(", ")}`;
 }
 
-function defectLines(state: Extract<TodoMoreState, { kind: "list" }>): string[] {
+function defectLines(state: Extract<TodoMoreState, { kind: "list" }>, ids: WeakMap<TodoItem, string>): string[] {
 	const lines: string[] = [];
 	const unexplained = unexplainedItems(state);
 	if (unexplained.length > 0) {
 		lines.push(
-			`Items without an explanation (${unexplained.length}); batch EXPLAIN commands: ${unexplained.map((item) => JSON.stringify(item.title)).join(", ")}`,
+			`Items without an explanation (${unexplained.length}); pass explain: ${unexplained.map((item) => JSON.stringify(ids.get(item) ?? item.title)).join(", ")}`,
 		);
 	}
 	const unestimated = unestimatedItems(state);
 	if (unestimated.length > 0) {
 		lines.push(
-			`Open items without a time estimate (${unestimated.length}); batch ESTIMATE commands: ${unestimated.map((item) => JSON.stringify(item.title)).join(", ")}`,
+			`Open items without a time estimate (${unestimated.length}); pass estimate: ${unestimated.map((item) => JSON.stringify(ids.get(item) ?? item.title)).join(", ")}`,
 		);
 	}
 	return lines;
@@ -145,10 +147,11 @@ function indentMultiline(prefix: string, text: string): string {
 	return `${prefix}${text.replaceAll("\n", `\n${continuation}`)}`;
 }
 
-function renderDetailedItem(item: TodoItem, now: number, waits: readonly AskWait[], indent: string): string[] {
+function renderDetailedItem(item: TodoItem, id: string | undefined, now: number, waits: readonly AskWait[], indent: string): string[] {
 	const time = itemTimeSummary(item, now, waits, "full");
 	const suffix = time === undefined ? "" : ` (${time})`;
-	const lines = [`${indent}- [${item.status}] ${JSON.stringify(item.title)}${suffix}`];
+	const idPrefix = id === undefined ? "" : `[${id}] `;
+	const lines = [`${indent}- ${idPrefix}[${item.status}] ${JSON.stringify(item.title)}${suffix}`];
 	lines.push(indentMultiline(`${indent}  Explanation: `, explanationText(item)));
 	if (item.commit !== undefined) {
 		lines.push(`${indent}  Commit: ${commitRecordText(item.commit)} (${commitScopeText(item.commit.scope)})`);
@@ -181,6 +184,7 @@ export function formatCompactView(
 		return lines.join("\n");
 	}
 	const { phases } = state;
+	const ids = itemDisplayIds(phases);
 	lines.push(...goalSection(state));
 	lines.push(overallLine(phases));
 	const closedSummary = closedPhasesLine(phases);
@@ -203,7 +207,7 @@ export function formatCompactView(
 				? " — earliest phase with open tasks; the in-progress pointer auto-advances to the earliest open task on each completion."
 				: "";
 		lines.push(
-			`${isActivePhase ? "Active phase" : "Phase"} ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (${closedCount}/${phase.items.length} done)${aheadNote}:`,
+			`${isActivePhase ? "Active phase" : "Phase"} ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (todo://phase/${phaseSlug(phase.name)}, ${closedCount}/${phase.items.length} done)${aheadNote}:`,
 		);
 		for (const item of openItems) {
 			const time = itemTimeSummary(item, now, waits, "inline");
@@ -211,7 +215,9 @@ export function formatCompactView(
 			if (time !== undefined) flags.push(time);
 			if (item.status === "pending" && item.explanation.kind === "missing") flags.push("missing explanation");
 			const suffix = flags.length > 0 ? ` (${flags.join("; ")})` : "";
-			lines.push(`  - [${item.status}] ${JSON.stringify(item.title)}${suffix}`);
+			const id = ids.get(item);
+			const idPrefix = id === undefined ? "" : `[${id}] `;
+			lines.push(`  - ${idPrefix}[${item.status}] ${JSON.stringify(item.title)}${suffix}`);
 			if (item.status === "in_progress" || options.highlightExplanations?.has(item.title)) {
 				lines.push(indentMultiline("    Explanation: ", explanationText(item)));
 			} else if (item.explanation.kind === "explained") {
@@ -220,16 +226,14 @@ export function formatCompactView(
 		}
 	}
 
-	lines.push(...defectLines(state));
+	lines.push(...defectLines(state, ids));
 	if (options.notes !== undefined && options.notes.length > 0) lines.push(...options.notes);
 
 	const omitted: string[] = [];
 	if (omittedClosed) omitted.push("closed items");
 	if (omittedPendingExplanations) omitted.push("pending explanations");
 	if (omitted.length > 0) {
-		lines.push(
-			`Omitted: ${omitted.join(" and ")}. Query with VIEW (all open), VIEW ALL (full list), VIEW PHASE "<name>", or VIEW "<title>".`,
-		);
+		lines.push(`Omitted: ${omitted.join(" and ")}. Read todo:// (full list) or todo://phase/<slug> (one phase) to inspect.`);
 	}
 	return lines.join("\n");
 }
@@ -241,6 +245,7 @@ export function formatOpenView(state: TodoMoreState, now: number, waits: readonl
 		return lines.join("\n");
 	}
 	const { phases } = state;
+	const ids = itemDisplayIds(phases);
 	lines.push(...goalSection(state));
 	lines.push(overallLine(phases));
 	const closedSummary = closedPhasesLine(phases);
@@ -252,17 +257,17 @@ export function formatOpenView(state: TodoMoreState, now: number, waits: readonl
 		const closedCount = phase.items.length - openItems.length;
 		if (closedCount > 0) omittedClosed = true;
 		if (openItems.length === 0) continue;
-		lines.push(`Phase ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (${closedCount}/${phase.items.length} done):`);
+		lines.push(
+			`Phase ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (todo://phase/${phaseSlug(phase.name)}, ${closedCount}/${phase.items.length} done):`,
+		);
 		for (const item of openItems) {
-			lines.push(...renderDetailedItem(item, now, waits, "  "));
+			lines.push(...renderDetailedItem(item, ids.get(item), now, waits, "  "));
 		}
 	}
 
-	lines.push(...defectLines(state));
+	lines.push(...defectLines(state, ids));
 	if (omittedClosed) {
-		lines.push(
-			'Closed items omitted. Use VIEW ALL, VIEW PHASE "<name>", or VIEW "<title>" to inspect completed/abandoned items and commits.',
-		);
+		lines.push("Closed items omitted. Read todo:// or todo://phase/<slug> to inspect completed/abandoned items.");
 	}
 	return lines.join("\n");
 }
@@ -280,28 +285,32 @@ export function formatFullView(
 		return lines.join("\n");
 	}
 	const { phases } = state;
+	const ids = itemDisplayIds(phases);
 	lines.push(...goalSection(state));
 	lines.push(overallLine(phases));
 	for (const [index, phase] of phases.entries()) {
 		const closedCount = phase.items.filter((item) => isClosed(item.status)).length;
-		lines.push(`Phase ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (${closedCount}/${phase.items.length} done):`);
+		lines.push(
+			`Phase ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (todo://phase/${phaseSlug(phase.name)}, ${closedCount}/${phase.items.length} done):`,
+		);
 		for (const item of phase.items) {
-			lines.push(...renderDetailedItem(item, now, waits, "  "));
+			lines.push(...renderDetailedItem(item, ids.get(item), now, waits, "  "));
 		}
 	}
-	lines.push(...defectLines(state));
+	lines.push(...defectLines(state, ids));
 	return lines.join("\n");
 }
 
-export function formatPhaseView(phase: TodoPhase, now: number, waits: readonly AskWait[] = []): string {
+export function formatPhaseView(phase: TodoPhase, now: number, waits: readonly AskWait[] = [], ids?: WeakMap<TodoItem, string>): string {
+	const resolvedIds = ids ?? itemDisplayIds([phase]);
 	const closedCount = phase.items.filter((item) => isClosed(item.status)).length;
 	const openCount = phase.items.length - closedCount;
 	const lines: string[] = [
 		currentTimeLine(now),
-		`Phase ${JSON.stringify(phase.name)} (${closedCount}/${phase.items.length} done, ${openCount} open):`,
+		`Phase ${JSON.stringify(phase.name)} (todo://phase/${phaseSlug(phase.name)}, ${closedCount}/${phase.items.length} done, ${openCount} open):`,
 	];
 	for (const item of phase.items) {
-		lines.push(...renderDetailedItem(item, now, waits, "  "));
+		lines.push(...renderDetailedItem(item, resolvedIds.get(item), now, waits, "  "));
 	}
 	return lines.join("\n");
 }
@@ -310,6 +319,7 @@ export function formatItemView(phaseName: string, item: TodoItem, now: number, w
 	const time = itemTimeSummary(item, now, waits, "full") ?? "none";
 	const lines: string[] = [
 		currentTimeLine(now),
+		...(item.id === undefined ? [] : [`ID: ${item.id}`]),
 		`Phase: ${phaseName}`,
 		`Title: ${item.title}`,
 		`Status: ${item.status}`,

@@ -1,5 +1,6 @@
+import { z } from "@oh-my-pi/omptype/zod";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { type ExtensionContext, type SessionEntry, type SessionManager, z } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionContext, SessionEntry, SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { SESSION_EXIT_CUSTOM_TYPE, TOOL_EXECUTION_START_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import {

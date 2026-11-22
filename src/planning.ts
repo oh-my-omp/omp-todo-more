@@ -17,13 +17,13 @@ const CLOSE_TAG = "\n</system-reminder>";
 const SUPERSEDE_LINE = `This reminder supersedes every earlier reminder from ${PLANNING_SOURCE}; only this one applies.`;
 
 const INIT_REMINDER =
-	'Todo is empty. Work phase (this request changes files, config, git or external state): before the first change, initialize with one complete Todo document: INIT "objective" "measure" "doneWhen", PHASE "name", and ADD "title" "explanation" minutes for every step, between *** Begin Todo and *** End Todo. Estimate each item yourself in positive integer minutes; no fractions or defaults. edit is blocked until the complete document succeeds and the list has items. Non-work phase (discussion, investigation, explanation, answering questions): no todo.';
+	"Todo is empty. Work phase (this request changes files, config, git or external state): before the first change, call todo with goal ({ title, summary, acceptance }) and add ([{ phase, title, detail, minutes }]) for every step. Estimate each item in positive integer minutes (<= leafMaxMinutes, default 60). edit is blocked until todo succeeds and the list has items. Non-work phase (discussion, investigation, explanation, answering questions): no todo.";
 
 const COMPACT_PREAMBLE =
-	"Discussion, investigation, explanation and questions add no items. Check that this todo matches your current plan and latest user instructions. Update the goal, steps, explanations, estimates and statuses wherever they disagree; do not omit or narrow work. Batch related changes in one Todo document. Budgets are forecasts, not permission to reduce scope or quality.";
+	"Discussion, investigation, explanation and questions add no items. Check that this todo matches your current plan and latest user instructions. Batch updates (goal, add, explain, estimate, start_id, done_ids, drop_ids) in one todo call wherever they disagree; do not omit or narrow work. Budgets are forecasts, not permission to reduce scope or quality.";
 
 const FULL_PREAMBLE =
-	"Full todo snapshot restored after context compaction or branch transition (includes all completed and abandoned items). Discussion, investigation, explanation and questions add no items. Check that this todo matches your current plan and latest user instructions. Update the goal, steps, explanations, estimates and statuses wherever they disagree; do not omit or narrow work. Batch related changes in one Todo document. Budgets are forecasts, not permission to reduce scope or quality.";
+	"Full todo snapshot restored after context compaction or branch transition (includes all completed and abandoned items). Discussion, investigation, explanation and questions add no items. Check that this todo matches your current plan and latest user instructions. Batch updates (goal, add, explain, estimate, start_id, done_ids, drop_ids) in one todo call wherever they disagree; do not omit or narrow work. Budgets are forecasts, not permission to reduce scope or quality.";
 
 type CarrierContent = Extract<AgentMessage, { role: "custom" | "developer" }>["content"];
 

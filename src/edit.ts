@@ -1,4 +1,4 @@
-import { z } from "@oh-my-pi/pi-coding-agent";
+import { z } from "@oh-my-pi/omptype/zod";
 import { tr } from "../omomp-shared/i18n.ts";
 import { commitTodoState, type HostListSession, liveState } from "./commit.ts";
 import { stateOf, type TodoGoal, type TodoMoreState, todoGoalSchema } from "./state.ts";

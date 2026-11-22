@@ -9,6 +9,7 @@ import {
 	compactTodoLabel,
 	detailsSchema,
 	parseCall,
+	previewOperationCount,
 	progressCounts,
 	type ReadTodoDetails,
 	resultView,
@@ -19,7 +20,7 @@ import type { TodoMoreDetails } from "./tool.ts";
 function uiTimeEstimate(item: TodoMoreSnapshot["phases"][number]["items"][number]): string {
 	return item.time.kind === "estimated"
 		? `${tr("Estimate", "预计")}: ${item.time.minutes} ${tr("min", "分钟")}`
-		: tr("(no time estimate yet: add one with ESTIMATE)", "（尚无时间估计：请使用 ESTIMATE 添加）");
+		: tr("(no time estimate yet: add one with estimate)", "（尚无时间估计：请使用 estimate 添加）");
 }
 
 function checklistStatus(status: TodoStatus): "pending" | "active" | "done" | "dropped" {
@@ -189,11 +190,12 @@ export function describeTodoHud(snapshot: TodoMoreSnapshot, expanded = false): N
 
 export const describeTodoCall: NonNullable<ToolDefinition<typeof parametersSchema, TodoMoreDetails>["describeCall"]> = (args) => {
 	const call = parseCall(args);
+	const count = previewOperationCount(call);
 	return {
 		tool: {
 			title: tr("Todo More", "Todo More"),
 			target: tr("preview — not committed", "预览 — 未提交"),
-			meta: [tr(`${call.commands.length} complete command${call.commands.length === 1 ? "" : "s"}`, `${call.commands.length} 条完整命令`)],
+			meta: [tr(`${count} operation${count === 1 ? "" : "s"}`, `${count} 项操作`)],
 		},
 		open: true,
 		preview: "children",

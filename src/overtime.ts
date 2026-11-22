@@ -28,7 +28,7 @@ Before any other step on this task, investigate why it overran:
 1. Check the evidence: what this item's work actually took, what is still missing, and what blocked, slowed or expanded it.
 2. Decide whether the approach must change. If the cause is unclear, discuss it with a subagent; if you are a subagent, raise it with your parent.
 3. In your next message, state the cause you found and the approach you will take from here.
-This item's estimate is closed: ESTIMATE on it is rejected. If the work needs more time, add the remaining work as new items with PHASE ${escapeXmlText(JSON.stringify(phase))} and ADD, each within the per-item limit, then continue with them.
+This item's estimate is closed: estimate on it is rejected. If the work needs more time, add the remaining work as new items with add (phase ${escapeXmlText(JSON.stringify(phase))}), each within the per-item limit, then continue with them.
 Do not lower the expected outcome, acceptance criteria or quality, and do not reset the list or remove and recreate this item to escape the overrun.`;
 }
 
