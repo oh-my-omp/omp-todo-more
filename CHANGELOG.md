@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-23
+
 ### Changed
 
 - Added `omomp-shared/compact-handoff.ts` from `oh-my-omp/shared@8f2c5e520126` and registered `omp-todo-more` as a `StatefulHarnessHandoff` (`delivery: "plugin-managed"`, `source="omp-todo-more/planning"`) so compaction prompts preserve active todo ownership without summarizing todo items, time budgets, or todo rules while staying silent when the list is empty.
