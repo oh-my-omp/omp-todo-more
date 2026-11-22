@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, SessionEntry, ToolCallEventResult } from "@oh-my-pi/pi-coding-agent";
 import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
-import { type CompactExtensionAPI, defineStatefulHarnessHandoff, registerCompactHandoff } from "../omomp-shared/compact-handoff.ts";
+import { defineStatefulHarnessHandoff, registerCompactHandoff } from "../omomp-shared/compact-handoff.ts";
 import { type BranchSource, branchFacts, contextBranch, foldBranch } from "./branch.ts";
 import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
@@ -444,25 +444,8 @@ export function registerPlanning(pi: ExtensionAPI): void {
 	});
 	pi.on("turn_end", (_event, ctx) => settled(ctx));
 
-	const compactHost: CompactExtensionAPI = {
-		on: pi.on.bind(pi),
-		events: pi.events,
-		logger: {
-			warn: (message, details) => {
-				if (details === undefined) {
-					pi.logger.warn(message);
-				} else if (typeof details === "object" && details !== null && !Array.isArray(details)) {
-					pi.logger.warn(message, details as Record<string, unknown>);
-				} else {
-					pi.logger.warn(message, { details });
-				}
-			},
-		},
-	};
-	const compactHostKey = typeof pi.events === "object" && pi.events !== null ? pi.events : pi;
-
 	registerCompactHandoff(
-		compactHost,
+		pi,
 		defineStatefulHarnessHandoff({
 			pluginId: "omp-todo-more",
 			captureState(compactCtx) {
@@ -482,6 +465,5 @@ export function registerPlanning(pi: ExtensionAPI): void {
 				return { source: PLANNING_SOURCE, delivery: "plugin-managed" };
 			},
 		}),
-		compactHostKey,
 	);
 }

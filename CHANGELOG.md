@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Added `omomp-shared/compact-handoff.ts` from `oh-my-omp/shared@dabf458ded68` and registered `omp-todo-more` as a `StatefulHarnessHandoff` (`delivery: "plugin-managed"`, `source="omp-todo-more/planning"`) so compaction prompts preserve active todo ownership without summarizing todo items, time budgets, or todo rules while staying silent when the list is empty.
+- Added `omomp-shared/compact-handoff.ts` from `oh-my-omp/shared@8f2c5e520126` and registered `omp-todo-more` as a `StatefulHarnessHandoff` (`delivery: "plugin-managed"`, `source="omp-todo-more/planning"`) so compaction prompts preserve active todo ownership without summarizing todo items, time budgets, or todo rules while staying silent when the list is empty.
 - Guarded `overtime` deadline rescheduling and `reminders` cut-off timer delivery with the shared compaction barrier (`isCompacting` / `deferDuringCompaction`) so neither calls `pi.sendMessage` while compaction is in flight.
 
 ## [0.2.4] - 2026-11-22

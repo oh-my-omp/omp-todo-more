@@ -17,7 +17,7 @@ export const OMP_SNAPCOMPACT_FILE_LIMIT = 20;
 
 export type CompactExtensionAPI = Pick<ExtensionAPI, "on"> & {
 	readonly events?: unknown;
-	readonly logger?: { readonly warn?: (message: string, details?: unknown) => void };
+	readonly logger?: { readonly warn?: (message: string, context?: Record<string, unknown>) => void };
 };
 
 export interface CompactPluginContext {
