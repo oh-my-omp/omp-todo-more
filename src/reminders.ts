@@ -8,6 +8,7 @@ import { cfgTodoEnabled, cfgTodoReminders, cfgTodoRemindersMax } from "@oh-my-pi
 import { type NativeNode, node, span } from "@oh-my-pi/pi-tui";
 import { isSilentAbort, isUserInterruptAbort } from "@oh-my-pi/pi-tui/chat/messages";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
+import { deferDuringCompaction, isCompacting } from "../omomp-shared/compact-handoff.ts";
 import { tr } from "../omomp-shared/i18n.ts";
 import { type BranchFacts, type BranchSource, branchFacts, contextBranch, foldBranch } from "./branch.ts";
 import { liveState } from "./commit.ts";
@@ -496,6 +497,12 @@ export function registerReminders(pi: ExtensionAPI): void {
 	};
 	const fire = (pending: PendingCutOff): void => {
 		if (cutOff !== pending) return;
+		if (isCompacting(pending.session.sessionManager)) {
+			deferDuringCompaction(pending.session.sessionManager, "omp-todo-more:cut-off-reminder", () => {
+				if (cutOff === pending) fire(pending);
+			});
+			return;
+		}
 		let waiting = false;
 		try {
 			const step = nextStep(pending);

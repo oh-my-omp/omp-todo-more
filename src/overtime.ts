@@ -5,6 +5,7 @@
  */
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
+import { deferDuringCompaction, isCompacting } from "../omomp-shared/compact-handoff.ts";
 import { createDeltaStream } from "../omomp-shared/context-delta.ts";
 import { branchFacts } from "./branch.ts";
 import { liveState } from "./commit.ts";
@@ -50,6 +51,10 @@ export function registerOvertime(pi: ExtensionAPI): void {
 	};
 	const reschedule = (binding: DeadlineBinding): void => {
 		if (active !== binding) return;
+		if (isCompacting(binding.session.sessionManager)) {
+			deferDuringCompaction(binding.session.sessionManager, "omp-todo-more:overtime", () => changed());
+			return;
+		}
 		try {
 			const facts = branchFacts(binding.session.sessionManager);
 			for (const budgetId of pending) {

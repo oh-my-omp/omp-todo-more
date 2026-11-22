@@ -3,6 +3,7 @@ import { AgentSession, type ExtensionAPI, type ExtensionContext, type ExtensionE
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { enterCompactionBarrier, isCompacting, releaseCompactionBarrier } from "../omomp-shared/compact-handoff.ts";
 import { askWaits, readTodoMore } from "../src/branch.ts";
 import { commitTodoState } from "../src/commit.ts";
 import { registerOvertime } from "../src/overtime.ts";
@@ -417,6 +418,30 @@ describe("overtime deadline scheduling", () => {
 			staleCallback();
 			expect(warnings(fixture.manager)).toEqual([]);
 			expect(fixture.clock.deadlines).toEqual([]);
+		});
+	});
+
+	test("defers overtime sendMessage while compaction barrier is active and flushes on release", async () => {
+		await withScheduler(async (fixture) => {
+			await fixture.append(estimatedState());
+			expect(fixture.clock.deadlines).toEqual([epoch + 60_000]);
+
+			enterCompactionBarrier(fixture.manager);
+			expect(isCompacting(fixture.manager)).toBe(true);
+
+			await fixture.clock.advanceTo(epoch + 60_000);
+			expect(warnings(fixture.manager)).toEqual([]);
+
+			expect(releaseCompactionBarrier(fixture.manager)).toBe(1);
+			expect(isCompacting(fixture.manager)).toBe(false);
+			await Promise.resolve();
+
+			expect(warningDetails(fixture.manager)).toEqual({
+				budgetId: "original-budget",
+				title,
+				estimatedMinutes: 1,
+				elapsedMs: 60_000,
+			});
 		});
 	});
 });

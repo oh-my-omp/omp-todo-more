@@ -1,8 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { AgentSession, Settings } from "@oh-my-pi/pi-coding-agent";
+import { AgentSession, type ExtensionAPI, type ExtensionContext, type ExtensionEvent, Settings } from "@oh-my-pi/pi-coding-agent";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { contextMessages, continuation } from "../src/reminders.ts";
+import { enterCompactionBarrier, releaseCompactionBarrier } from "../omomp-shared/compact-handoff.ts";
+import { contextMessages, continuation, registerReminders } from "../src/reminders.ts";
 import { runTodo } from "../src/tool.ts";
 import { hostSession, runPersisted } from "./host.ts";
 
@@ -82,5 +84,97 @@ describe("the continuation reminder reads the live host list", () => {
 		const manager = SessionManager.inMemory("/tmp/todo-more-continuation-tests-empty");
 		const { own, ctx } = stopped(manager);
 		expect(continuation(own, ctx)).toEqual({ kind: "silent" });
+	});
+});
+
+describe("cut-off reminder compaction barrier", () => {
+	const registered: { id: string; ref: ReturnType<AgentRegistry["register"]> }[] = [];
+
+	afterEach(() => {
+		setSystemTime();
+		for (const { id, ref } of registered.splice(0)) AgentRegistry.global().unregister(id, ref);
+	});
+
+	test("defers cut-off reminder sendMessage while compaction is active and flushes after release", async () => {
+		const now = Date.parse("2026-11-22T01:00:00.000Z");
+		setSystemTime(now);
+		const manager = SessionManager.inMemory("/tmp/todo-more-cutoff-barrier");
+		const host = hostSession(manager);
+		const own = Object.setPrototypeOf(
+			{
+				...host,
+				getPlanModeState: () => undefined,
+				getActiveToolNames: () => ["todo"],
+				settings: Settings.isolated(),
+				wakeSources: undefined,
+			},
+			AgentSession.prototype,
+		) as AgentSession;
+		const agentId = `reminders-barrier-${crypto.randomUUID()}`;
+		const ref = AgentRegistry.global().register({
+			id: agentId,
+			displayName: "Reminders barrier",
+			kind: "main",
+			session: own,
+		});
+		registered.push({ id: agentId, ref });
+		await runPersisted(host, valid);
+
+		const handlers = new Map<string, ((event: ExtensionEvent, ctx: ExtensionContext) => unknown)[]>();
+		const sent: unknown[] = [];
+		const timers = new Map<Timer, () => void>();
+		let nextTimer = 0;
+
+		const pi = {
+			on: (name: string, handler: (event: ExtensionEvent, ctx: ExtensionContext) => unknown) => {
+				handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+			},
+			registerMessageRenderer: () => {},
+			registerShortcut: () => {},
+			registerCommand: () => {},
+			sendMessage: (msg: unknown) => {
+				sent.push(msg);
+			},
+			logger: { warn: () => {} },
+		} as unknown as ExtensionAPI;
+
+		registerReminders(pi);
+
+		const ctx = {
+			agent: { id: agentId, kind: "main" },
+			sessionManager: manager,
+			hasUI: false,
+			isIdle: () => true,
+			hasPendingMessages: () => false,
+			setTimeout: (cb: () => void) => {
+				const handle = ++nextTimer as unknown as Timer;
+				timers.set(handle, cb);
+				return handle;
+			},
+			clearTimer: (handle: Timer) => {
+				timers.delete(handle);
+			},
+		} as unknown as ExtensionContext;
+
+		for (const handler of handlers.get("agent_end") ?? []) {
+			await handler(
+				{
+					type: "agent_end",
+					willContinue: false,
+					messages: [{ role: "assistant", stopReason: "error", content: [], timestamp: now }],
+				} as unknown as ExtensionEvent,
+				ctx,
+			);
+		}
+		expect(timers.size).toBe(1);
+		const fireTimer = [...timers.values()][0]!;
+		timers.clear();
+
+		enterCompactionBarrier(manager);
+		fireTimer();
+		expect(sent).toHaveLength(0);
+
+		expect(releaseCompactionBarrier(manager)).toBe(1);
+		expect(sent).toHaveLength(1);
 	});
 });

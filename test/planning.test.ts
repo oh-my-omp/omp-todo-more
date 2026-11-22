@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext, ToolCallEventResult } from "@oh-my
 import { AgentSession } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { getSharedCompactCoordinator } from "../omomp-shared/compact-handoff.ts";
 import { saveTodoEdit } from "../src/edit.ts";
 import { formatClock, formatDateTime } from "../src/format.ts";
 import { PLANNING_SOURCE, registerPlanning } from "../src/planning.ts";
@@ -276,5 +277,68 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		expect(branchRecovered?.message.content).toContain("Detailed explanation of already finished setup task");
 		persistPromptMessage(branchRecovered);
 		expect(await prompt()).toBeUndefined();
+	});
+
+	test("registers omp-todo-more compact handoff with empty-list gating and active-list claim", async () => {
+		const { emit, session, manager } = gate();
+		const coordinator = getSharedCompactCoordinator();
+		expect(coordinator.listPluginIds()).toContain("omp-todo-more");
+
+		const emptySnapshot = coordinator.prepareSnapshot(
+			{ cwd: "/tmp/todo-more-planning-tests", branchEntries: manager.getBranch(), messagesToSummarize: [] },
+			{
+				isUpdate: false,
+				fileOpsPruneReport: {
+					totalInputPaths: 0,
+					strippedQueryCount: 0,
+					filteredNoiseCount: 0,
+					keptUniqueCandidateCount: 0,
+					selectedCount: 0,
+					repoSourcePathsSelected: [],
+					selectedPaths: [],
+				},
+			},
+		);
+		expect(emptySnapshot.inactiveStatefulPluginIds).toContain("omp-todo-more");
+		expect(emptySnapshot.activeHandoffs.some((h) => h.pluginId === "omp-todo-more")).toBe(false);
+		expect(emptySnapshot.harnessProvidedBlock).not.toContain("[omp-todo-more]");
+
+		await runPersisted(session, multi);
+		await emit("session_before_compact", {
+			type: "session_before_compact",
+			branchEntries: manager.getBranch(),
+			preparation: {
+				messagesToSummarize: [],
+				turnPrefixMessages: [],
+				fileOps: { read: new Set(), edited: new Set(), written: new Set() },
+			},
+		});
+		const prepared = coordinator.getLastPrepared(manager);
+		expect(prepared).toBeDefined();
+		const handoff = prepared?.activeHandoffs.find((h) => h.pluginId === "omp-todo-more");
+		expect(handoff).toBeDefined();
+		expect(handoff?.injection).toEqual({ source: PLANNING_SOURCE, delivery: "plugin-managed" });
+		expect(handoff?.claim).toContain("2 phases, 3 items");
+		expect(handoff?.claim).toContain(`source="${PLANNING_SOURCE}"`);
+		expect(handoff?.claim).toContain("FULL_PREAMBLE");
+		expect(prepared?.harnessProvidedBlock).toContain("[omp-todo-more]");
+
+		// Fallback path without extensionCtx uses foldBranch(branchEntries)
+		const branchOnly = coordinator.prepareSnapshot(
+			{ cwd: "/tmp/todo-more-planning-tests", branchEntries: manager.getBranch(), messagesToSummarize: [] },
+			{
+				isUpdate: false,
+				fileOpsPruneReport: {
+					totalInputPaths: 0,
+					strippedQueryCount: 0,
+					filteredNoiseCount: 0,
+					keptUniqueCandidateCount: 0,
+					selectedCount: 0,
+					repoSourcePathsSelected: [],
+					selectedPaths: [],
+				},
+			},
+		);
+		expect(branchOnly.activeHandoffs.find((h) => h.pluginId === "omp-todo-more")?.claim).toContain("2 phases, 3 items");
 	});
 });
