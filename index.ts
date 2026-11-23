@@ -4,6 +4,7 @@ import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import { logger } from "@oh-my-pi/pi-utils";
 import { canonicalToolOrder } from "./omomp-shared/active-tools.ts";
 import { tr } from "./omomp-shared/i18n.ts";
+import { acceptanceGuard } from "./src/acceptance.ts";
 import { errorText } from "./src/errors.ts";
 import { describeTodoCall, describeTodoResult } from "./src/native.ts";
 import { registerOvertime } from "./src/overtime.ts";
@@ -47,6 +48,7 @@ async function executeTodo(session: AgentSession, params: unknown, ctx: Extensio
 		project,
 		signal,
 		host: ctx,
+		acceptance: [acceptanceGuard(session.settings)],
 	});
 }
 
