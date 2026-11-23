@@ -9,6 +9,7 @@ import { errorText } from "./src/errors.ts";
 import { describeTodoCall, describeTodoResult } from "./src/native.ts";
 import { registerOvertime } from "./src/overtime.ts";
 import { registerPlanning } from "./src/planning.ts";
+import { readProjectConfig } from "./src/project-config.ts";
 import { registerReminders } from "./src/reminders.ts";
 import { renderTodoCall, renderTodoResult } from "./src/render.ts";
 import { registerReviewApi } from "./src/review-api.ts";
@@ -45,8 +46,8 @@ const parentCwdOf =
 	};
 
 async function executeTodo(session: AgentSession, params: unknown, ctx: ExtensionContext) {
-	const settings = await readSettings({ logger }, ctx);
-	return runTodo(session, params, settings.leafMaxMinutes, parentCwdOf(ctx), ctx.agent);
+	const [settings, project] = await Promise.all([readSettings({ logger }, ctx), readProjectConfig(logger, ctx.cwd)]);
+	return runTodo(session, params, settings.leafMaxMinutes, parentCwdOf(ctx), ctx.agent, project);
 }
 
 async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promise<void> {

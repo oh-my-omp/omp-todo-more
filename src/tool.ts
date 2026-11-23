@@ -6,6 +6,7 @@ import { commitTodoState, liveState, type TodoSession } from "./commit.ts";
 import { currentTimeLine, formatCompactView, formatFullView, formatOpenView, formatPhaseView } from "./format.ts";
 import { type AgentRef, commitCompletion, sharedWorktreeRoot, workState } from "./git.ts";
 import { participatingModels } from "./models.ts";
+import { DEFAULT_PROJECT, type ProjectConfigState, projectConfigProblem } from "./project-config.ts";
 import { commitClauseOf, hasTodoMutation, parametersSchema, parseTodoParams, type TodoCommitClause, type TodoParams } from "./protocol.ts";
 import { DEFAULT_SETTINGS } from "./settings.ts";
 import {
@@ -369,28 +370,31 @@ function result(session: TodoSession, state: TodoNgState, text: string, extra: R
 	return { content: [{ type: "text", text }], details, isError: extra.isError };
 }
 
-function viewTodo(session: TodoSession, state: TodoNgState, waits: readonly AskWait[], rawView: string | undefined, now: number) {
-	const view = rawView?.trim();
-	if (view === undefined || view.toLowerCase() === "all") {
-		return result(session, state, formatFullView(state, now, waits), { op: "view" });
-	}
-	if (view.toLowerCase() === "current") {
-		return result(session, state, formatOpenView(state, now, waits), { op: "view" });
-	}
-	if (state.kind === "empty") {
-		return result(session, state, `${currentTimeLine(now)}\nTodo list is empty.`, { isError: true });
-	}
+function viewText(state: TodoNgState, waits: readonly AskWait[], view: string | undefined, now: number): { text: string; found: boolean } {
+	if (view === undefined || view.toLowerCase() === "all") return { text: formatFullView(state, now, waits), found: true };
+	if (view.toLowerCase() === "current") return { text: formatOpenView(state, now, waits), found: true };
+	if (state.kind === "empty") return { text: `${currentTimeLine(now)}\nTodo list is empty.`, found: false };
 	const targetSlug = phaseSlug(view);
 	const phase = state.phases.find(
 		(candidate) => candidate.name.toLowerCase() === view.toLowerCase() || phaseSlug(candidate.name) === targetSlug,
 	);
-	if (phase === undefined) {
-		const available = state.phases.map((p) => `${JSON.stringify(p.name)} (${phaseSlug(p.name)})`).join(", ");
-		return result(session, state, `${currentTimeLine(now)}\nPhase ${JSON.stringify(view)} not found. Available: ${available}`, {
-			isError: true,
-		});
-	}
-	return result(session, state, formatPhaseView(phase, now, waits), { op: "view" });
+	if (phase !== undefined) return { text: formatPhaseView(phase, now, waits), found: true };
+	const available = state.phases.map((p) => `${JSON.stringify(p.name)} (${phaseSlug(p.name)})`).join(", ");
+	return { text: `${currentTimeLine(now)}\nPhase ${JSON.stringify(view)} not found. Available: ${available}`, found: false };
+}
+
+function viewTodo(
+	session: TodoSession,
+	state: TodoNgState,
+	waits: readonly AskWait[],
+	rawView: string | undefined,
+	now: number,
+	project: ProjectConfigState,
+) {
+	const { text, found } = viewText(state, waits, rawView?.trim(), now);
+	const notice =
+		project.kind === "invalid" ? `\n${projectConfigProblem(project)}. Todo changes are refused until the file is fixed or removed.` : "";
+	return result(session, state, `${text}${notice}`, found ? { op: "view" } : { isError: true });
 }
 
 export type ParentCwd = () => string | undefined;
@@ -495,6 +499,7 @@ export async function runTodo(
 	leafMaxMinutes: number = DEFAULT_SETTINGS.leafMaxMinutes,
 	parentCwd: ParentCwd = TOP_LEVEL,
 	agent: AgentRef = MAIN_AGENT,
+	project: ProjectConfigState = DEFAULT_PROJECT,
 ): Promise<AgentToolResult<TodoNgDetails>> {
 	const facts = branchFacts(session.sessionManager);
 	const previous = liveState(session);
@@ -505,7 +510,13 @@ export async function runTodo(
 		return result(session, previous, `${currentTimeLine(now)}\n${parsed.message}`, { isError: true });
 	}
 	if (!hasTodoMutation(parsed.params)) {
-		return viewTodo(session, previous, waits, parsed.params.view, now);
+		return viewTodo(session, previous, waits, parsed.params.view, now, project);
+	}
+	if (project.kind === "invalid") {
+		const refusal = `${projectConfigProblem(project)}. Fix or remove the file: todo changes are refused until it parses.`;
+		return result(session, previous, formatCompactView(previous, now, waits, { errors: [refusal], readOnly: true }), {
+			isError: true,
+		});
 	}
 	const plan = planTodo(parsed.params, previous, { leafMaxMinutes, overtimeWarned: facts.overtimeWarned }, now, waits);
 	if (plan.kind === "rejected") {

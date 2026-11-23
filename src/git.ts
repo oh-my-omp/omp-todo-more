@@ -60,10 +60,14 @@ export async function workState(cwd: string, artifactsDir: string | null, agent:
 	return draft.selection().length > 0 ? { kind: "own", root: draft.root } : { kind: "foreign", root: draft.root };
 }
 
+export function repositoryRoot(cwd: string): string | null {
+	return repositoryAt(cwd)?.info().repoRoot ?? null;
+}
+
 export function sharedWorktreeRoot(cwd: string, otherCwd: string): string | null {
-	const root = repositoryAt(cwd)?.info().repoRoot;
-	if (root === undefined) return null;
-	return repositoryAt(otherCwd)?.info().repoRoot === root ? root : null;
+	const root = repositoryRoot(cwd);
+	if (root === null) return null;
+	return repositoryRoot(otherCwd) === root ? root : null;
 }
 
 type PathspecOutcome =
