@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-23
+
 ### Breaking Changes
 
 - The plugin is renamed from `omp-todo-more` to `omp-todo-ng`: install it as `omp-todo-ng` from https://github.com/oh-my-omp/omp-todo-ng, configure it with `omp plugin config omp-todo-ng`, open the editor with `/todo-ng` and cancel a pending reminder with `/todo-ng-cancel`; the Tern plugin id is `omp-todo-ng`, its stylesheet is `todo-ng.css`, the `<system-reminder>` sources are `omp-todo-ng/planning` and `omp-todo-ng/overtime`. Session data written by earlier versions still loads.
