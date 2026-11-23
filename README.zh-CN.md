@@ -40,7 +40,7 @@
   - Tern 包 — 功能：随包发布 `tern/plugin.toml`（id `omp-todo-ng`）、`window.luau` 与 `todo-ng.css`，其样式表把扩展小组件所在的行叠放到 omp 的活动行上，并在那里隐藏原生 Todo HUD、保留其布局盒，使药丸占据原生药丸的位置，不新增一行，也不改变 Tern 的 flex dock；活动行未显示时，该行自成一行。时机：Tern 中该插件已安装且启用期间。实例：`tern/todo-ng.css` 中的 `.sf-dock[data-surface="omp.session"]` 规则。
   - Tern owner-CLI 安装 — 功能：加载时经 `tern plugin dir/list/install --json` 安装或修复该包，副本一致时跳过，Tern 存在但检查失败时拒绝整个扩展工厂。时机：异步工厂内、订阅 review API 之前；`tern` 不在 `PATH` 上时跳过。实例：`src/tern-plugin-install.ts` 的 `initializeTernPlugin`/`isCurrent`。
 - **同步 review 协议**
-  - `omp-todo-more:read` 监听器 — 功能：在事件总线上同步应答请求 `{agentId, reply(value)}`：从指定 agent 的活动分支读取并回复 `{kind: "ok", goal, openItems, counts}` 或 `{kind: "unavailable"}`，不写、不缓存、无定时器。时机：另一进程内扩展在 `pi.events` 上发出 `omp-todo-more:read` 时；`session_shutdown` 时移除。实例：`src/review-api.ts` 的 `registerReviewApi`，协议见 `omomp-shared/todo-read.ts`。
+  - `omp-todo-ng:read` 监听器 — 功能：在事件总线上同步应答请求 `{agentId, reply(value)}`：从指定 agent 的活动分支读取并回复 `{kind: "ok", goal, openItems, counts}` 或 `{kind: "unavailable"}`，不写、不缓存、无定时器。时机：另一进程内扩展在 `pi.events` 上发出 `omp-todo-ng:read` 时；`session_shutdown` 时移除。实例：`src/review-api.ts` 的 `registerReviewApi`，协议见 `omomp-shared/todo-read.ts`。
 - **插件设置**
   - 插件设置 — 功能：以原生插件设置声明 `leafMaxMinutes`（默认 `60`，1–1440），非法值回退默认并告警；todo 提醒、提醒上限与 eager 前导都跟随宿主的 `todo.*` 设置。时机：每次 `todo` 调用经 `getPluginSettings` 重读。实例：`package.json` 的 `omp.settings`、`src/settings.ts` 的 `readSettings`；用 `omp plugin config omp-todo-ng` 设置。
 - **语言解析**
