@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { SCRIPT_MODEL, startMockProvider } from "../parity/mock-provider.ts";
+import { SCRIPT_MODEL, startMockProvider } from "./mock-provider.ts";
 import { fillBranch } from "../ui-fixture.ts";
 
 const args = new Map<string, string>();
@@ -37,7 +37,7 @@ try {
 		path.join(agentDir, "models.yml"),
 		Bun.YAML.stringify({
 			providers: {
-				parity: {
+				mock: {
 					baseUrl: `http://127.0.0.1:${provider.port}/v1`,
 					api: "openai-completions",
 					auth: "none",
@@ -47,7 +47,7 @@ try {
 			},
 		}),
 	);
-	const role = `parity/${SCRIPT_MODEL}`;
+	const role = `mock/${SCRIPT_MODEL}`;
 	writeFileSync(
 		path.join(agentDir, "config.yml"),
 		Bun.YAML.stringify({
