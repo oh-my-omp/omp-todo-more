@@ -1,7 +1,6 @@
 import { fullGC, memoryUsage } from "bun:jsc";
 import path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { ExtensionAPI, SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -87,25 +86,20 @@ async function measure(manager: SessionManager, trigger: () => unknown | Promise
 	return { coldNs, coldHeap, steadyNs: median(times), steadyHeap };
 }
 
-const humans = (manager: SessionManager): AgentMessage[] =>
-	manager
-		.getBranchView()
-		.filter((entry: SessionEntry) => entry.type === "message" && entry.message.role === "user")
-		.slice(-20)
-		.map((entry) => (entry as Extract<SessionEntry, { type: "message" }>).message as AgentMessage);
-
 async function planningPath(n: number): Promise<Sample> {
 	const manager = freshBranch(n);
+	const agentId = `tree-bench-${crypto.randomUUID()}`;
+	const ref = AgentRegistry.global().register({ id: agentId, displayName: "bench", kind: "main", session: sessionOver(manager) });
 	const handlers = new Map<string, Handler[]>();
 	modules.registerPlanning(stubPi(handlers, manager));
-	const ctx = { sessionManager: manager, agent: { id: "bench", kind: "main" } };
+	const ctx = { sessionManager: manager, agent: { id: agentId, kind: "main" } };
 	const afterTools = handlers.get("tool_result")?.[0];
-	if (afterTools !== undefined) {
-		return measure(manager, () => afterTools({ type: "tool_result", toolName: "read", isError: false }, ctx));
+	if (afterTools === undefined) throw new Error("no planning tool_result handler");
+	try {
+		return await measure(manager, () => afterTools({ type: "tool_result", toolName: "read", isError: false }, ctx));
+	} finally {
+		AgentRegistry.global().unregister(agentId, ref);
 	}
-	const context = handlers.get("context")?.[0];
-	if (context === undefined) throw new Error("no planning tool_result or context handler");
-	return measure(manager, () => context({ type: "context", messages: humans(manager) }, ctx));
 }
 
 async function todoPath(n: number): Promise<Sample> {
