@@ -157,7 +157,7 @@ describe("one card per todo call", () => {
 	});
 
 	test("an incremental update renders only the delta in ANSI and native cards until expanded", () => {
-		const deltaArgs = { done_ids: ["t1"] };
+		const deltaArgs = { done_id: "t1" };
 		const deltaSnapshot: TodoMoreSnapshot = {
 			goal: snapshot.goal,
 			phases: [

@@ -96,7 +96,7 @@ export function previewOperationCount(call: Call): number {
 		(call.start_id === undefined ? 0 : 1) +
 		call.explain.length +
 		call.estimate.length +
-		call.done_ids.length +
+		(call.done_id === undefined ? 0 : 1) +
 		call.drop_ids.length
 	);
 }
@@ -125,7 +125,14 @@ export function callPreviewLines(call: Call): string[] {
 	for (const entry of call.estimate) {
 		lines.push(`estimate ${entry.id ?? ""}: ${entry.minutes ?? ""}${tr("m", "分钟")}`);
 	}
-	if (call.done_ids.length > 0) lines.push(`done_ids: ${call.done_ids.join(", ")}`);
+	if (call.done_id !== undefined) lines.push(`done_id: ${call.done_id}`);
+	if (call.commit !== undefined) {
+		lines.push(
+			`commit`,
+			...(call.commit.paths === undefined ? [] : [`  ${tr("Paths", "路径")}: ${call.commit.paths.join(" ")}`]),
+			`  ${tr("Message", "说明")}: ${call.commit.message ?? ""}`,
+		);
+	}
 	if (call.drop_ids.length > 0) lines.push(`drop_ids: ${call.drop_ids.join(", ")}`);
 	if (previewOperationCount(call) === 0) {
 		lines.push(call.complete ? `view (${call.view ?? "all"})` : tr("Waiting for todo arguments.", "等待待办参数。"));
@@ -278,8 +285,8 @@ export function resultView(details: ReadTodoDetails, args: unknown, expanded: bo
 			const name = entry.id === undefined ? undefined : titleById(details.more, entry.id);
 			if (name !== undefined) touchedTasks.add(name);
 		}
-		for (const id of call.done_ids) {
-			const name = titleById(details.more, id);
+		if (call.done_id !== undefined) {
+			const name = titleById(details.more, call.done_id);
 			if (name !== undefined) touchedTasks.add(name);
 		}
 		for (const id of call.drop_ids) {

@@ -19,12 +19,12 @@ describe("Todo parameter schema", () => {
 		expect(parsed.kind).toBe("ok");
 	});
 
-	test("accepts incremental updates across start_id, explain, estimate, done_ids, and drop_ids", () => {
+	test("accepts incremental updates across start_id, explain, estimate, done_id, and drop_ids", () => {
 		const parsed = parseTodoParams({
 			start_id: "t2",
 			explain: [{ id: "t2", note: "Updated scope" }],
 			estimate: [{ id: "t2", minutes: 20 }],
-			done_ids: ["t1"],
+			done_id: "t1",
 			drop_ids: ["t3"],
 		});
 		expect(parsed.kind).toBe("ok");
@@ -34,7 +34,7 @@ describe("Todo parameter schema", () => {
 		expect(parseTodoParams({}).kind).toBe("ok");
 		expect(parseTodoParams({ view: "all" }).kind).toBe("ok");
 		expect(parseTodoParams({ view: "current" }).kind).toBe("ok");
-		expect(parseTodoParams({ view: "all", done_ids: ["t1"] }).kind).toBe("invalid");
+		expect(parseTodoParams({ view: "all", done_id: "t1" }).kind).toBe("invalid");
 		expect(parseTodoParams("not an object").kind).toBe("invalid");
 		expect(parseTodoParams(null).kind).toBe("invalid");
 	});

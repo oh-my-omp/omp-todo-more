@@ -78,6 +78,7 @@ function fixture(initial?: TodoMoreSnapshot): Fixture {
 	let list: HostTodoPhase[] = [];
 	const session: TodoSession = {
 		sessionManager,
+		model: undefined,
 		getTodoPhases: () => structuredClone(list),
 		setTodoPhases: (phases) => {
 			list = structuredClone(phases);
@@ -290,10 +291,10 @@ describe("atomic structured todo execution", () => {
 		expect(itemOf(harness.snapshot(), "Verify").status).toBe("pending");
 	});
 
-	test("done_ids, start_id, explain and add publish one snapshot preserving unrelated rich fields", async () => {
+	test("done_id, start_id, explain and add publish one snapshot preserving unrelated rich fields", async () => {
 		const harness = fixture(populated());
 		const result = await harness.callAt(epoch + 5_000, {
-			done_ids: ["t1"],
+			done_id: "t1",
 			start_id: "t3",
 			explain: [{ id: "t3", note: "Verify through runtime" }],
 			add: [{ phase: "Polish", title: "Document", detail: "Update README", minutes: 8 }],
@@ -310,7 +311,7 @@ describe("atomic structured todo execution", () => {
 
 	test("completion promotes the earliest pending task", async () => {
 		const harness = fixture(populated());
-		const result = await harness.call({ done_ids: ["t1"] });
+		const result = await harness.call({ done_id: "t1" });
 		expect(result.isError).not.toBe(true);
 		expect(itemOf(harness.snapshot(), "Implement").status).toBe("completed");
 		expect(itemOf(harness.snapshot(), "Review").status).toBe("in_progress");
@@ -338,8 +339,8 @@ describe("atomic structured todo execution", () => {
 	test("missing goal requires goal alongside mutations", async () => {
 		const noGoal: TodoMoreSnapshot = { ...populated(), goal: null };
 		const harness = fixture(noGoal);
-		await expectRejected(harness, () => harness.call({ done_ids: ["t1"] }));
-		const fixed = await harness.call({ goal: goalInput, done_ids: ["t1"] });
+		await expectRejected(harness, () => harness.call({ done_id: "t1" }));
+		const fixed = await harness.call({ goal: goalInput, done_id: "t1" });
 		expect(fixed.isError).not.toBe(true);
 		expect(harness.snapshot().goal).toEqual(goal);
 	});
@@ -353,11 +354,11 @@ describe("atomic structured todo execution", () => {
 		expect(resultText(empty)).toContain("Todo list is empty.");
 	});
 
-	test("rejects duplicate task titles and conflicting start_id / done_ids / drop_ids", async () => {
+	test("rejects duplicate task titles and conflicting start_id / done_id / drop_ids", async () => {
 		const harness = fixture(populated());
 		await expectRejected(harness, () => harness.call({ add: [{ title: "Implement", detail: "Duplicate", minutes: 5 }] }));
-		await expectRejected(harness, () => harness.call({ done_ids: ["t2"], drop_ids: ["t2"] }));
-		await expectRejected(harness, () => harness.call({ start_id: "t2", done_ids: ["t2"] }));
+		await expectRejected(harness, () => harness.call({ done_id: "t2", drop_ids: ["t2"] }));
+		await expectRejected(harness, () => harness.call({ start_id: "t2", done_id: "t2" }));
 		await expectRejected(harness, () => harness.call({ start_id: "t2", drop_ids: ["t2"] }));
 	});
 });
@@ -376,12 +377,7 @@ describe("host list authority", () => {
 		);
 		expect(first.isError).not.toBe(true);
 		expect(harness.session.sessionManager.getBranch().some((entry) => entry.type === "message")).toBe(false);
-		const second = await at(epoch + 5_000, () =>
-			runTodo(harness.session, {
-				done_ids: ["t1"],
-				explain: [{ id: "t2", note: "Now active" }],
-			}),
-		);
+		const second = await at(epoch + 5_000, () => runTodo(harness.session, { done_id: "t1", explain: [{ id: "t2", note: "Now active" }] }));
 		expect(second.isError).not.toBe(true);
 		expect(second.details?.phases).toStrictEqual([
 			{
@@ -428,7 +424,7 @@ describe("atomic batch timing through the authority branch", () => {
 						{ title: "Second", detail: "Pause within the batch", minutes: 3 },
 						{ title: "Third", detail: "Remain active", minutes: 4 },
 					],
-					done_ids: ["t1"],
+					done_id: "t1",
 					drop_ids: ["t2"],
 					explain: [{ id: "t3", note: "Accepted active explanation" }],
 				}),
@@ -507,7 +503,7 @@ describe("atomic batch timing through the authority branch", () => {
 		expectSaved(harness, result, expected, 0);
 	});
 
-	test("start_id pauses the clock, paused estimate, resume, active estimate and done_ids preserve active elapsed time", async () => {
+	test("start_id pauses the clock, paused estimate, resume, active estimate and done_id preserve active elapsed time", async () => {
 		const initial = timed();
 		const harness = fixture(initial);
 		const paused: TodoMoreSnapshot = {
@@ -576,7 +572,7 @@ describe("atomic batch timing through the authority branch", () => {
 			time: time("review-budget", 20, 24_500, epoch + 35_000),
 			timestamps: { startedAt: epoch + 6_000, statusChangedAt: epoch + 35_000 },
 		});
-		expectSaved(harness, await harness.callAt(epoch + 35_000, { done_ids: ["t1"] }), final, 4);
+		expectSaved(harness, await harness.callAt(epoch + 35_000, { done_id: "t1" }), final, 4);
 	});
 
 	test("a transition leaves the time spent waiting on the user in ask out of elapsed time", async () => {
@@ -596,7 +592,7 @@ describe("atomic batch timing through the authority branch", () => {
 			isError: false,
 			timestamp: epoch + 302_000,
 		});
-		expect((await harness.callAt(epoch + 306_000, { done_ids: ["t1"] })).isError).not.toBe(true);
+		expect((await harness.callAt(epoch + 306_000, { done_id: "t1" })).isError).not.toBe(true);
 		expect(estimateOf(harness.snapshot(), "Implement")).toEqual(time("implement-budget", 10, 7_250));
 	});
 
@@ -664,7 +660,7 @@ describe("atomic batch timing through the authority branch", () => {
 		await expectRejected(harness, () =>
 			harness.callAt(epoch + 6_000, {
 				goal: { title: "Replacement", summary: "New measure", acceptance: "New boundary" },
-				done_ids: ["t1"],
+				done_id: "t1",
 				estimate: [{ id: "missing", minutes: 20 }],
 			}),
 		);
@@ -700,7 +696,7 @@ describe("compact mutation output and clock-time conversion", () => {
 		expect(initText.match(/due by /g)).toHaveLength(1);
 
 		const t1 = t0 + 10 * 60_000;
-		const doneResult = await harness.callAt(t1, { done_ids: ["t1"] });
+		const doneResult = await harness.callAt(t1, { done_id: "t1" });
 		const doneText = resultText(doneResult);
 		expect(doneText).toContain(`Current time: ${formatDateTime(t1)}`);
 		expect(doneText).not.toContain('"Alpha"');
@@ -710,7 +706,7 @@ describe("compact mutation output and clock-time conversion", () => {
 		expect(doneText).not.toContain("Estimate:");
 	});
 
-	test("atomic done_ids + start_id skips an intermediate pending task without falsely starting or pausing it", async () => {
+	test("atomic done_id + start_id skips an intermediate pending task without falsely starting or pausing it", async () => {
 		const harness = fixture();
 		const t0 = epoch;
 		await harness.callAt(t0, {
@@ -722,7 +718,7 @@ describe("compact mutation output and clock-time conversion", () => {
 			],
 		});
 		const t1 = t0 + 4 * 60_000;
-		await harness.callAt(t1, { done_ids: ["t1"], start_id: "t3" });
+		await harness.callAt(t1, { done_id: "t1", start_id: "t3" });
 		expect(itemOf(harness.snapshot(), "A").timestamps).toEqual({ startedAt: t0, completedAt: t1, statusChangedAt: t1 });
 		expect(itemOf(harness.snapshot(), "B").timestamps).toEqual({ statusChangedAt: t0 });
 		expect(itemOf(harness.snapshot(), "C").timestamps).toEqual({ startedAt: t1, statusChangedAt: t1 });

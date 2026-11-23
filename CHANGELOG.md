@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `todo` takes `done_id` (one task ID) instead of `done_ids`: one completion owes at most one commit, and a commit cannot be split across several completions. Close several items with several calls.
+
+### Added
+
+- `todo` commits the work a completion owes again: `{ done_id, commit: { message } }` commits the changes the host's change record attributes to this agent and its subagents, and `commit.paths` commits every change in those git pathspecs resolved from the session directory, both through the host's selective commit on a private index, with one `Model: <provider>/<id>` trailer per model used since the previous todo commit. The commit runs only after the rest of the call validated; a failed commit rejects the call and leaves the item open. `commit` without `done_id`, or on an item that is already completed, is rejected.
+- A `done_id` without `commit` is rejected again while this agent has uncommitted work (or the checkout is dirty in a session without a change record); a subagent working in its parent agent's git worktree completes without committing or that refusal, and the parent commits.
+
 ## [0.2.5] - 2026-11-23
 
 ### Changed

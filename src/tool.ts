@@ -1,12 +1,25 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
 import { type BranchFacts, branchFacts } from "./branch.ts";
 import { commitTodoState, liveState, type TodoSession } from "./commit.ts";
 import { currentTimeLine, formatCompactView, formatFullView, formatOpenView, formatPhaseView } from "./format.ts";
-import { type AddItemParam, hasTodoMutation, parametersSchema, parseTodoParams, type TodoParams } from "./protocol.ts";
+import { type AgentRef, commitCompletion, sharedWorktreeRoot, workState } from "./git.ts";
+import { participatingModels } from "./models.ts";
+import {
+	type AddItemParam,
+	commitClauseOf,
+	hasTodoMutation,
+	parametersSchema,
+	parseTodoParams,
+	type TodoCommitClause,
+	type TodoParams,
+} from "./protocol.ts";
 import { DEFAULT_SETTINGS } from "./settings.ts";
 import {
 	type CommitRecord,
+	commitRecordText,
+	commitScopeText,
 	type Explanation,
 	type GoalState,
 	hostPhases,
@@ -43,7 +56,7 @@ export type TodoChange =
 	| { readonly op: "start"; readonly id: string; readonly title: string }
 	| { readonly op: "explain"; readonly id: string; readonly title: string; readonly explanation: string }
 	| { readonly op: "estimate"; readonly id: string; readonly title: string; readonly estimatedMinutes: number }
-	| { readonly op: "done"; readonly id: string; readonly title: string }
+	| { readonly op: "done"; readonly id: string; readonly title: string; readonly commit?: TodoCommitClause }
 	| { readonly op: "drop"; readonly id: string; readonly title: string };
 
 type WorkItem = {
@@ -237,6 +250,7 @@ function validateAndApply(
 			readonly operations: Op[];
 			readonly changes: TodoChange[];
 			readonly explainedTitles: Set<string>;
+			readonly completed: WorkItem | undefined;
 	  } {
 	const errors: string[] = [];
 	const wasEmpty = previous.kind === "empty";
@@ -338,24 +352,27 @@ function validateAndApply(
 		}
 	}
 
-	const doneSet = new Set(params.done_ids ?? []);
 	const dropSet = new Set(params.drop_ids ?? []);
 
-	if (params.done_ids !== undefined && params.done_ids.length > 0) {
+	let completed: WorkItem | undefined;
+	if (params.done_id !== undefined) {
 		operations.push("done");
-		for (const id of params.done_ids) {
-			const hit = resolveId(phases, id, errors);
-			if (hit) {
-				hit.item.status = "completed";
-				changes.push({ op: "done", id: hit.item.id, title: hit.item.title });
+		const hit = resolveId(phases, params.done_id, errors);
+		if (hit) {
+			if (hit.item.status !== "completed") completed = hit.item;
+			else if (params.commit !== undefined) {
+				errors.push(`Task "${hit.item.title}" (${params.done_id}) is already completed, so no completion owes this commit`);
 			}
+			hit.item.status = "completed";
+			const commit = params.commit === undefined ? undefined : commitClauseOf(params.commit);
+			changes.push({ op: "done", id: hit.item.id, title: hit.item.title, ...(commit === undefined ? {} : { commit }) });
 		}
 	}
 
 	if (params.drop_ids !== undefined && params.drop_ids.length > 0) {
 		operations.push("drop");
 		for (const id of params.drop_ids) {
-			if (doneSet.has(id)) errors.push(`Task ID "${id}" cannot be in both done_ids and drop_ids`);
+			if (id === params.done_id) errors.push(`Task ID "${id}" cannot be both done_id and in drop_ids`);
 			const hit = resolveId(phases, id, errors);
 			if (hit) {
 				hit.item.status = "abandoned";
@@ -367,7 +384,7 @@ function validateAndApply(
 	if (params.start_id !== undefined) {
 		operations.push("start");
 		const hit = resolveId(phases, params.start_id, errors);
-		if (doneSet.has(params.start_id) || dropSet.has(params.start_id)) {
+		if (params.start_id === params.done_id || dropSet.has(params.start_id)) {
 			errors.push(`Task ID "${params.start_id}" cannot be started and closed in the same call`);
 		}
 		if (hit) {
@@ -391,7 +408,7 @@ function validateAndApply(
 		}
 	}
 
-	return { kind: "ok", state: stateOf(goalState, phases), operations, changes, explainedTitles };
+	return { kind: "ok", state: stateOf(goalState, phases), operations, changes, explainedTitles, completed };
 }
 
 export type TodoPreview = { kind: "state"; state: TodoMoreState } | { kind: "rejected" };
@@ -440,10 +457,94 @@ function viewTodo(session: TodoSession, state: TodoMoreState, waits: BranchFacts
 	return result(session, state, formatPhaseView(phase, now, waits, itemDisplayIds(state.phases)), { op: "view" });
 }
 
+export type ParentCwd = () => string | undefined;
+
+const TOP_LEVEL: ParentCwd = () => undefined;
+const MAIN_AGENT: AgentRef = { id: MAIN_AGENT_ID, parentId: undefined };
+
+type CompletionStep = { readonly kind: "ok"; readonly note?: string } | { readonly kind: "refused"; readonly message: string };
+
+const INERT_NOTES = {
+	"no-repository": "No git repository here: the commit committed nothing.",
+	clean: "Nothing to commit: the working tree is clean, so the commit committed nothing.",
+	foreign: "Nothing to commit: none of the uncommitted changes are this agent's, so the commit committed nothing.",
+} as const;
+
+async function completeWithCommit(
+	session: TodoSession,
+	clause: TodoCommitClause | undefined,
+	completed: WorkItem,
+	parentCwd: ParentCwd,
+	agent: AgentRef,
+): Promise<CompletionStep> {
+	const cwd = session.sessionManager.getCwd();
+	const artifactsDir = session.sessionManager.getArtifactsDir();
+	const parent = parentCwd();
+	const shared = parent === undefined ? null : sharedWorktreeRoot(cwd, parent);
+	if (shared !== null) {
+		return {
+			kind: "ok",
+			note: `Shared worktree with the parent agent (${shared}): this completion committed nothing; the parent agent integrates and commits these changes.`,
+		};
+	}
+	const named = `Task ${JSON.stringify(completed.title)} (${completed.id})`;
+	if (clause === undefined) {
+		const state = await workState(cwd, artifactsDir, agent);
+		switch (state.kind) {
+			case "failed":
+				return { kind: "refused", message: state.message };
+			case "no-repository":
+			case "clean":
+			case "foreign":
+				return { kind: "ok" };
+			case "own":
+				return {
+					kind: "refused",
+					message: `${named} would leave this agent's uncommitted work in ${state.root}: call todo again with commit ({ message }) to commit this agent's changes, or with commit.paths to commit a scope.`,
+				};
+			case "unattributed":
+				return {
+					kind: "refused",
+					message: `${named} would leave uncommitted work in ${state.root}, and this session keeps no change record to tell whose it is: call todo again with commit ({ message, paths }) to commit named paths.`,
+				};
+			default: {
+				const unreachable: never = state;
+				throw new Error(`Unexpected work state: ${String(unreachable)}`);
+			}
+		}
+	}
+	const outcome = await commitCompletion(
+		cwd,
+		artifactsDir,
+		agent,
+		clause.scope,
+		clause.message,
+		participatingModels(branchFacts(session.sessionManager), session.model),
+	);
+	switch (outcome.kind) {
+		case "committed":
+			completed.commit = outcome.commit;
+			return {
+				kind: "ok",
+				note: `Committed ${commitRecordText(outcome.commit)} (${commitScopeText(outcome.commit.scope)}) in ${outcome.root}.`,
+			};
+		case "inert":
+			return { kind: "ok", note: INERT_NOTES[outcome.because] };
+		case "failed":
+			return { kind: "refused", message: outcome.message };
+		default: {
+			const unreachable: never = outcome;
+			throw new Error(`Unexpected commit outcome: ${String(unreachable)}`);
+		}
+	}
+}
+
 export async function runTodo(
 	session: TodoSession,
 	raw: unknown,
 	leafMaxMinutes: number = DEFAULT_SETTINGS.leafMaxMinutes,
+	parentCwd: ParentCwd = TOP_LEVEL,
+	agent: AgentRef = MAIN_AGENT,
 ): Promise<AgentToolResult<TodoMoreDetails>> {
 	const facts = branchFacts(session.sessionManager);
 	const previous = liveState(session);
@@ -468,10 +569,24 @@ export async function runTodo(
 	}
 	if (previous.kind === "empty") prior.clear();
 	stampTransitions(phases, prior, now);
-	const next = stateOf(applied.state.kind === "list" ? applied.state.goal : { kind: "missing" }, phases);
 	const op: TodoMoreDetails["op"] = applied.operations.length === 1 ? applied.operations[0] : "batch";
+	const notes: string[] = [];
+	if (applied.completed !== undefined) {
+		const clause = parsed.params.commit === undefined ? undefined : commitClauseOf(parsed.params.commit);
+		const step = await completeWithCommit(session, clause, applied.completed, parentCwd, agent);
+		if (step.kind === "refused") {
+			return result(session, previous, formatCompactView(previous, now, waits, { errors: [step.message], readOnly: true }), {
+				op,
+				operations: applied.operations,
+				isError: true,
+			});
+		}
+		if (step.note !== undefined) notes.push(step.note);
+	}
+	const next = stateOf(applied.state.kind === "list" ? applied.state.goal : { kind: "missing" }, phases);
 	commitTodoState(session, next);
 	const summary = formatCompactView(next, now, waits, {
+		notes,
 		...(applied.explainedTitles.size > 0 ? { highlightExplanations: applied.explainedTitles } : {}),
 	});
 	return result(session, next, summary, {
