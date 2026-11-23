@@ -30,8 +30,11 @@ describe("Todo parameter schema", () => {
 		expect(parsed.kind).toBe("ok");
 	});
 
-	test("rejects empty objects and non-object inputs", () => {
-		expect(parseTodoParams({}).kind).toBe("invalid");
+	test("accepts empty objects and view queries for read-only inspection; rejects non-object or combined view+mutation", () => {
+		expect(parseTodoParams({}).kind).toBe("ok");
+		expect(parseTodoParams({ view: "all" }).kind).toBe("ok");
+		expect(parseTodoParams({ view: "current" }).kind).toBe("ok");
+		expect(parseTodoParams({ view: "all", done_ids: ["t1"] }).kind).toBe("invalid");
 		expect(parseTodoParams("not an object").kind).toBe("invalid");
 		expect(parseTodoParams(null).kind).toBe("invalid");
 	});

@@ -6,7 +6,6 @@ import {
 	explanationText,
 	goalLines,
 	itemDisplayIds,
-	phaseSlug,
 	type TodoItem,
 	type TodoMoreState,
 	type TodoPhase,
@@ -207,7 +206,7 @@ export function formatCompactView(
 				? " — earliest phase with open tasks; the in-progress pointer auto-advances to the earliest open task on each completion."
 				: "";
 		lines.push(
-			`${isActivePhase ? "Active phase" : "Phase"} ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (todo://phase/${phaseSlug(phase.name)}, ${closedCount}/${phase.items.length} done)${aheadNote}:`,
+			`${isActivePhase ? "Active phase" : "Phase"} ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (${closedCount}/${phase.items.length} done)${aheadNote}:`,
 		);
 		for (const item of openItems) {
 			const time = itemTimeSummary(item, now, waits, "inline");
@@ -233,7 +232,7 @@ export function formatCompactView(
 	if (omittedClosed) omitted.push("closed items");
 	if (omittedPendingExplanations) omitted.push("pending explanations");
 	if (omitted.length > 0) {
-		lines.push(`Omitted: ${omitted.join(" and ")}. Read todo:// (full list) or todo://phase/<slug> (one phase) to inspect.`);
+		lines.push(`Omitted: ${omitted.join(" and ")}. Call todo({}) or todo({ view: "<phase>" }) to inspect.`);
 	}
 	return lines.join("\n");
 }
@@ -257,9 +256,7 @@ export function formatOpenView(state: TodoMoreState, now: number, waits: readonl
 		const closedCount = phase.items.length - openItems.length;
 		if (closedCount > 0) omittedClosed = true;
 		if (openItems.length === 0) continue;
-		lines.push(
-			`Phase ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (todo://phase/${phaseSlug(phase.name)}, ${closedCount}/${phase.items.length} done):`,
-		);
+		lines.push(`Phase ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (${closedCount}/${phase.items.length} done):`);
 		for (const item of openItems) {
 			lines.push(...renderDetailedItem(item, ids.get(item), now, waits, "  "));
 		}
@@ -267,7 +264,7 @@ export function formatOpenView(state: TodoMoreState, now: number, waits: readonl
 
 	lines.push(...defectLines(state, ids));
 	if (omittedClosed) {
-		lines.push("Closed items omitted. Read todo:// or todo://phase/<slug> to inspect completed/abandoned items.");
+		lines.push('Closed items omitted. Call todo({}) or todo({ view: "<phase>" }) to inspect completed/abandoned items.');
 	}
 	return lines.join("\n");
 }
@@ -290,9 +287,7 @@ export function formatFullView(
 	lines.push(overallLine(phases));
 	for (const [index, phase] of phases.entries()) {
 		const closedCount = phase.items.filter((item) => isClosed(item.status)).length;
-		lines.push(
-			`Phase ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (todo://phase/${phaseSlug(phase.name)}, ${closedCount}/${phase.items.length} done):`,
-		);
+		lines.push(`Phase ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (${closedCount}/${phase.items.length} done):`);
 		for (const item of phase.items) {
 			lines.push(...renderDetailedItem(item, ids.get(item), now, waits, "  "));
 		}
@@ -307,7 +302,7 @@ export function formatPhaseView(phase: TodoPhase, now: number, waits: readonly A
 	const openCount = phase.items.length - closedCount;
 	const lines: string[] = [
 		currentTimeLine(now),
-		`Phase ${JSON.stringify(phase.name)} (todo://phase/${phaseSlug(phase.name)}, ${closedCount}/${phase.items.length} done, ${openCount} open):`,
+		`Phase ${JSON.stringify(phase.name)} (${closedCount}/${phase.items.length} done, ${openCount} open):`,
 	];
 	for (const item of phase.items) {
 		lines.push(...renderDetailedItem(item, resolvedIds.get(item), now, waits, "  "));

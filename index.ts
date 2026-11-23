@@ -1,12 +1,10 @@
 import type { AgentTool, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession, ExtensionAPI, ExtensionContext, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
-import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import type { ToolRenderer } from "@oh-my-pi/pi-tui/tools/renderer";
 import { logger } from "@oh-my-pi/pi-utils";
 import { canonicalToolOrder } from "./omomp-shared/active-tools.ts";
 import { tr } from "./omomp-shared/i18n.ts";
-import { registerInternalScheme } from "./omomp-shared/internal-url.ts";
 import { errorText } from "./src/errors.ts";
 import { describeTodoCall, describeTodoResult } from "./src/native.ts";
 import { registerOvertime } from "./src/overtime.ts";
@@ -17,7 +15,6 @@ import { registerReviewApi } from "./src/review-api.ts";
 import { sessionOf } from "./src/session.ts";
 import { readSettings } from "./src/settings.ts";
 import { initializeTernPlugin } from "./src/tern-plugin-install.ts";
-import { todoScheme } from "./src/todo-scheme.ts";
 import { DESCRIPTION, parametersSchema, runTodo, type TodoMoreDetails } from "./src/tool.ts";
 import { registerUi } from "./src/ui.ts";
 
@@ -97,28 +94,7 @@ export const TODO_TOOL_DEFINITION = {
 	},
 } satisfies ToolDefinition<typeof parametersSchema, TodoMoreDetails>;
 
-function registerScheme(pi: ExtensionAPI): void {
-	const result = registerInternalScheme(InternalUrlRouter.instance(), "omp-todo-more", todoScheme);
-	switch (result.kind) {
-		case "registered":
-			return;
-		case "builtin":
-		case "held":
-			pi.logger.warn(`omp-todo-more: ${result.reason}`);
-			return;
-		default: {
-			const unreachable: never = result;
-			throw new Error(`Unhandled register result ${String(unreachable)}`);
-		}
-	}
-}
-
 export default async function todoMore(pi: ExtensionAPI): Promise<void> {
-	try {
-		registerScheme(pi);
-	} catch (error) {
-		pi.logger.warn("omp-todo-more: todo:// registration failed", { error: errorText(error) });
-	}
 	pi.registerTool(TODO_TOOL_DEFINITION);
 
 	pi.on("before_agent_start", (_event, ctx) => {

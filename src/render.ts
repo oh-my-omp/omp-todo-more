@@ -9,7 +9,7 @@ import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { tr } from "../omomp-shared/i18n.ts";
 import { previewTodoArgs, type TodoPreview } from "./protocol.ts";
 import { commitScopeSchema, persistedStatusSchema, type TodoMoreSnapshot, todoGoalSchema, todoMoreSnapshotSchema } from "./state.ts";
-import { OPS, type Op, RESULT_OPS } from "./tool.ts";
+import { OPS, type Op } from "./tool.ts";
 
 const itemParamSchema = z.object({
 	id: z.string().optional(),
@@ -25,7 +25,7 @@ type HistoricalOp = (typeof HISTORICAL_OPS)[number];
 type LegacyOp = (typeof LEGACY_OPS)[number];
 type StoredOp = Op | HistoricalOp;
 const ALL_STORED_OPS = [...OPS, ...HISTORICAL_OPS] as const;
-const ALL_RESULT_OPS = [...RESULT_OPS, ...HISTORICAL_OPS, "update"] as const;
+const ALL_RESULT_OPS = [...OPS, "batch", ...HISTORICAL_OPS, "update"] as const;
 const isLegacyOp = (op: string): op is LegacyOp => (LEGACY_OPS as readonly string[]).includes(op);
 const currentOp = (op: StoredOp | LegacyOp): op is StoredOp => !isLegacyOp(op);
 
@@ -127,7 +127,9 @@ export function callPreviewLines(call: Call): string[] {
 	}
 	if (call.done_ids.length > 0) lines.push(`done_ids: ${call.done_ids.join(", ")}`);
 	if (call.drop_ids.length > 0) lines.push(`drop_ids: ${call.drop_ids.join(", ")}`);
-	if (previewOperationCount(call) === 0) lines.push(tr("Waiting for todo arguments.", "等待待办参数。"));
+	if (previewOperationCount(call) === 0) {
+		lines.push(call.complete ? `view (${call.view ?? "all"})` : tr("Waiting for todo arguments.", "等待待办参数。"));
+	}
 	if (call.error !== undefined) lines.push(`${tr("Invalid preview", "预览无效")}: ${call.error}`);
 	lines.push(
 		call.complete

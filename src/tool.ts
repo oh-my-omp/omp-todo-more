@@ -2,8 +2,8 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
 import { type BranchFacts, branchFacts } from "./branch.ts";
 import { commitTodoState, liveState, type TodoSession } from "./commit.ts";
-import { currentTimeLine, formatCompactView } from "./format.ts";
-import { type AddItemParam, parametersSchema, parseTodoParams, type TodoParams } from "./protocol.ts";
+import { currentTimeLine, formatCompactView, formatFullView, formatOpenView, formatPhaseView } from "./format.ts";
+import { type AddItemParam, hasTodoMutation, parametersSchema, parseTodoParams, type TodoParams } from "./protocol.ts";
 import { DEFAULT_SETTINGS } from "./settings.ts";
 import {
 	type CommitRecord,
@@ -13,6 +13,7 @@ import {
 	type ItemTime,
 	type ItemTimestamps,
 	itemDisplayIds,
+	phaseSlug,
 	stateOf,
 	TODO_MORE_RESULT_MARK,
 	type TodoGoal,
@@ -25,11 +26,11 @@ import {
 } from "./state.ts";
 
 export const DESCRIPTION =
-	"Manage phased todos with goal, time budgets (<=60m/item), and status. Use for work changes (not Q&A). Read todo:// or todo://phase/<slug> to inspect.";
+	"Manage phased todos with goal, time budgets (<=60m/item), and status. Use for work changes (not Q&A). Call todo({}) or todo({ view }) to inspect.";
 
 export const OPS = ["init", "goal", "add", "start", "explain", "estimate", "done", "drop"] as const;
 export type Op = (typeof OPS)[number];
-export const RESULT_OPS = [...OPS, "batch"] as const;
+export const RESULT_OPS = [...OPS, "batch", "view"] as const;
 export { parametersSchema };
 
 export type TodoChange =
@@ -403,6 +404,7 @@ export function previewTodo(
 ): TodoPreview {
 	const parsed = parseTodoParams(raw);
 	if (parsed.kind === "invalid") return { kind: "rejected" };
+	if (!hasTodoMutation(parsed.params)) return { kind: "state", state: previous };
 	const { phases, allocateId } = working(previous);
 	const prior = priorItems(phases);
 	const rules: BudgetRules = { leafMaxMinutes, overtimeWarned: facts.overtimeWarned };
@@ -412,6 +414,30 @@ export function previewTodo(
 	if (previous.kind === "empty") prior.clear();
 	stampTransitions(phases, prior, now);
 	return { kind: "state", state: stateOf(applied.state.kind === "list" ? applied.state.goal : { kind: "missing" }, phases) };
+}
+
+function viewTodo(session: TodoSession, state: TodoMoreState, waits: BranchFacts["waits"], rawView: string | undefined, now: number) {
+	const view = rawView?.trim();
+	if (view === undefined || view.toLowerCase() === "all") {
+		return result(session, state, formatFullView(state, now, waits), { op: "view" });
+	}
+	if (view.toLowerCase() === "current") {
+		return result(session, state, formatOpenView(state, now, waits), { op: "view" });
+	}
+	if (state.kind === "empty") {
+		return result(session, state, `${currentTimeLine(now)}\nTodo list is empty.`, { isError: true });
+	}
+	const targetSlug = phaseSlug(view);
+	const phase = state.phases.find(
+		(candidate) => candidate.name.toLowerCase() === view.toLowerCase() || phaseSlug(candidate.name) === targetSlug,
+	);
+	if (phase === undefined) {
+		const available = state.phases.map((p) => `${JSON.stringify(p.name)} (${phaseSlug(p.name)})`).join(", ");
+		return result(session, state, `${currentTimeLine(now)}\nPhase ${JSON.stringify(view)} not found. Available: ${available}`, {
+			isError: true,
+		});
+	}
+	return result(session, state, formatPhaseView(phase, now, waits, itemDisplayIds(state.phases)), { op: "view" });
 }
 
 export async function runTodo(
@@ -426,6 +452,9 @@ export async function runTodo(
 	const parsed = parseTodoParams(raw);
 	if (parsed.kind === "invalid") {
 		return result(session, previous, `${currentTimeLine(now)}\n${parsed.message}`, { isError: true });
+	}
+	if (!hasTodoMutation(parsed.params)) {
+		return viewTodo(session, previous, waits, parsed.params.view, now);
 	}
 	const before = working(previous).phases;
 	const prior = priorItems(before);

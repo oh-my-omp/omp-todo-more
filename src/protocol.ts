@@ -34,6 +34,7 @@ export const parametersSchema = z.object({
 	estimate: z.array(estimateParamSchema).min(1).optional().describe("Revise estimates by ID before an overtime warning"),
 	done_ids: z.array(nonEmpty).min(1).optional().describe("Task IDs to mark completed"),
 	drop_ids: z.array(nonEmpty).min(1).optional().describe("Task IDs to mark abandoned"),
+	view: nonEmpty.optional().describe('Inspect without mutating: "all" (default on empty call), "current", or a phase name/slug'),
 });
 
 export type GoalParam = z.infer<typeof goalParamSchema>;
@@ -53,7 +54,7 @@ function formatIssues(error: { issues: readonly { path: readonly PropertyKey[]; 
 		.join("; ");
 }
 
-export function hasTodoOperation(params: TodoParams): boolean {
+export function hasTodoMutation(params: TodoParams): boolean {
 	return (
 		params.goal !== undefined ||
 		params.add !== undefined ||
@@ -65,15 +66,17 @@ export function hasTodoOperation(params: TodoParams): boolean {
 	);
 }
 
+const strictParametersSchema = parametersSchema.strict();
+
 export function parseTodoParams(raw: unknown): ParsedTodoParams {
-	const parsed = parametersSchema.safeParse(raw);
+	const parsed = strictParametersSchema.safeParse(raw);
 	if (!parsed.success) {
 		return { kind: "invalid", message: `Invalid todo arguments: ${formatIssues(parsed.error)}` };
 	}
-	if (!hasTodoOperation(parsed.data)) {
+	if (parsed.data.view !== undefined && hasTodoMutation(parsed.data)) {
 		return {
 			kind: "invalid",
-			message: "Todo call needs at least one operation (goal, add, start_id, explain, estimate, done_ids, or drop_ids)",
+			message: "Cannot combine view with todo updates (call todo({}) or todo({ view }) alone to inspect)",
 		};
 	}
 	return { kind: "ok", params: parsed.data };
@@ -87,6 +90,7 @@ export type TodoPreview = {
 	estimate: { id?: string; minutes?: number }[];
 	done_ids: string[];
 	drop_ids: string[];
+	view?: string;
 	complete: boolean;
 	error?: string;
 };
@@ -122,6 +126,7 @@ const partialParamsSchema = z.object({
 	estimate: z.array(partialEstimateSchema).optional(),
 	done_ids: z.array(z.string()).optional(),
 	drop_ids: z.array(z.string()).optional(),
+	view: z.string().optional(),
 });
 
 export function previewTodoArgs(raw: unknown): TodoPreview {
@@ -149,7 +154,8 @@ export function previewTodoArgs(raw: unknown): TodoPreview {
 		estimate: partial.data.estimate ?? [],
 		done_ids: partial.data.done_ids ?? [],
 		drop_ids: partial.data.drop_ids ?? [],
+		...(partial.data.view === undefined ? {} : { view: partial.data.view }),
 		complete: parsed.kind === "ok",
-		...(parsed.kind === "invalid" && Object.keys(raw).length > 0 ? { error: parsed.message } : {}),
+		...(parsed.kind === "invalid" ? { error: parsed.message } : {}),
 	};
 }

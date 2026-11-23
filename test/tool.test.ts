@@ -344,12 +344,13 @@ describe("atomic structured todo execution", () => {
 		expect(harness.snapshot().goal).toEqual(goal);
 	});
 
-	test("rejects old DSL input shape and empty argument object", async () => {
+	test("rejects old DSL input shape and allows empty argument object as view", async () => {
 		const harness = fixture();
 		const dsl = await expectRejected(harness, () => harness.call({ input: "*** Begin Todo\nVIEW\n*** End Todo" }));
-		expect(resultText(dsl)).toContain("at least one operation");
-		const empty = await expectRejected(harness, () => harness.call({}));
-		expect(resultText(empty)).toContain("at least one operation");
+		expect(resultText(dsl)).toContain("Invalid todo arguments");
+		const empty = await harness.call({});
+		expect(empty.isError).toBeUndefined();
+		expect(resultText(empty)).toContain("Todo list is empty.");
 	});
 
 	test("rejects duplicate task titles and conflicting start_id / done_ids / drop_ids", async () => {
@@ -691,7 +692,8 @@ describe("compact mutation output and clock-time conversion", () => {
 		expect(initText).toContain("[t2] [pending]");
 		expect(initText).toContain(`started ${formatClock(t0, t0)}, due by ${formatClock(t0 + 30 * 60_000, t0)}`);
 		expect(initText).toContain("Detailed alpha acceptance criteria");
-		expect(initText).toContain("todo://phase/build");
+		expect(initText).toContain('Active phase 1/2 "Build" (0/2 done)');
+		expect(initText).not.toContain("todo://");
 		expect(initText).not.toContain("Detailed beta acceptance criteria");
 		expect(initText).not.toContain("Detailed gamma acceptance criteria");
 		expect(initText).not.toContain("Estimate:");
@@ -704,9 +706,7 @@ describe("compact mutation output and clock-time conversion", () => {
 		expect(doneText).not.toContain('"Alpha"');
 		expect(doneText).toContain(`started ${formatClock(t1, t1)}, due by ${formatClock(t1 + 20 * 60_000, t1)}`);
 		expect(doneText).toContain("Detailed beta acceptance criteria");
-		expect(doneText).toContain(
-			"Omitted: closed items and pending explanations. Read todo:// (full list) or todo://phase/<slug> (one phase) to inspect.",
-		);
+		expect(doneText).toContain('Omitted: closed items and pending explanations. Call todo({}) or todo({ view: "<phase>" }) to inspect.');
 		expect(doneText).not.toContain("Estimate:");
 	});
 
