@@ -1,9 +1,12 @@
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { branchFacts } from "./branch.ts";
+import type { ModelRef } from "./models.ts";
 import { hostPhases, joinHost, TODO_MORE_NOTES_TYPE, type TodoMoreState, toNotes } from "./state.ts";
 
 export type HostListSession = Pick<AgentSession, "sessionManager" | "setTodoPhases" | "getTodoPhases">;
-export type TodoSession = HostListSession;
+export type TodoSession = HostListSession & {
+	readonly model: ModelRef | undefined;
+};
 
 /**
  * The list as the host holds it right now, with the plugin's notes attached.

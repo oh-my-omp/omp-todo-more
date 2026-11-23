@@ -185,7 +185,7 @@ function midRunNudgeText(todo: string, incompleteCount: number, state: ListState
 			: `\nActive item: ${active.id === undefined ? "" : `[${active.id}] `}${JSON.stringify(active.title)}${activeTime === undefined ? "" : ` (${activeTime})`}`;
 	return `<system-reminder>
 ${currentTimeLine(now)}
-${incompleteCount} todo item${incompleteCount !== 1 ? "s" : ""} still open. If you finished a task since last \`${todo}\` update, mark it done with \`done_ids\` now so progress stays visible; otherwise keep working.
+${incompleteCount} todo item${incompleteCount !== 1 ? "s" : ""} still open. If you finished a task since last \`${todo}\` update, mark it done with \`done_id\` now so progress stays visible; otherwise keep working.
 ${goal}${activeLine}
 </system-reminder>
 `;
@@ -236,7 +236,7 @@ function goalTodoContext(session: AgentSession, state: TodoMoreState, now: numbe
 	return `<todo_context>
 ${currentTimeLine(now)}
 Persisted todos: live progress state for current goal, not old transcript decoration; goal continuations lack visible user nudge → treat as live state.
-Before substantial work: compare next action with todos. If item stale, already finished, or no longer active pointer, call \`${todoToolRef(session)}\` first: pass \`done_ids\`, \`start_id\`, or \`add\`. Do not leave stale in_progress while working on later phases.
+Before substantial work: compare next action with todos. If item stale, already finished, or no longer active pointer, call \`${todoToolRef(session)}\` first: pass \`done_id\`, \`start_id\`, or \`add\`. Do not leave stale in_progress while working on later phases.
 
 Todo list goal:
 ${goal.join("\n")}

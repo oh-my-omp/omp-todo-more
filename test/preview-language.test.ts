@@ -34,7 +34,7 @@ describe("human preview diagnostics", () => {
 	}
 
 	test("valid previews have no diagnostic", () => {
-		const call = parseCall({ done_ids: ["t1"] });
+		const call = parseCall({ done_id: "t1" });
 		expect(call.complete).toBe(true);
 		expect(call.error).toBeUndefined();
 		expect(callPreviewLines(call)).toContain("Arguments complete; awaiting execution.");

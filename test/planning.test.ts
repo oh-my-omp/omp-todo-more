@@ -25,7 +25,7 @@ const multi = {
 		{ phase: "Build", title: "Active task", detail: "Detailed explanation of current in-progress task", minutes: 30 },
 		{ phase: "Build", title: "Pending task", detail: "Detailed explanation of upcoming pending task", minutes: 20 },
 	],
-	done_ids: ["t1"],
+	done_id: "t1",
 };
 
 const registered: { id: string; ref: ReturnType<AgentRegistry["register"]> }[] = [];

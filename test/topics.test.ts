@@ -33,7 +33,7 @@ describe("todo tool metadata & native view inspection", () => {
 				{ phase: "Verify Suite", title: "Run checks", detail: "Verify green", minutes: 15 },
 			],
 		});
-		await runPersisted(session, { done_ids: ["t1"] });
+		await runPersisted(session, { done_id: "t1" });
 
 		const full = await runTodo(session, {});
 		expect(full.isError).toBeUndefined();

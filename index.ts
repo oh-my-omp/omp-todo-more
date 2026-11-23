@@ -1,5 +1,6 @@
 import type { AgentTool, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession, ExtensionAPI, ExtensionContext, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import type { ToolRenderer } from "@oh-my-pi/pi-tui/tools/renderer";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -15,7 +16,7 @@ import { registerReviewApi } from "./src/review-api.ts";
 import { sessionOf } from "./src/session.ts";
 import { readSettings } from "./src/settings.ts";
 import { initializeTernPlugin } from "./src/tern-plugin-install.ts";
-import { DESCRIPTION, parametersSchema, runTodo, type TodoMoreDetails } from "./src/tool.ts";
+import { DESCRIPTION, type ParentCwd, parametersSchema, runTodo, type TodoMoreDetails } from "./src/tool.ts";
 import { registerUi } from "./src/ui.ts";
 
 const TOOL_NAME = "todo";
@@ -37,9 +38,16 @@ const TOOL_FIELDS = {
 
 const ownSession = (ctx: ExtensionContext): AgentSession | undefined => sessionOf(ctx.agent.id);
 
+const parentCwdOf =
+	(ctx: ExtensionContext): ParentCwd =>
+	() => {
+		const parentId = ctx.agent.parentId;
+		return parentId === undefined ? undefined : AgentRegistry.global().get(parentId)?.session?.sessionManager.getCwd();
+	};
+
 async function executeTodo(session: AgentSession, params: unknown, ctx: ExtensionContext) {
 	const settings = await readSettings({ logger }, ctx);
-	return runTodo(session, params, settings.leafMaxMinutes);
+	return runTodo(session, params, settings.leafMaxMinutes, parentCwdOf(ctx), ctx.agent);
 }
 
 async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promise<void> {
