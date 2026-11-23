@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { branchFacts, readTodoMore } from "../src/branch.ts";
 import type { TodoSession } from "../src/commit.ts";
@@ -407,6 +408,27 @@ describe("host list authority", () => {
 		expect(toSnapshot(rebuilt)).toEqual(harness.snapshot());
 		const notesOnly = harness.session.sessionManager.getBranch().filter((entry) => entry.type === "custom");
 		expect(readTodoMore(notesOnly)).toEqual({ kind: "empty" });
+	});
+
+	test("a call through eval, which the host records as user_todo_edit instead of a todo result, rebuilds the same list", async () => {
+		const harness = fixture();
+		const manager = harness.session.sessionManager;
+		const result = await at(epoch, () =>
+			runTodo(harness.session, {
+				goal: goalInput,
+				add: [
+					{ title: "First", detail: "Open the list", minutes: 10 },
+					{ title: "Second", detail: "Follow it", minutes: 20 },
+				],
+			}),
+		);
+		const details = result.details;
+		if (details === undefined) throw new Error("todo returned no details");
+		manager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: details.phases });
+		expect(manager.getBranch().some((entry) => entry.type === "message")).toBe(false);
+		expect(details.more.phases).toHaveLength(1);
+		expect(toSnapshot(readTodoMore(manager.getBranch()))).toEqual(details.more);
+		expect(toSnapshot(branchFacts(manager).state)).toEqual(details.more);
 	});
 });
 

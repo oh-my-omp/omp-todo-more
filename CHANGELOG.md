@@ -15,6 +15,10 @@
 
 - Updated the shared copy of `compact-handoff.ts` to oh-my-omp/shared@db9dde4.
 
+### Fixed
+
+- A todo list written by calling `todo` from eval (`await tool.todo(…)`) now shows in the `/todo-more` panel, the Tern HUD pill and the reminders, and survives resume: omp records such a call as a `user_todo_edit` entry instead of a `todo` result, and the plugin now reads that entry as the host list; before, the panel showed "Todo list is empty." while omp's own Todo HUD listed the items.
+
 ## [0.2.5] - 2026-11-23
 
 ### Changed
