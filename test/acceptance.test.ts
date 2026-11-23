@@ -142,7 +142,7 @@ describe("shell check", () => {
 		const h = await harness(shell("sleep 5"));
 		await h.call({ done_id: "t1" });
 		const controller = new AbortController();
-		setTimeout(() => controller.abort(), 200);
+		controller.abort();
 		const started = Date.now();
 		const refused = await h.call({ done_id: "t2" }, { signal: controller.signal });
 		expect(Date.now() - started).toBeLessThan(4000);
@@ -165,7 +165,7 @@ describe("shell check", () => {
 
 describe("judge check", () => {
 	const check = { kind: "judge", prompt: "The build is green", timeoutMs: 5000 } as const;
-	const target: CheckTarget = { completion: { id: "t2", title: "Verify" }, rule: checkedRule(check), check } as CheckTarget;
+	const target: CheckTarget = { completion: { id: "t2", title: "Verify" }, rule: checkedRule(check), check };
 	const kindOf = (reply: JudgeReply) => judgeVerdict(target, check, reply);
 
 	test("only a parsed pass verdict completes the item", () => {
