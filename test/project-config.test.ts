@@ -107,6 +107,8 @@ describe("project config values", () => {
 
 	const rejected: [string, unknown, string][] = [
 		["malformed JSON", "{ invalid json", "is not valid JSON"],
+		["top-level array", [], "must be an object (was an array)"],
+		["effects array", { effects: [] }, "effects: must be an object (was an array)"],
 		["unknown top-level key", { effect: {} }, "effect"],
 		["unknown effects key", { effects: { editgate: false } }, "effects.editgate"],
 		["unknown tail item key", { tailItems: [{ ...tail, scopes: "all" }] }, "tailItems.0.scopes"],

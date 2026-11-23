@@ -124,6 +124,10 @@ async function loadProjectConfig(file: string): Promise<ProjectConfigState> {
 	} catch (error) {
 		return { kind: "invalid", path: file, reason: `is not valid JSON: ${errorText(error)}` };
 	}
+	if (Array.isArray(json)) return { kind: "invalid", path: file, reason: "must be an object (was an array)" };
+	if (typeof json === "object" && json !== null && "effects" in json && Array.isArray(json.effects)) {
+		return { kind: "invalid", path: file, reason: "effects: must be an object (was an array)" };
+	}
 	const parsed = projectConfigSchema.safeParse(json);
 	if (!parsed.success) return { kind: "invalid", path: file, reason: formatIssues(parsed.error) };
 	const repeated = [...duplicates(parsed.data.tailItems, "id"), ...duplicates(parsed.data.tailItems, "title")];
