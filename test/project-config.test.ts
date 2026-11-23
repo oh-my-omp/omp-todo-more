@@ -170,7 +170,7 @@ describe("todo with an invalid project config", () => {
 		const phasesBefore = session.getTodoPhases();
 
 		for (const raw of [{ done_id: "t1" }, { add: [{ title: "More", detail: "d", minutes: 5 }] }, { drop_ids: ["t1"] }, { goal }]) {
-			const refused = await runTodo(session, raw, undefined, undefined, undefined, project);
+			const refused = await runTodo(session, raw, { project });
 			expect(refused.isError).toBe(true);
 			expect(textOf(refused)).toContain(`Project config ${file} is invalid: is not valid JSON`);
 		}
@@ -181,7 +181,7 @@ describe("todo with an invalid project config", () => {
 		expect(foldBranch(manager.getBranchView()).notes.items.map((item) => item.title)).toEqual(["Build"]);
 
 		for (const raw of [{}, { view: "current" }, { view: "Work" }]) {
-			const view = await runTodo(session, raw, undefined, undefined, undefined, project);
+			const view = await runTodo(session, raw, { project });
 			expect(view.isError).toBeUndefined();
 			expect(textOf(view)).toContain('"Build"');
 			expect(textOf(view)).toContain(`Project config ${file} is invalid`);

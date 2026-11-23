@@ -145,6 +145,10 @@ function adopt(progress: Progress, status: TodoStatus): Progress {
 	}
 }
 
+export type TailRule = { readonly ruleId: string; readonly protected: boolean };
+
+const tailRuleSchema = z.object({ ruleId: z.string().min(1), protected: z.boolean() }).strict();
+
 export type TodoItem = {
 	readonly id: string;
 	readonly title: string;
@@ -152,6 +156,7 @@ export type TodoItem = {
 	readonly estimate: Estimate;
 	readonly progress: Progress;
 	readonly commit: CommitRecord | null;
+	readonly tailRule: TailRule | null;
 };
 
 export function dueAt(item: TodoItem, now: number, waits: readonly AskWait[] = []): number | undefined {
@@ -204,6 +209,7 @@ const itemNoteSchema = z
 		estimate: estimateSchema,
 		progress: progressSchema,
 		commit: commitRecordSchema.nullable(),
+		tailRule: tailRuleSchema.optional(),
 	})
 	.strict();
 type ItemNote = z.infer<typeof itemNoteSchema>;
@@ -359,6 +365,7 @@ export function joinHost(phases: readonly HostTodoPhase[], notes: TodoNotes): To
 				estimate: note?.estimate ?? { kind: "missing" },
 				progress: adopt(note?.progress ?? FRESH, task.status),
 				commit: note?.commit ?? null,
+				tailRule: note?.tailRule ?? null,
 			};
 		}),
 	}));
@@ -378,6 +385,7 @@ export function toNotes(state: TodoNgState): TodoNotes {
 				estimate: item.estimate,
 				progress: item.progress,
 				commit: item.commit,
+				...(item.tailRule === null ? {} : { tailRule: item.tailRule }),
 			})),
 		),
 	};

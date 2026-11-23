@@ -34,6 +34,7 @@ function currentPhases(): readonly TodoPhase[] {
 					estimate: { kind: "estimated", budgetId: "edit-goal-budget", minutes: 3 },
 					progress: { status: "in_progress", startedAt: 1_800_000_000_000, elapsedMs: 12_000, runningSince: 1_800_000_000_000 },
 					commit: null,
+					tailRule: null,
 				},
 				{
 					id: "t2",
@@ -42,6 +43,7 @@ function currentPhases(): readonly TodoPhase[] {
 					estimate: { kind: "estimated", budgetId: "verify-resume-budget", minutes: 4 },
 					progress: { status: "pending", startedAt: null, elapsedMs: 0, pausedAt: null },
 					commit: null,
+					tailRule: null,
 				},
 			],
 		},
@@ -55,6 +57,7 @@ function currentPhases(): readonly TodoPhase[] {
 					estimate: { kind: "estimated", budgetId: "check-runtime-budget", minutes: 6 },
 					progress: { status: "pending", startedAt: null, elapsedMs: 35_000, pausedAt: null },
 					commit: null,
+					tailRule: null,
 				},
 				{
 					id: "t4",
@@ -63,6 +66,7 @@ function currentPhases(): readonly TodoPhase[] {
 					estimate: { kind: "estimated", budgetId: "review-results-budget", minutes: 3 },
 					progress: { status: "completed", startedAt: null, elapsedMs: 90_000, closedAt: null },
 					commit: null,
+					tailRule: null,
 				},
 				{
 					id: "t5",
@@ -71,6 +75,7 @@ function currentPhases(): readonly TodoPhase[] {
 					estimate: { kind: "missing" },
 					progress: { status: "abandoned", startedAt: null, elapsedMs: 0, closedAt: null },
 					commit: null,
+					tailRule: null,
 				},
 			],
 		},
@@ -99,6 +104,7 @@ describe("applyTodoEdit", () => {
 			estimate: { kind: "estimated", budgetId: "running-resume-budget", minutes: 2 },
 			progress: { status: "in_progress", startedAt: 1_800_000_060_000, elapsedMs: 20_000, runningSince: 1_800_000_060_000 },
 			commit: null,
+			tailRule: null,
 		};
 		const state = stateOf({ kind: "set", goal }, [
 			...currentPhases(),

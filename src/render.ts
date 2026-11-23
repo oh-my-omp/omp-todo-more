@@ -7,9 +7,10 @@ import { renderStatusLine } from "@oh-my-pi/pi-tui/render/status-line";
 import { isClosedTodo, phaseRomanNumeral, selectCollapsedTodos } from "@oh-my-pi/pi-tui/tools/todo";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { tr } from "../omomp-shared/i18n.ts";
+import { OPS } from "./kernel.ts";
 import { previewTodoArgs, type TodoCallPreview } from "./protocol.ts";
 import { type SnapshotItem, TODO_STATUSES, type TodoNgSnapshot, todoNgSnapshotSchema } from "./state.ts";
-import { OPS, RESULT_OPS } from "./tool.ts";
+import { RESULT_OPS } from "./tool.ts";
 
 const changeSchema = z.union([
 	z.object({ op: z.literal("goal") }),

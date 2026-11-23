@@ -122,9 +122,14 @@ function indentMultiline(prefix: string, text: string): string {
 	return `${prefix}${text.replaceAll("\n", `\n${continuation}`)}`;
 }
 
+function tailMark(item: TodoItem): string | undefined {
+	if (item.tailRule === null) return undefined;
+	return `project rule ${JSON.stringify(item.tailRule.ruleId)}${item.tailRule.protected ? ", protected" : ""}`;
+}
+
 function renderDetailedItem(item: TodoItem, now: number, waits: readonly AskWait[], indent: string): string[] {
-	const time = itemTimeSummary(item, now, waits, "full");
-	const suffix = time === undefined ? "" : ` (${time})`;
+	const marks = [itemTimeSummary(item, now, waits, "full"), tailMark(item)].filter((mark) => mark !== undefined);
+	const suffix = marks.length === 0 ? "" : ` (${marks.join("; ")})`;
 	const lines = [`${indent}- [${item.id}] [${item.progress.status}] ${JSON.stringify(item.title)}${suffix}`];
 	lines.push(indentMultiline(`${indent}  Explanation: `, explanationText(item)));
 	if (item.commit !== null) {
@@ -186,6 +191,8 @@ export function formatCompactView(
 			const flags: string[] = [];
 			if (time !== undefined) flags.push(time);
 			if (item.progress.status === "pending" && item.explanation.kind === "missing") flags.push("missing explanation");
+			const tail = tailMark(item);
+			if (tail !== undefined) flags.push(tail);
 			const suffix = flags.length > 0 ? ` (${flags.join("; ")})` : "";
 			lines.push(`  - [${item.id}] [${item.progress.status}] ${JSON.stringify(item.title)}${suffix}`);
 			if (item.progress.status === "in_progress" || options.highlightExplanations?.has(item.id)) {
