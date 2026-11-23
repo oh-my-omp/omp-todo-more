@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-24
+
 ### Changed
 
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@e84938e.
