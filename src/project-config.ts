@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "@oh-my-pi/omptype/zod";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -110,10 +111,10 @@ export function projectConfigPath(cwd: string): string {
 const isAbsent = (error: unknown): boolean =>
 	error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
 
-async function loadProjectConfig(file: string): Promise<ProjectConfigState> {
+function loadProjectConfig(file: string): ProjectConfigState {
 	let text: string;
 	try {
-		text = await Bun.file(file).text();
+		text = readFileSync(file, "utf8");
 	} catch (error) {
 		if (isAbsent(error)) return DEFAULT_PROJECT;
 		return { kind: "invalid", path: file, reason: `cannot be read: ${errorText(error)}` };
@@ -135,8 +136,8 @@ async function loadProjectConfig(file: string): Promise<ProjectConfigState> {
 	return { kind: "ok", config: parsed.data };
 }
 
-export async function readProjectConfig(logger: Pick<ExtensionAPI["logger"], "warn">, cwd: string): Promise<ProjectConfigState> {
-	const state = await loadProjectConfig(projectConfigPath(cwd));
+export function readProjectConfig(logger: Pick<ExtensionAPI["logger"], "warn">, cwd: string): ProjectConfigState {
+	const state = loadProjectConfig(projectConfigPath(cwd));
 	if (state.kind === "invalid") logger.warn("todo-ng project config is invalid", { path: state.path, reason: state.reason });
 	return state;
 }

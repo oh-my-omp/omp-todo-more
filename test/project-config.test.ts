@@ -43,7 +43,7 @@ describe("project config location", () => {
 		await Bun.$`git -C ${root} init -q`.quiet();
 		await mkdir(join(root, "pkg", "deep"), { recursive: true });
 		await writeConfig(root, { effects: { commit: false } });
-		const state = await readProjectConfig(logger, join(root, "pkg", "deep"));
+		const state = readProjectConfig(logger, join(root, "pkg", "deep"));
 		expect(state).toEqual({
 			kind: "ok",
 			config: { ...DEFAULT_PROJECT_CONFIG, effects: { ...DEFAULT_PROJECT_CONFIG.effects, commit: false } },
@@ -55,8 +55,8 @@ describe("project config location", () => {
 		await writeConfig(parent, "{ broken");
 		const child = join(parent, "child");
 		await mkdir(child);
-		expect(await readProjectConfig(logger, child)).toEqual({ kind: "ok", config: DEFAULT_PROJECT_CONFIG });
-		expect(invalidOf(await readProjectConfig(logger, parent)).path).toBe(join(parent, ".omp", "todo-ng.json"));
+		expect(readProjectConfig(logger, child)).toEqual({ kind: "ok", config: DEFAULT_PROJECT_CONFIG });
+		expect(invalidOf(readProjectConfig(logger, parent)).path).toBe(join(parent, ".omp", "todo-ng.json"));
 	});
 });
 
@@ -69,7 +69,7 @@ describe("project config values", () => {
 				{ id: "review", title: "Review the diff", detail: "no debug code", minutes: 1440, check: { kind: "judge", prompt: "p" } },
 			],
 		});
-		expect(await readProjectConfig(logger, root)).toEqual({
+		expect(readProjectConfig(logger, root)).toEqual({
 			kind: "ok",
 			config: {
 				effects: { editGate: true, commit: true, overtime: true, cutOff: true },
@@ -100,9 +100,9 @@ describe("project config values", () => {
 	test("an edited file is read on the next call", async () => {
 		const root = await scratch("todo-ng-config-reread-");
 		await writeConfig(root, { effects: { overtime: false } });
-		expect((await readProjectConfig(logger, root)).kind).toBe("ok");
+		expect(readProjectConfig(logger, root).kind).toBe("ok");
 		await writeConfig(root, { effects: { overtime: "no" } });
-		expect(invalidOf(await readProjectConfig(logger, root)).reason).toContain("effects.overtime");
+		expect(invalidOf(readProjectConfig(logger, root)).reason).toContain("effects.overtime");
 	});
 
 	const rejected: [string, unknown, string][] = [
@@ -137,7 +137,7 @@ describe("project config values", () => {
 			const root = await scratch("todo-ng-config-bad-");
 			const file = await writeConfig(root, body);
 			warnings.length = 0;
-			const state = invalidOf(await readProjectConfig(logger, root));
+			const state = invalidOf(readProjectConfig(logger, root));
 			expect(state.path).toBe(file);
 			expect(state.reason).toContain(reason);
 			expect(warnings).toEqual(["todo-ng project config is invalid"]);
@@ -148,7 +148,7 @@ describe("project config values", () => {
 		const root = await scratch("todo-ng-config-unreadable-");
 		const file = await writeConfig(root, {});
 		await chmod(file, 0o000);
-		expect(invalidOf(await readProjectConfig(logger, root)).reason).toContain("cannot be read");
+		expect(invalidOf(readProjectConfig(logger, root)).reason).toContain("cannot be read");
 	});
 });
 
@@ -163,7 +163,7 @@ describe("todo with an invalid project config", () => {
 		const ok = await runTodo(session, { goal, add: [{ phase: "Work", title: "Build", detail: "d", minutes: 5 }] });
 		expect(ok.isError).toBeUndefined();
 		const file = await writeConfig(root, "{ invalid json");
-		const project = await readProjectConfig(logger, root);
+		const project = readProjectConfig(logger, root);
 		const notesBefore = manager
 			.getBranchView()
 			.filter((entry) => entry.type === "custom" && entry.customType === TODO_NG_NOTES_TYPE).length;

@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { AgentSession, type ExtensionAPI, type ExtensionContext, type ExtensionEvent, Settings } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -70,7 +73,7 @@ describe("the continuation reminder reads the live host list", () => {
 	});
 });
 
-describe("cut-off reminder compaction barrier", () => {
+describe("cut-off reminder", () => {
 	const registered: { id: string; ref: ReturnType<AgentRegistry["register"]> }[] = [];
 
 	afterEach(() => {
@@ -78,7 +81,7 @@ describe("cut-off reminder compaction barrier", () => {
 		for (const { id, ref } of registered.splice(0)) AgentRegistry.global().unregister(id, ref);
 	});
 
-	test("defers cut-off reminder sendMessage while compaction is active and flushes after release", async () => {
+	async function cutOff(cwd: string) {
 		const now = Date.parse("2026-11-22T01:00:00.000Z");
 		setSystemTime(now);
 		const manager = SessionManager.inMemory("/tmp/todo-ng-cutoff-barrier");
@@ -105,6 +108,7 @@ describe("cut-off reminder compaction barrier", () => {
 
 		const handlers = new Map<string, ((event: ExtensionEvent, ctx: ExtensionContext) => unknown)[]>();
 		const sent: unknown[] = [];
+		const warnings: string[] = [];
 		const timers = new Map<Timer, () => void>();
 		let nextTimer = 0;
 
@@ -118,12 +122,13 @@ describe("cut-off reminder compaction barrier", () => {
 			sendMessage: (msg: unknown) => {
 				sent.push(msg);
 			},
-			logger: { warn: () => {} },
+			logger: { warn: (message: string) => warnings.push(message) },
 		} as unknown as ExtensionAPI;
 
 		registerReminders(pi);
 
 		const ctx = {
+			cwd,
 			agent: { id: agentId, kind: "main" },
 			sessionManager: manager,
 			hasUI: false,
@@ -149,6 +154,18 @@ describe("cut-off reminder compaction barrier", () => {
 				ctx,
 			);
 		}
+		return { manager, timers, sent, warnings };
+	}
+
+	function projectDir(config: string): string {
+		const dir = mkdtempSync(join(tmpdir(), "todo-ng-cutoff-"));
+		mkdirSync(join(dir, ".omp"));
+		writeFileSync(join(dir, ".omp", "todo-ng.json"), config);
+		return dir;
+	}
+
+	test("defers cut-off reminder sendMessage while compaction is active and flushes after release", async () => {
+		const { manager, timers, sent } = await cutOff("/tmp/todo-ng-cutoff-barrier");
 		expect(timers.size).toBe(1);
 		const fireTimer = [...timers.values()][0]!;
 		timers.clear();
@@ -159,5 +176,17 @@ describe("cut-off reminder compaction barrier", () => {
 
 		expect(releaseCompactionBarrier(manager)).toBe(1);
 		expect(sent).toHaveLength(1);
+	});
+
+	test("effects.cutOff false in the project config arms no continuation after a server error", async () => {
+		const { timers, sent } = await cutOff(projectDir(JSON.stringify({ effects: { cutOff: false } })));
+		expect(timers.size).toBe(0);
+		expect(sent).toHaveLength(0);
+	});
+
+	test("an invalid project config is logged and arms no continuation", async () => {
+		const { timers, warnings } = await cutOff(projectDir(JSON.stringify({ effects: { cutoff: false } })));
+		expect(timers.size).toBe(0);
+		expect(warnings).toContain("todo-ng project config is invalid");
 	});
 });

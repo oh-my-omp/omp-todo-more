@@ -5,7 +5,7 @@ import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { currentTimeLine, formatCompactView, formatFullView } from "./format.ts";
 import { worktreeScope } from "./git.ts";
-import { readProjectConfig } from "./project-config.ts";
+import { projectConfigProblem, readProjectConfig } from "./project-config.ts";
 import { parentCwdOf, sessionOf } from "./session.ts";
 import { readSettings } from "./settings.ts";
 import { explanationValue, PLANNING_DELIVERY_TYPE, roundOf, semanticStateKey, type TodoNgState } from "./state.ts";
@@ -146,7 +146,8 @@ export function registerPlanning(pi: ExtensionAPI): void {
 				case "todo": {
 					const session = ownSession(ctx);
 					const manager = session.sessionManager;
-					const [settings, project] = await Promise.all([readSettings(pi, ctx), readProjectConfig(pi.logger, ctx.cwd)]);
+					const settings = await readSettings(pi, ctx);
+					const project = readProjectConfig(pi.logger, ctx.cwd);
 					const preview = previewTodo(branchFacts(manager), pending.get(manager) ?? liveState(session), event.input, {
 						leafMaxMinutes: settings.leafMaxMinutes,
 						project,
@@ -156,6 +157,18 @@ export function registerPlanning(pi: ExtensionAPI): void {
 					return undefined;
 				}
 				case "edit": {
+					const project = readProjectConfig(pi.logger, ctx.cwd);
+					switch (project.kind) {
+						case "invalid":
+							return { block: true, reason: `${projectConfigProblem(project)}. Fix the file before retrying edit.` };
+						case "ok":
+							if (!project.config.effects.editGate) return undefined;
+							break;
+						default: {
+							const unreachable: never = project;
+							throw new Error(`Unexpected project config state: ${String(unreachable)}`);
+						}
+					}
 					const session = ownSession(ctx);
 					const reason = noOpenItems(pending.get(session.sessionManager) ?? liveState(session));
 					return reason === undefined ? undefined : { block: true, reason };

@@ -6,6 +6,7 @@ import { branchFacts } from "./branch.ts";
 import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { currentTimeLine, formatClock } from "./format.ts";
+import { readProjectConfig } from "./project-config.ts";
 import { sessionOf } from "./session.ts";
 import { dueAt, elapsedOf, OVERTIME_TYPE } from "./state.ts";
 
@@ -51,6 +52,11 @@ export function registerOvertime(pi: ExtensionAPI): void {
 			return;
 		}
 		try {
+			const project = readProjectConfig(pi.logger, binding.ctx.cwd);
+			if (project.kind === "invalid" || !project.config.effects.overtime) {
+				cancelTimer(binding);
+				return;
+			}
 			const facts = branchFacts(binding.session.sessionManager);
 			for (const budgetId of pending) {
 				if (facts.overtimeWarned.has(budgetId)) pending.delete(budgetId);
