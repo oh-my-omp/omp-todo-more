@@ -38,7 +38,8 @@ const TOOL_FIELDS = {
 const ownSession = (ctx: ExtensionContext): AgentSession | undefined => sessionOf(ctx.agent.id);
 
 async function executeTodo(session: AgentSession, params: unknown, ctx: ExtensionContext, signal: AbortSignal | undefined) {
-	const [settings, project] = await Promise.all([readSettings({ logger }, ctx), readProjectConfig(logger, ctx.cwd)]);
+	const settings = await readSettings({ logger }, ctx);
+	const project = readProjectConfig(logger, ctx.cwd);
 	return runTodo(session, params, {
 		leafMaxMinutes: settings.leafMaxMinutes,
 		parentCwd: parentCwdOf(ctx),
@@ -81,6 +82,8 @@ function guardSubagent(ctx: ExtensionContext): void {
 	guardedSessions.add(session);
 	session.agent.addBeforeModelCallHook(async () => {
 		try {
+			const project = readProjectConfig(logger, ctx.cwd);
+			if (project.kind === "ok" && !project.config.effects.editGate) return;
 			await restoreTodo(session, ctx);
 		} catch (error) {
 			logger.warn("todo-ng could not install todo", { error: errorText(error) });

@@ -14,6 +14,7 @@ import { branchFacts, type FactsAtEntry, foldBranchAt } from "./branch.ts";
 import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { currentTimeLine, itemTimeSummary } from "./format.ts";
+import { readProjectConfig } from "./project-config.ts";
 import { type CutOffWait, cutOffWait, quotaDeadline, quotaNoticeLine } from "./quota-wait.ts";
 import { sessionOf } from "./session.ts";
 import {
@@ -568,7 +569,10 @@ export function registerReminders(pi: ExtensionAPI): void {
 			if (session === undefined) return;
 			const message = cutOffAnswer(event.messages.at(-1));
 			if (message === undefined || latch.kind !== "open") return;
-			if (continuation(session).kind === "remind") armCutOff(ctx, session, message);
+			if (continuation(session).kind !== "remind") return;
+			const project = readProjectConfig(pi.logger, ctx.cwd);
+			if (project.kind === "invalid" || !project.config.effects.cutOff) return;
+			armCutOff(ctx, session, message);
 		} catch (error) {
 			pi.logger.warn("todo-ng cut-off check failed", { error: errorText(error) });
 		}
