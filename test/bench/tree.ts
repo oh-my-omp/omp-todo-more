@@ -228,7 +228,11 @@ async function remindersPath(n: number, reminders: number): Promise<Sample> {
 		if (chunk === 0) appendTodoChange(manager, "Open item");
 		if (chunk < reminders) manager.appendMessage(stopReminder(chunk));
 	}
-	const messages = manager.getBranchView().flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+	const view = manager.getBranchView();
+	const messages = view.flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+	const foldStart = Bun.nanoseconds();
+	foldBranch(view);
+	const foldNs = Bun.nanoseconds() - foldStart;
 	const session = sessionOver(manager);
 	let first: AgentMessage[] | undefined;
 	let calls = 0;
@@ -238,7 +242,9 @@ async function remindersPath(n: number, reminders: number): Promise<Sample> {
 	});
 	const texts = (first ?? []).filter((message, index) => message !== messages[index]).map((message) => JSON.stringify(message));
 	const digest = new Bun.CryptoHasher("sha256").update(texts.join("\n")).digest("hex");
-	reminderDigests.push(`reminders/${reminders} n=${n} messages=${messages.length} rewritten=${texts.length} sha256=${digest}`);
+	reminderDigests.push(
+		`reminders/${reminders} n=${n} messages=${messages.length} one-forward-fold-µs=${us(foldNs)} rewritten=${texts.length} sha256=${digest}`,
+	);
 	return sample;
 }
 
