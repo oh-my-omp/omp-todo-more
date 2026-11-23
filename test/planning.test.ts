@@ -175,9 +175,9 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		expect(await afterTool("bash")).toBeUndefined();
 	});
 
-	test("tells the model at the next prompt that a finished round needs a new todo, once", async () => {
+	test("tells the model at the next prompt that a finished round needs a new todo, once, and keeps the full list after compaction", async () => {
 		setSystemTime(t0);
-		const { prompt, persistPromptMessage, session } = gate();
+		const { prompt, persistPromptMessage, session, manager } = gate();
 		await runPersisted(session, multi);
 		persistPromptMessage(await prompt());
 		await runPersisted(session, { done_id: "t2" });
@@ -187,6 +187,13 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		expect(finished?.message.content).not.toContain("Check that this todo matches");
 		persistPromptMessage(finished);
 		expect(await prompt()).toBeUndefined();
+
+		const keptId = manager.appendMessage({ role: "user", content: "next turn", timestamp: t0 });
+		manager.appendCompaction("Compacted history", "Compacted", keptId, 40_000);
+		const recovered = (await prompt())?.message.content ?? "";
+		expect(recovered).toContain("Detailed explanation of already finished setup task");
+		expect(recovered).toContain("Every item of this todo round is completed or abandoned");
+		expect(recovered).not.toContain("Check that this todo matches");
 	});
 
 	test("atPrompt delivers compact active view when state changed and stays silent when only wall-clock time advances", async () => {
