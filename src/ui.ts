@@ -18,12 +18,12 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { tr } from "../omomp-shared/i18n.ts";
-import { branchFacts } from "./branch.ts";
+import { liveState } from "./commit.ts";
 import { saveTodoEdit, type TodoEdit } from "./edit.ts";
 import { errorText } from "./errors.ts";
-import { describeSnapshot, describeTodoHud } from "./native.ts";
+import { describeSnapshot, describeTodoHud, uiTimeEstimate } from "./native.ts";
 import { sessionOf } from "./session.ts";
-import { type ItemTime, type TodoGoal, type TodoMoreState, type TodoStatus, toSnapshot } from "./state.ts";
+import { type TodoGoal, type TodoMoreState, type TodoStatus, toSnapshot } from "./state.ts";
 
 const FIELDS = ["objective", "measure", "doneWhen"] as const;
 type GoalField = (typeof FIELDS)[number];
@@ -51,12 +51,6 @@ function uiGoalLines(goal: TodoGoal): string[] {
 	];
 }
 
-function uiTimeEstimate(time: ItemTime): string {
-	return time.kind === "estimated"
-		? `${tr("Estimate", "预计")}: ${time.minutes} ${tr("min", "分钟")}`
-		: tr("(no time estimate yet: add one with estimate)", "（尚无时间估计：请使用 estimate 添加）");
-}
-
 function uiStatus(status: TodoStatus): string {
 	switch (status) {
 		case "pending":
@@ -78,7 +72,7 @@ type DraftField = { editor: Editor; field: FormField };
 type Mode =
 	| { kind: "panel"; selected: number }
 	| { kind: "goal"; fields: Record<GoalField, DraftField>; active: GoalField }
-	| { kind: "explanation"; title: string; draft: DraftField };
+	| { kind: "explanation"; id: string; title: string; draft: DraftField };
 export class TodoPanel implements Component {
 	private mode: Mode = { kind: "panel", selected: 0 };
 	private error: string | undefined;
@@ -103,12 +97,12 @@ export class TodoPanel implements Component {
 	}
 
 	private readState(): TodoMoreState {
-		const state = branchFacts(this.session.sessionManager).state;
-		if (this.last !== state) {
+		const state = liveState(this.session);
+		if (this.last === undefined || !Bun.deepEquals(this.last, state)) {
 			this.last = state;
 			this.described = undefined;
 		}
-		return state;
+		return this.last;
 	}
 
 	private makeField(label: string, text: string): DraftField {
@@ -168,24 +162,28 @@ export class TodoPanel implements Component {
 		this.changed();
 	}
 
-	private openExplanation(title: string): void {
+	private openExplanation(id: string): void {
 		const state = this.readState();
 		if (state.kind === "empty") {
 			this.error = tr("Todo list is empty.", "待办列表为空。");
 			this.changed();
 			return;
 		}
-		const item = state.phases.flatMap((phase) => phase.items).find((candidate) => candidate.title === title);
+		const item = state.phases.flatMap((phase) => phase.items).find((candidate) => candidate.id === id);
 		if (!item) {
-			this.error = `${tr("Task", "任务")} "${title}" ${tr("not found", "未找到")}`;
+			this.error = `${tr("Task", "任务")} ${id} ${tr("not found", "未找到")}`;
 			this.changed();
 			return;
 		}
 		this.discardDraft();
 		this.mode = {
 			kind: "explanation",
-			title,
-			draft: this.makeField(`${tr("Explanation", "说明")}: ${title}`, item.explanation.kind === "explained" ? item.explanation.text : ""),
+			id,
+			title: item.title,
+			draft: this.makeField(
+				`${tr("Explanation", "说明")}: ${item.title}`,
+				item.explanation.kind === "explained" ? item.explanation.text : "",
+			),
 		};
 		this.error = undefined;
 		this.changed();
@@ -222,7 +220,7 @@ export class TodoPanel implements Component {
 				};
 				break;
 			case "explanation":
-				edit = { kind: "explain", title: this.mode.title, explanation: this.mode.draft.editor.getExpandedText() };
+				edit = { kind: "explain", id: this.mode.id, explanation: this.mode.draft.editor.getExpandedText() };
 				break;
 			default: {
 				const unreachable: never = this.mode;
@@ -248,9 +246,8 @@ export class TodoPanel implements Component {
 	}
 
 	describe(): NativeNode {
-		this.readState();
+		const state = this.readState();
 		if (this.described) return this.described;
-		const state = this.last ?? this.readState();
 		const body: NativeChild[] = [];
 		let role: string;
 		let head: string;
@@ -260,18 +257,13 @@ export class TodoPanel implements Component {
 				role = "todo-more.panel";
 				head = tr("Todo More", "Todo More");
 				const snapshot = toSnapshot(state);
-				let count = 0;
-				let selectedTitle: string | undefined;
-				for (const phase of snapshot.phases)
-					for (const item of phase.items) {
-						if (++count === this.mode.selected) selectedTitle = item.title;
-					}
-				this.mode.selected = Math.min(this.mode.selected, count + 1);
+				const ids = snapshot.phases.flatMap((phase) => phase.items.map((item) => item.id));
+				const selected = Math.min(this.mode.selected, ids.length + 1);
 				body.push(
-					this.button(tr("Edit goal", "编辑目标"), "todo-more.goal", this.mode.selected === 0),
-					...describeSnapshot(snapshot, true, selectedTitle),
+					this.button(tr("Edit goal", "编辑目标"), "todo-more.goal", selected === 0),
+					...describeSnapshot(snapshot, true, ids[selected - 1]),
 				);
-				actions = [this.button(tr("Close", "关闭"), "close", this.mode.selected === count + 1)];
+				actions = [this.button(tr("Close", "关闭"), "close", selected === ids.length + 1)];
 				break;
 			}
 			case "goal": {
@@ -363,24 +355,22 @@ export class TodoPanel implements Component {
 		}
 		if (this.mode.kind === "panel") {
 			const state = this.readState();
-			const titles = state.kind === "list" ? state.phases.flatMap((phase) => phase.items.map((item) => item.title)) : [];
-			if (matchesKey(data, "tab") || matchesKey(data, "down")) this.mode.selected = (this.mode.selected + 1) % (titles.length + 2);
-			else if (matchesKey(data, "shift+tab") || matchesKey(data, "up"))
-				this.mode.selected = (this.mode.selected + titles.length + 1) % (titles.length + 2);
+			const ids = state.kind === "list" ? state.phases.flatMap((phase) => phase.items.map((item) => item.id)) : [];
+			const selected = Math.min(this.mode.selected, ids.length + 1);
+			if (matchesKey(data, "tab") || matchesKey(data, "down")) this.mode.selected = (selected + 1) % (ids.length + 2);
+			else if (matchesKey(data, "shift+tab") || matchesKey(data, "up")) this.mode.selected = (selected + ids.length + 1) % (ids.length + 2);
 			else if (matchesKey(data, "enter")) {
-				if (this.mode.selected === 0) this.openGoal();
-				else {
-					const title = titles[this.mode.selected - 1];
-					if (title === undefined) this.close();
-					else this.openExplanation(title);
-				}
+				const id = ids[selected - 1];
+				if (selected === 0) this.openGoal();
+				else if (id === undefined) this.close();
+				else this.openExplanation(id);
 			}
 			this.changed();
 			return;
 		}
 		if (this.mode.kind === "goal" && (matchesKey(data, "tab") || matchesKey(data, "shift+tab"))) {
-			const index = FIELDS.indexOf(this.mode.active);
-			this.mode.active = FIELDS[(index + (matchesKey(data, "shift+tab") ? 2 : 1)) % 3]!;
+			const next = FIELDS[(FIELDS.indexOf(this.mode.active) + (matchesKey(data, "shift+tab") ? 2 : 1)) % FIELDS.length];
+			if (next !== undefined) this.mode.active = next;
 			this.changed();
 			return;
 		}
@@ -410,8 +400,8 @@ export class TodoPanel implements Component {
 						lines.push(phase.name);
 						for (const item of phase.items) {
 							lines.push(
-								`${item.title} [${uiStatus(item.status)}]`,
-								uiTimeEstimate(item.time),
+								`${item.title} [${uiStatus(item.progress.status)}]`,
+								uiTimeEstimate(item),
 								item.explanation.kind === "explained" ? item.explanation.text : tr("[explanation missing]", "[缺少说明]"),
 							);
 							labels.push(`${tr("Edit explanation", "编辑说明")}: ${item.title}`);
@@ -419,7 +409,7 @@ export class TodoPanel implements Component {
 					}
 				}
 				labels.push(tr("Close", "关闭"));
-				const selected = this.mode.selected;
+				const selected = Math.min(this.mode.selected, labels.length - 1);
 				lines.push(...labels.map((label, index) => `${index === selected ? ">" : " "} ${label}`));
 				break;
 			}
@@ -502,10 +492,10 @@ export class TodoHud implements Component {
 				this.last = undefined;
 			const expanded = this.disclosure.kind === "open";
 			if (session !== undefined) {
-				const state = branchFacts(session.sessionManager).state;
+				const state = liveState(session);
 				const previous = this.last;
 				const sessionId = session.sessionManager.getSessionId();
-				if (previous !== undefined && previous.sessionId === sessionId && previous.state === state) return previous.node;
+				if (previous !== undefined && previous.sessionId === sessionId && Bun.deepEquals(previous.state, state)) return previous.node;
 				const hud = describeTodoHud(toSnapshot(state), expanded);
 				const derived = hud ?? node("row", { role: "omp.hud.activity", aria: tr("Todo More progress", "Todo More 进度"), hidden: true });
 				this.last = { sessionId, state, node: derived };

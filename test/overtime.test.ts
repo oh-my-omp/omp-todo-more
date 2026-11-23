@@ -4,27 +4,28 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { enterCompactionBarrier, isCompacting, releaseCompactionBarrier } from "../omomp-shared/compact-handoff.ts";
-import { askWaits, readTodoMore } from "../src/branch.ts";
+import { foldBranch } from "../src/branch.ts";
 import { commitTodoState } from "../src/commit.ts";
 import { registerOvertime } from "../src/overtime.ts";
 import {
-	elapsedTime,
-	type ItemTime,
+	elapsedOf,
 	OVERTIME_TYPE,
 	overtimeDetailsSchema,
+	type Progress,
 	stateOf,
 	type TodoItem,
 	type TodoMoreState,
 	type TodoStatus,
-	transitionTime,
+	transition,
 } from "../src/state.ts";
 import { appendStateResult } from "./host.ts";
 
 const epoch = Date.parse("2026-10-15T12:00:00.000Z");
 const title = "Deliver the full task";
-type Estimate = Extract<ItemTime, { kind: "estimated" }>;
 type Warning = Extract<SessionEntry, { type: "custom_message" }>;
 type Handler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
+
+const stateOfManager = (manager: SessionManager): TodoMoreState => foldBranch(manager.getBranch()).state;
 
 function estimatedState(minutes = 1, budgetId = "original-budget", runningSince = epoch, elapsedMs = 0): TodoMoreState {
 	return stateOf({ kind: "set", goal: { objective: "Deliver the task", measure: "Observable behavior", doneWhen: "All criteria hold" } }, [
@@ -32,10 +33,12 @@ function estimatedState(minutes = 1, budgetId = "original-budget", runningSince 
 			name: "Delivery",
 			items: [
 				{
+					id: "t1",
 					title,
 					explanation: { kind: "explained", text: "Implement without reducing scope" },
-					status: "in_progress",
-					time: { kind: "estimated", budgetId, minutes, elapsedMs, runningSince },
+					estimate: { kind: "estimated", budgetId, minutes },
+					progress: { status: "in_progress", startedAt: epoch, elapsedMs, runningSince },
+					commit: null,
 				},
 			],
 		},
@@ -43,17 +46,15 @@ function estimatedState(minutes = 1, budgetId = "original-budget", runningSince 
 }
 
 function itemOf(manager: SessionManager): TodoItem {
-	const state = readTodoMore(manager.getBranch());
+	const state = stateOfManager(manager);
 	if (state.kind !== "list") throw new Error("Expected a task in the authority branch");
 	const item = state.phases.flatMap((phase) => phase.items).find((candidate) => candidate.title === title);
 	if (item === undefined) throw new Error("Expected the original task");
 	return item;
 }
 
-function estimateOf(manager: SessionManager): Estimate {
-	const time = itemOf(manager).time;
-	if (time.kind !== "estimated") throw new Error("Expected the original estimate to survive replay");
-	return time;
+function progressOf(manager: SessionManager): Progress {
+	return itemOf(manager).progress;
 }
 
 function warnings(manager: SessionManager): Warning[] {
@@ -188,24 +189,23 @@ class SchedulerFixture {
 		await Promise.resolve();
 	}
 
-	/** A `todo` call that left `state`: the writes the tool makes, then the result the host persists. */
 	async append(state: TodoMoreState): Promise<void> {
 		commitTodoState(this.session, state);
 		appendStateResult(this.manager, state, this.clock.now);
 		await this.toolEnd("todo");
 	}
 
-	/** A `todo` call that moved the item to `status` at the current time. */
 	async moveTo(status: TodoStatus): Promise<void> {
-		const state = readTodoMore(this.manager.getBranch());
+		const state = stateOfManager(this.manager);
 		if (state.kind !== "list") throw new Error("Expected a list to move");
 		const now = this.clock.now;
+		const waits = foldBranch(this.manager.getBranch()).waits;
 		await this.append(
 			stateOf(
 				state.goal,
 				state.phases.map((phase) => ({
 					...phase,
-					items: phase.items.map((item) => ({ ...item, status, time: transitionTime(item.time, status, now) })),
+					items: phase.items.map((item) => ({ ...item, progress: transition(item.progress, status, now, waits) })),
 				})),
 			),
 		);
@@ -267,7 +267,7 @@ describe("overtime deadline scheduling", () => {
 			expect(warningText).toContain("target completion time of");
 			expect(warningText).not.toContain("estimate 1 min");
 			originalCallback();
-			await fixture.append(readTodoMore(fixture.manager.getBranch()));
+			await fixture.append(stateOfManager(fixture.manager));
 			await fixture.emit({ type: "session_switch", reason: "resume", previousSessionFile: undefined });
 			await fixture.clock.advanceTo(epoch + 180_000);
 			expect(warnings(fixture.manager)).toHaveLength(1);
@@ -284,7 +284,7 @@ describe("overtime deadline scheduling", () => {
 			expect(warnings(fixture.manager)).toEqual([]);
 			expect(fixture.clock.deadlines).toEqual([]);
 			await fixture.askAnswered("ask-1");
-			expect(elapsedTime(estimateOf(fixture.manager), fixture.clock.now, askWaits(fixture.manager.getBranch()))).toBe(20_000);
+			expect(elapsedOf(progressOf(fixture.manager), fixture.clock.now, foldBranch(fixture.manager.getBranch()).waits)).toBe(20_000);
 			expect(fixture.clock.deadlines).toEqual([epoch + 240_000]);
 			await fixture.clock.advanceTo(epoch + 239_999);
 			expect(warnings(fixture.manager)).toEqual([]);
@@ -299,21 +299,21 @@ describe("overtime deadline scheduling", () => {
 			await fixture.clock.advanceTo(epoch + 20_000);
 			const beforePause = fixture.clock.captureNext();
 			await fixture.moveTo("pending");
-			expect(itemOf(fixture.manager).status).toBe("pending");
-			expect(estimateOf(fixture.manager)).toMatchObject({ elapsedMs: 20_000, runningSince: null });
+			expect(itemOf(fixture.manager).progress.status).toBe("pending");
+			expect(progressOf(fixture.manager)).toMatchObject({ elapsedMs: 20_000, pausedAt: epoch + 20_000 });
 			expect(fixture.clock.deadlines).toEqual([]);
 			await fixture.clock.advanceTo(epoch + 100_000);
 			beforePause();
 			expect(warnings(fixture.manager)).toEqual([]);
 			await fixture.moveTo("in_progress");
-			expect(estimateOf(fixture.manager)).toMatchObject({ elapsedMs: 20_000, runningSince: epoch + 100_000 });
+			expect(progressOf(fixture.manager)).toMatchObject({ elapsedMs: 20_000, runningSince: epoch + 100_000 });
 			expect(fixture.clock.deadlines).toEqual([epoch + 140_000]);
 			await fixture.clock.advanceTo(epoch + 139_999);
 			expect(warnings(fixture.manager)).toEqual([]);
 			const beforeCompletion = fixture.clock.captureNext();
 			await fixture.moveTo("completed");
-			expect(itemOf(fixture.manager).status).toBe("completed");
-			expect(elapsedTime(estimateOf(fixture.manager), fixture.clock.now)).toBe(59_999);
+			expect(itemOf(fixture.manager).progress.status).toBe("completed");
+			expect(elapsedOf(progressOf(fixture.manager), fixture.clock.now)).toBe(59_999);
 			expect(fixture.clock.deadlines).toEqual([]);
 			await fixture.clock.advanceTo(epoch + 200_000);
 			beforeCompletion();
@@ -338,9 +338,10 @@ describe("overtime deadline scheduling", () => {
 			await fixture.append(estimatedState(3));
 			const obsoleteCallback = fixture.clock.captureNext();
 			await fixture.clock.advanceTo(epoch + 30_000);
-			const previous = estimateOf(fixture.manager);
+			const previous = itemOf(fixture.manager).progress;
+			if (previous.status !== "in_progress") throw new Error("Expected the original item to be running");
 			await fixture.append(estimatedState(1, "revised-budget", previous.runningSince ?? epoch, previous.elapsedMs));
-			expect(elapsedTime(estimateOf(fixture.manager), fixture.clock.now)).toBe(30_000);
+			expect(elapsedOf(progressOf(fixture.manager), fixture.clock.now)).toBe(30_000);
 			expect(fixture.clock.deadlines).toEqual([epoch + 60_000]);
 			obsoleteCallback();
 			await fixture.clock.advanceTo(epoch + 59_999);
@@ -369,7 +370,7 @@ describe("overtime deadline scheduling", () => {
 	test("an accepted commit schedules the warning", async () => {
 		await withScheduler(async (fixture) => {
 			await fixture.append(estimatedState());
-			expect(itemOf(fixture.manager).status).toBe("in_progress");
+			expect(itemOf(fixture.manager).progress.status).toBe("in_progress");
 			expect(fixture.clock.deadlines).toEqual([epoch + 60_000]);
 			await fixture.clock.advanceTo(epoch + 60_000);
 			expect(warningDetails(fixture.manager)).toMatchObject({ budgetId: "original-budget", elapsedMs: 60_000 });
@@ -413,7 +414,7 @@ describe("overtime deadline scheduling", () => {
 			await fixture.emit({ type: "session_shutdown" });
 			expect(fixture.clock.deadlines).toEqual([]);
 			await fixture.append(estimatedState(1, "after-shutdown-budget"));
-			expect(estimateOf(fixture.manager).budgetId).toBe("after-shutdown-budget");
+			expect(itemOf(fixture.manager).estimate).toEqual({ kind: "estimated", budgetId: "after-shutdown-budget", minutes: 1 });
 			await fixture.clock.advanceTo(epoch + 120_000);
 			staleCallback();
 			expect(warnings(fixture.manager)).toEqual([]);

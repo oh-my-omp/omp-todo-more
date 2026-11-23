@@ -6,69 +6,50 @@ import { commitTodoState, liveState, type TodoSession } from "./commit.ts";
 import { currentTimeLine, formatCompactView, formatFullView, formatOpenView, formatPhaseView } from "./format.ts";
 import { type AgentRef, commitCompletion, sharedWorktreeRoot, workState } from "./git.ts";
 import { participatingModels } from "./models.ts";
-import {
-	type AddItemParam,
-	commitClauseOf,
-	hasTodoMutation,
-	parametersSchema,
-	parseTodoParams,
-	type TodoCommitClause,
-	type TodoParams,
-} from "./protocol.ts";
+import { commitClauseOf, hasTodoMutation, parametersSchema, parseTodoParams, type TodoCommitClause, type TodoParams } from "./protocol.ts";
 import { DEFAULT_SETTINGS } from "./settings.ts";
 import {
+	type AskWait,
 	type CommitRecord,
 	commitRecordText,
 	commitScopeText,
+	type Estimate,
 	type Explanation,
+	FRESH,
 	type GoalState,
 	hostPhases,
-	type ItemTime,
-	type ItemTimestamps,
-	itemDisplayIds,
+	idAllocator,
+	type Progress,
 	phaseSlug,
 	stateOf,
 	TODO_MORE_RESULT_MARK,
 	type TodoGoal,
+	type TodoItem,
 	type TodoMoreSnapshot,
 	type TodoMoreState,
 	type TodoStatus,
 	toSnapshot,
-	transitionTime,
-	transitionTimestamps,
+	transition,
 } from "./state.ts";
 
 export const DESCRIPTION =
-	"Manage phased todos with goal, time budgets (<=60m/item), and status. Use for work changes (not Q&A). Call todo({}) or todo({ view }) to inspect.";
+	"Manage phased todos with goal, per-item time budgets (each at most the leafMaxMinutes setting), and status. Use for work changes (not Q&A). Call todo({}) or todo({ view }) to inspect.";
 
 export const OPS = ["init", "goal", "add", "start", "explain", "estimate", "done", "drop"] as const;
 export type Op = (typeof OPS)[number];
 export const RESULT_OPS = [...OPS, "batch", "view"] as const;
 export { parametersSchema };
 
+export type AddedItem = { readonly id: string; readonly title: string; readonly explanation: string; readonly estimatedMinutes: number };
+
 export type TodoChange =
 	| { readonly op: "goal"; readonly goal: TodoGoal }
-	| {
-			readonly op: "add";
-			readonly phase: string;
-			readonly items: { id: string; title: string; explanation: string; estimatedMinutes: number }[];
-	  }
+	| { readonly op: "add"; readonly phase: string; readonly items: readonly AddedItem[] }
 	| { readonly op: "start"; readonly id: string; readonly title: string }
 	| { readonly op: "explain"; readonly id: string; readonly title: string; readonly explanation: string }
 	| { readonly op: "estimate"; readonly id: string; readonly title: string; readonly estimatedMinutes: number }
-	| { readonly op: "done"; readonly id: string; readonly title: string; readonly commit?: TodoCommitClause }
+	| { readonly op: "done"; readonly id: string; readonly title: string; readonly commit: TodoCommitClause | null }
 	| { readonly op: "drop"; readonly id: string; readonly title: string };
-
-type WorkItem = {
-	id: string;
-	title: string;
-	explanation: Explanation;
-	time: ItemTime;
-	timestamps?: ItemTimestamps;
-	status: TodoStatus;
-	commit?: CommitRecord;
-};
-type WorkPhase = { name: string; items: WorkItem[] };
 
 export type TodoMoreDetails = {
 	op?: (typeof RESULT_OPS)[number];
@@ -81,359 +62,306 @@ export type TodoMoreDetails = {
 	more: TodoMoreSnapshot;
 };
 
-function working(state: TodoMoreState): { phases: WorkPhase[]; allocateId: () => string } {
-	if (state.kind === "empty") {
-		let seq = 0;
-		return { phases: [], allocateId: () => `t${++seq}` };
-	}
-	const ids = itemDisplayIds(state.phases);
-	const used = new Set<string>();
-	let maxNum = 0;
-	const phases: WorkPhase[] = state.phases.map((phase) => ({
-		name: phase.name,
-		items: phase.items.map((item) => {
-			const id = ids.get(item) ?? `t${++maxNum}`;
-			used.add(id);
-			const match = /^t(\d+)$/.exec(id);
-			if (match?.[1] !== undefined) maxNum = Math.max(maxNum, Number(match[1]));
-			return { ...item, id };
-		}),
-	}));
-	const allocateId = (): string => {
-		let candidate: string;
-		do {
-			candidate = `t${++maxNum}`;
-		} while (used.has(candidate));
-		used.add(candidate);
-		return candidate;
-	};
-	return { phases, allocateId };
+type Rules = { readonly leafMaxMinutes: number; readonly overtimeWarned: ReadonlySet<string> };
+
+type Located = { readonly item: TodoItem; readonly phase: string };
+
+function locate(state: TodoMoreState): Map<string, Located> {
+	const byId = new Map<string, Located>();
+	if (state.kind === "list")
+		for (const phase of state.phases) for (const item of phase.items) byId.set(item.id, { item, phase: phase.name });
+	return byId;
 }
 
-function findTaskById(phases: WorkPhase[], id: string): { item: WorkItem; phase: WorkPhase } | undefined {
-	for (const phase of phases) {
-		const item = phase.items.find((candidate) => candidate.id === id);
-		if (item) return { item, phase };
-	}
-	return undefined;
-}
+type Staged = Located & { readonly added: AddedItem };
 
-function findTaskByTitle(phases: WorkPhase[], title: string): { item: WorkItem; phase: WorkPhase } | undefined {
-	for (const phase of phases) {
-		const item = phase.items.find((candidate) => candidate.title === title);
-		if (item) return { item, phase };
-	}
-	return undefined;
+function stageAdds(params: TodoParams, previous: TodoMoreState): Staged[] {
+	const allocate = idAllocator(previous.kind === "list" ? previous.phases.flatMap((phase) => phase.items.map((item) => item.id)) : []);
+	return (params.add ?? []).map((param) => {
+		const id = allocate();
+		return {
+			phase: param.phase?.trim() || "Tasks",
+			item: {
+				id,
+				title: param.title,
+				explanation: { kind: "explained", text: param.detail },
+				estimate: { kind: "estimated", budgetId: crypto.randomUUID(), minutes: param.minutes },
+				progress: FRESH,
+				commit: null,
+			},
+			added: { id, title: param.title, explanation: param.detail, estimatedMinutes: param.minutes },
+		};
+	});
 }
-
-function completionTransitions(previous: WorkPhase[], updated: WorkPhase[]): TodoCompletionTransition[] {
-	const previousStatuses = new Map<string, TodoStatus>();
-	for (const phase of previous) {
-		for (const item of phase.items) previousStatuses.set(`${phase.name}\u0000${item.title}`, item.status);
-	}
-	const transitions: TodoCompletionTransition[] = [];
-	for (const phase of updated) {
-		for (const item of phase.items) {
-			if (item.status !== "completed") continue;
-			const previousStatus = previousStatuses.get(`${phase.name}\u0000${item.title}`);
-			if (previousStatus && previousStatus !== "completed") transitions.push({ phase: phase.name, content: item.title });
-		}
-	}
-	return transitions;
-}
-
-function normalizeInProgress(phases: WorkPhase[]): void {
-	const ordered = phases.flatMap((phase) => phase.items);
-	if (ordered.length === 0) return;
-	const inProgress = ordered.filter((item) => item.status === "in_progress");
-	if (inProgress.length > 1) {
-		for (const item of inProgress.slice(1)) item.status = "pending";
-	}
-	if (inProgress.length > 0) return;
-	const firstPending = ordered.find((item) => item.status === "pending");
-	if (firstPending) firstPending.status = "in_progress";
-}
-
-type BudgetRules = { readonly leafMaxMinutes: number; readonly overtimeWarned: ReadonlySet<string> };
 
 const overCap = (title: string, minutes: number, cap: number): string =>
 	`Task "${title}" estimate ${minutes} min exceeds the ${cap}-minute limit for one item: split the work into several items of at most ${cap} min each`;
 
-function resolveId(phases: WorkPhase[], id: string, errors: string[]): { item: WorkItem; phase: WorkPhase } | undefined {
-	const hit = findTaskById(phases, id);
-	if (!hit) errors.push(`Task ID "${id}" not found`);
-	return hit;
-}
-
-const storageOf = (session: TodoSession): "session" | "memory" => (session.sessionManager.getSessionFile() ? "session" : "memory");
-
-type PriorItem = { readonly status: TodoStatus; readonly runningSince: number | null };
-
-function priorItems(phases: readonly WorkPhase[]): Map<string, PriorItem> {
-	const map = new Map<string, PriorItem>();
-	for (const phase of phases) {
-		for (const item of phase.items) {
-			map.set(`${phase.name}\u0000${item.title}`, {
-				status: item.status,
-				runningSince: item.time.kind === "estimated" ? item.time.runningSince : null,
-			});
-		}
-	}
-	return map;
-}
-
-function stampTransitions(phases: WorkPhase[], prior: ReadonlyMap<string, PriorItem>, now: number): void {
-	for (const phase of phases) {
-		for (const item of phase.items) {
-			const prev = prior.get(`${phase.name}\u0000${item.title}`);
-			const fallbackStartedAt = prev?.status === "in_progress" ? (prev.runningSince ?? undefined) : undefined;
-			const nextTimestamps = transitionTimestamps(prev?.status, item.status, item.timestamps, now, fallbackStartedAt);
-			if (nextTimestamps !== undefined) item.timestamps = nextTimestamps;
-		}
-	}
-}
-
-function result(
-	session: TodoSession,
-	state: TodoMoreState,
-	text: string,
-	extra: {
-		op?: TodoMoreDetails["op"];
-		operations?: Op[];
-		changes?: TodoChange[];
-		completedTasks?: TodoCompletionTransition[];
-		isError?: true;
-	},
-): AgentToolResult<TodoMoreDetails> {
-	const details: TodoMoreDetails = {
-		phases: hostPhases(state),
-		storage: storageOf(session),
-		[TODO_MORE_RESULT_MARK]: true,
-		more: toSnapshot(state),
-	};
-	if (extra.op !== undefined) details.op = extra.op;
-	if (extra.completedTasks !== undefined && extra.completedTasks.length > 0) details.completedTasks = extra.completedTasks;
-	if (extra.operations !== undefined) details.operations = extra.operations;
-	if (extra.changes !== undefined) details.changes = extra.changes;
-	return extra.isError ? { content: [{ type: "text", text }], details, isError: true } : { content: [{ type: "text", text }], details };
-}
-
-function newWorkItem(id: string, item: AddItemParam): WorkItem {
-	return {
-		id,
-		title: item.title,
-		explanation: { kind: "explained", text: item.detail },
-		time: {
-			kind: "estimated",
-			budgetId: crypto.randomUUID(),
-			minutes: item.minutes,
-			elapsedMs: 0,
-			runningSince: null,
-		},
-		status: "pending",
-	};
-}
-
-function validateAndApply(
-	params: TodoParams,
-	previous: TodoMoreState,
-	phases: WorkPhase[],
-	allocateId: () => string,
-	rules: BudgetRules,
-	waits: BranchFacts["waits"],
-	now: number,
-):
-	| { readonly kind: "rejected"; readonly errors: string[] }
-	| {
-			readonly kind: "ok";
-			readonly state: TodoMoreState;
-			readonly operations: Op[];
-			readonly changes: TodoChange[];
-			readonly explainedTitles: Set<string>;
-			readonly completed: WorkItem | undefined;
-	  } {
+function validate(params: TodoParams, previous: TodoMoreState, staged: readonly Staged[], rules: Rules): string[] {
 	const errors: string[] = [];
+	const byId = locate(previous);
+	const resolve = (id: string): Located | undefined => {
+		const hit = byId.get(id);
+		if (hit === undefined) errors.push(`Task ID "${id}" not found`);
+		return hit;
+	};
 	const wasEmpty = previous.kind === "empty";
-	const hasGoal = previous.kind === "list" && previous.goal.kind === "set";
-	if (params.goal === undefined && !hasGoal) {
+	if (params.goal === undefined && (previous.kind === "empty" || previous.goal.kind === "missing")) {
 		errors.push(
 			wasEmpty ? "Todo list is empty: provide goal and add to create it" : "The list has no goal: provide goal before other mutations",
 		);
 	}
-	if (wasEmpty && (params.add === undefined || params.add.length === 0)) {
-		errors.push("Todo list is empty: provide at least one item in add");
+	if (wasEmpty && params.add === undefined) errors.push("Todo list is empty: provide at least one item in add");
+	const titles = new Set([...byId.values()].map(({ item }) => item.title));
+	for (const entry of staged) {
+		const { title, estimatedMinutes } = entry.added;
+		if (titles.has(title)) errors.push(`Task "${title}" already exists`);
+		titles.add(title);
+		byId.set(entry.item.id, entry);
+		if (estimatedMinutes > rules.leafMaxMinutes) errors.push(overCap(title, estimatedMinutes, rules.leafMaxMinutes));
 	}
+	for (const entry of params.explain ?? []) resolve(entry.id);
+	for (const entry of params.estimate ?? []) {
+		const hit = resolve(entry.id);
+		if (entry.minutes > rules.leafMaxMinutes) errors.push(overCap(hit?.item.title ?? entry.id, entry.minutes, rules.leafMaxMinutes));
+		const estimate = hit?.item.estimate;
+		if (
+			hit !== undefined &&
+			estimate?.kind === "estimated" &&
+			estimate.minutes !== entry.minutes &&
+			rules.overtimeWarned.has(estimate.budgetId)
+		) {
+			errors.push(
+				`Task "${hit.item.title}" (${entry.id}) already received an overtime warning, so its ${estimate.minutes}-minute estimate is closed and estimate cannot change it. Find out why it overran, then add the remaining work as new items with add (phase ${JSON.stringify(hit.phase)}), each at most ${rules.leafMaxMinutes} min`,
+			);
+		}
+	}
+	if (params.done_id !== undefined) {
+		const hit = resolve(params.done_id);
+		if (hit?.item.progress.status === "completed" && params.commit !== undefined) {
+			errors.push(`Task "${hit.item.title}" (${params.done_id}) is already completed, so no completion owes this commit`);
+		}
+	}
+	const dropped = new Set(params.drop_ids ?? []);
+	for (const id of dropped) {
+		if (id === params.done_id) errors.push(`Task ID "${id}" cannot be both done_id and in drop_ids`);
+		resolve(id);
+	}
+	if (params.start_id !== undefined) {
+		resolve(params.start_id);
+		if (params.start_id === params.done_id || dropped.has(params.start_id)) {
+			errors.push(`Task ID "${params.start_id}" cannot be started and closed in the same call`);
+		}
+	}
+	return errors;
+}
 
+type Draft = {
+	readonly id: string;
+	readonly title: string;
+	readonly base: Progress;
+	readonly commit: CommitRecord | null;
+	explanation: Explanation;
+	estimate: Estimate;
+	status: TodoStatus;
+};
+
+type Completion = { readonly id: string; readonly title: string };
+
+type Planned = {
+	readonly next: TodoMoreState;
+	readonly operations: Op[];
+	readonly changes: TodoChange[];
+	readonly explained: ReadonlySet<string>;
+	readonly completion: Completion | null;
+	readonly completedTasks: TodoCompletionTransition[];
+};
+
+function normalizeInProgress(drafts: readonly Draft[]): void {
+	const inProgress = drafts.filter((draft) => draft.status === "in_progress");
+	for (const draft of inProgress.slice(1)) draft.status = "pending";
+	if (inProgress.length > 0) return;
+	const firstPending = drafts.find((draft) => draft.status === "pending");
+	if (firstPending !== undefined) firstPending.status = "in_progress";
+}
+
+function toDraft(item: TodoItem): Draft {
+	return {
+		id: item.id,
+		title: item.title,
+		base: item.progress,
+		commit: item.commit,
+		explanation: item.explanation,
+		estimate: item.estimate,
+		status: item.progress.status,
+	};
+}
+
+function apply(params: TodoParams, previous: TodoMoreState, staged: readonly Staged[], now: number, waits: readonly AskWait[]): Planned {
+	const phases: { readonly name: string; readonly drafts: Draft[] }[] =
+		previous.kind === "empty" ? [] : previous.phases.map((phase) => ({ name: phase.name, drafts: phase.items.map(toDraft) }));
+	const byId = new Map(phases.flatMap((phase) => phase.drafts.map((draft) => [draft.id, draft] as const)));
+	const draftOf = (id: string): Draft => {
+		const draft = byId.get(id);
+		if (draft === undefined) throw new Error(`Validated task ID ${id} is missing`);
+		return draft;
+	};
 	const operations: Op[] = [];
 	const changes: TodoChange[] = [];
-	const explainedTitles = new Set<string>();
+	const explained = new Set<string>();
 
-	let goalState: GoalState = previous.kind === "list" ? previous.goal : { kind: "missing" };
+	let goal: GoalState = previous.kind === "list" ? previous.goal : { kind: "missing" };
 	if (params.goal !== undefined) {
-		const goal: TodoGoal = {
-			objective: params.goal.title,
-			measure: params.goal.summary,
-			doneWhen: params.goal.acceptance,
-		};
-		goalState = { kind: "set", goal };
-		operations.push(wasEmpty ? "init" : "goal");
-		changes.push({ op: "goal", goal });
+		const set: TodoGoal = { objective: params.goal.title, measure: params.goal.summary, doneWhen: params.goal.acceptance };
+		goal = { kind: "set", goal: set };
+		operations.push(previous.kind === "empty" ? "init" : "goal");
+		changes.push({ op: "goal", goal: set });
 	}
 
-	if (params.add !== undefined && params.add.length > 0) {
-		const seenTitles = new Set<string>();
-		const addedByPhase = new Map<string, { id: string; title: string; explanation: string; estimatedMinutes: number }[]>();
-		for (const item of params.add) {
-			if (seenTitles.has(item.title) || findTaskByTitle(phases, item.title)) {
-				errors.push(`Task "${item.title}" already exists`);
-			}
-			seenTitles.add(item.title);
-			if (item.minutes > rules.leafMaxMinutes) errors.push(overCap(item.title, item.minutes, rules.leafMaxMinutes));
-			const phaseName = item.phase?.trim() || "Tasks";
-			let phase = phases.find((candidate) => candidate.name === phaseName);
-			if (!phase) {
-				phase = { name: phaseName, items: [] };
+	if (staged.length > 0) {
+		const groups = new Map<string, AddedItem[]>();
+		for (const { phase: name, item, added } of staged) {
+			let phase = phases.find((candidate) => candidate.name === name);
+			if (phase === undefined) {
+				phase = { name, drafts: [] };
 				phases.push(phase);
 			}
-			const id = allocateId();
-			phase.items.push(newWorkItem(id, item));
-			const group = addedByPhase.get(phaseName) ?? [];
-			group.push({ id, title: item.title, explanation: item.detail, estimatedMinutes: item.minutes });
-			addedByPhase.set(phaseName, group);
+			const draft = toDraft(item);
+			phase.drafts.push(draft);
+			byId.set(draft.id, draft);
+			const group = groups.get(name) ?? [];
+			group.push(added);
+			groups.set(name, group);
 		}
-		if (!wasEmpty) operations.push("add");
-		for (const [phase, items] of addedByPhase) {
-			changes.push({ op: "add", phase, items });
-		}
+		if (previous.kind === "list") operations.push("add");
+		for (const [phase, items] of groups) changes.push({ op: "add", phase, items });
 	}
 
-	if (params.explain !== undefined && params.explain.length > 0) {
+	if (params.explain !== undefined) {
 		operations.push("explain");
 		for (const entry of params.explain) {
-			const hit = resolveId(phases, entry.id, errors);
-			if (hit) {
-				hit.item.explanation = { kind: "explained", text: entry.note };
-				explainedTitles.add(hit.item.title);
-				changes.push({ op: "explain", id: hit.item.id, title: hit.item.title, explanation: entry.note });
-			}
+			const draft = draftOf(entry.id);
+			draft.explanation = { kind: "explained", text: entry.note };
+			explained.add(draft.id);
+			changes.push({ op: "explain", id: draft.id, title: draft.title, explanation: entry.note });
 		}
 	}
 
-	if (params.estimate !== undefined && params.estimate.length > 0) {
+	if (params.estimate !== undefined) {
 		operations.push("estimate");
 		for (const entry of params.estimate) {
-			const hit = resolveId(phases, entry.id, errors);
-			if (entry.minutes > rules.leafMaxMinutes) {
-				errors.push(overCap(hit?.item.title ?? entry.id, entry.minutes, rules.leafMaxMinutes));
+			const draft = draftOf(entry.id);
+			if (draft.estimate.kind === "missing" || draft.estimate.minutes !== entry.minutes) {
+				draft.estimate = { kind: "estimated", budgetId: crypto.randomUUID(), minutes: entry.minutes };
 			}
-			if (
-				hit !== undefined &&
-				hit.item.time.kind === "estimated" &&
-				hit.item.time.minutes !== entry.minutes &&
-				rules.overtimeWarned.has(hit.item.time.budgetId)
-			) {
-				errors.push(
-					`Task "${hit.item.title}" (${entry.id}) already received an overtime warning, so its ${hit.item.time.minutes}-minute estimate is closed and estimate cannot change it. Find out why it overran, then add the remaining work as new items with add (phase ${JSON.stringify(hit.phase.name)}), each at most ${rules.leafMaxMinutes} min`,
-				);
-			}
-			if (hit) {
-				const time = hit.item.time;
-				if (time.kind !== "estimated" || time.minutes !== entry.minutes) {
-					hit.item.time = {
-						kind: "estimated",
-						budgetId: crypto.randomUUID(),
-						minutes: entry.minutes,
-						elapsedMs: time.kind === "estimated" ? time.elapsedMs : 0,
-						runningSince: time.kind === "estimated" ? time.runningSince : null,
-					};
-				}
-				changes.push({ op: "estimate", id: hit.item.id, title: hit.item.title, estimatedMinutes: entry.minutes });
-			}
+			changes.push({ op: "estimate", id: draft.id, title: draft.title, estimatedMinutes: entry.minutes });
 		}
 	}
 
-	const dropSet = new Set(params.drop_ids ?? []);
-
-	let completed: WorkItem | undefined;
+	let completion: Completion | null = null;
 	if (params.done_id !== undefined) {
 		operations.push("done");
-		const hit = resolveId(phases, params.done_id, errors);
-		if (hit) {
-			if (hit.item.status !== "completed") completed = hit.item;
-			else if (params.commit !== undefined) {
-				errors.push(`Task "${hit.item.title}" (${params.done_id}) is already completed, so no completion owes this commit`);
-			}
-			hit.item.status = "completed";
-			const commit = params.commit === undefined ? undefined : commitClauseOf(params.commit);
-			changes.push({ op: "done", id: hit.item.id, title: hit.item.title, ...(commit === undefined ? {} : { commit }) });
-		}
+		const draft = draftOf(params.done_id);
+		if (draft.status !== "completed") completion = { id: draft.id, title: draft.title };
+		draft.status = "completed";
+		changes.push({
+			op: "done",
+			id: draft.id,
+			title: draft.title,
+			commit: params.commit === undefined ? null : commitClauseOf(params.commit),
+		});
 	}
 
-	if (params.drop_ids !== undefined && params.drop_ids.length > 0) {
+	if (params.drop_ids !== undefined) {
 		operations.push("drop");
 		for (const id of params.drop_ids) {
-			if (id === params.done_id) errors.push(`Task ID "${id}" cannot be both done_id and in drop_ids`);
-			const hit = resolveId(phases, id, errors);
-			if (hit) {
-				hit.item.status = "abandoned";
-				changes.push({ op: "drop", id: hit.item.id, title: hit.item.title });
-			}
+			const draft = draftOf(id);
+			draft.status = "abandoned";
+			changes.push({ op: "drop", id: draft.id, title: draft.title });
 		}
 	}
 
 	if (params.start_id !== undefined) {
 		operations.push("start");
-		const hit = resolveId(phases, params.start_id, errors);
-		if (params.start_id === params.done_id || dropSet.has(params.start_id)) {
-			errors.push(`Task ID "${params.start_id}" cannot be started and closed in the same call`);
-		}
-		if (hit) {
-			for (const phase of phases) {
-				for (const item of phase.items) {
-					if (item.status === "in_progress" && item !== hit.item) item.status = "pending";
-				}
-			}
-			hit.item.status = "in_progress";
-			changes.push({ op: "start", id: hit.item.id, title: hit.item.title });
-		}
+		const target = draftOf(params.start_id);
+		for (const draft of byId.values()) if (draft.status === "in_progress") draft.status = "pending";
+		target.status = "in_progress";
+		changes.push({ op: "start", id: target.id, title: target.title });
 	}
-
-	if (errors.length > 0) return { kind: "rejected", errors };
 
 	const goalOnly = operations.length === 1 && operations[0] === "goal";
-	if (!goalOnly) {
-		normalizeInProgress(phases);
-		for (const phase of phases) {
-			for (const item of phase.items) item.time = transitionTime(item.time, item.status, now, waits);
-		}
-	}
+	if (!goalOnly) normalizeInProgress(phases.flatMap((phase) => phase.drafts));
 
-	return { kind: "ok", state: stateOf(goalState, phases), operations, changes, explainedTitles, completed };
+	const completedTasks: TodoCompletionTransition[] = [];
+	const next = stateOf(
+		goal,
+		phases.map((phase) => ({
+			name: phase.name,
+			items: phase.drafts.map((draft): TodoItem => {
+				if (draft.status === "completed" && draft.base.status !== "completed")
+					completedTasks.push({ phase: phase.name, content: draft.title });
+				return {
+					id: draft.id,
+					title: draft.title,
+					explanation: draft.explanation,
+					estimate: draft.estimate,
+					progress: transition(draft.base, draft.status, now, waits),
+					commit: draft.commit,
+				};
+			}),
+		})),
+	);
+	return { next, operations, changes, explained, completion, completedTasks };
 }
 
-export type TodoPreview = { kind: "state"; state: TodoMoreState } | { kind: "rejected" };
+type Plan = { readonly kind: "rejected"; readonly errors: string[] } | ({ readonly kind: "planned" } & Planned);
+
+function planTodo(params: TodoParams, previous: TodoMoreState, rules: Rules, now: number, waits: readonly AskWait[]): Plan {
+	const staged = stageAdds(params, previous);
+	const errors = validate(params, previous, staged, rules);
+	return errors.length > 0 ? { kind: "rejected", errors } : { kind: "planned", ...apply(params, previous, staged, now, waits) };
+}
+
+export type PreviewOutcome = { readonly kind: "state"; readonly state: TodoMoreState } | { readonly kind: "rejected" };
 
 export function previewTodo(
 	facts: Pick<BranchFacts, "waits" | "overtimeWarned">,
 	previous: TodoMoreState,
 	raw: unknown,
 	leafMaxMinutes: number,
-): TodoPreview {
+): PreviewOutcome {
 	const parsed = parseTodoParams(raw);
 	if (parsed.kind === "invalid") return { kind: "rejected" };
 	if (!hasTodoMutation(parsed.params)) return { kind: "state", state: previous };
-	const { phases, allocateId } = working(previous);
-	const prior = priorItems(phases);
-	const rules: BudgetRules = { leafMaxMinutes, overtimeWarned: facts.overtimeWarned };
-	const now = Date.now();
-	const applied = validateAndApply(parsed.params, previous, phases, allocateId, rules, facts.waits, now);
-	if (applied.kind === "rejected") return { kind: "rejected" };
-	if (previous.kind === "empty") prior.clear();
-	stampTransitions(phases, prior, now);
-	return { kind: "state", state: stateOf(applied.state.kind === "list" ? applied.state.goal : { kind: "missing" }, phases) };
+	const plan = planTodo(parsed.params, previous, { leafMaxMinutes, overtimeWarned: facts.overtimeWarned }, Date.now(), facts.waits);
+	return plan.kind === "rejected" ? { kind: "rejected" } : { kind: "state", state: plan.next };
 }
 
-function viewTodo(session: TodoSession, state: TodoMoreState, waits: BranchFacts["waits"], rawView: string | undefined, now: number) {
+const storageOf = (session: TodoSession): "session" | "memory" => (session.sessionManager.getSessionFile() ? "session" : "memory");
+
+type ResultExtra = {
+	readonly op?: TodoMoreDetails["op"];
+	readonly operations?: Op[];
+	readonly changes?: TodoChange[];
+	readonly completedTasks?: TodoCompletionTransition[];
+	readonly isError?: true;
+};
+
+function result(session: TodoSession, state: TodoMoreState, text: string, extra: ResultExtra): AgentToolResult<TodoMoreDetails> {
+	const details: TodoMoreDetails = {
+		op: extra.op,
+		operations: extra.operations,
+		changes: extra.changes,
+		phases: hostPhases(state),
+		storage: storageOf(session),
+		completedTasks: extra.completedTasks?.length ? extra.completedTasks : undefined,
+		[TODO_MORE_RESULT_MARK]: true,
+		more: toSnapshot(state),
+	};
+	return { content: [{ type: "text", text }], details, isError: extra.isError };
+}
+
+function viewTodo(session: TodoSession, state: TodoMoreState, waits: readonly AskWait[], rawView: string | undefined, now: number) {
 	const view = rawView?.trim();
 	if (view === undefined || view.toLowerCase() === "all") {
 		return result(session, state, formatFullView(state, now, waits), { op: "view" });
@@ -454,7 +382,7 @@ function viewTodo(session: TodoSession, state: TodoMoreState, waits: BranchFacts
 			isError: true,
 		});
 	}
-	return result(session, state, formatPhaseView(phase, now, waits, itemDisplayIds(state.phases)), { op: "view" });
+	return result(session, state, formatPhaseView(phase, now, waits), { op: "view" });
 }
 
 export type ParentCwd = () => string | undefined;
@@ -462,7 +390,10 @@ export type ParentCwd = () => string | undefined;
 const TOP_LEVEL: ParentCwd = () => undefined;
 const MAIN_AGENT: AgentRef = { id: MAIN_AGENT_ID, parentId: undefined };
 
-type CompletionStep = { readonly kind: "ok"; readonly note?: string } | { readonly kind: "refused"; readonly message: string };
+type CompletionStep =
+	| { readonly kind: "passed"; readonly note: string | null }
+	| { readonly kind: "committed"; readonly commit: CommitRecord; readonly note: string }
+	| { readonly kind: "refused"; readonly message: string };
 
 const INERT_NOTES = {
 	"no-repository": "No git repository here: the commit committed nothing.",
@@ -472,8 +403,8 @@ const INERT_NOTES = {
 
 async function completeWithCommit(
 	session: TodoSession,
-	clause: TodoCommitClause | undefined,
-	completed: WorkItem,
+	clause: TodoCommitClause | null,
+	completed: Completion,
 	parentCwd: ParentCwd,
 	agent: AgentRef,
 ): Promise<CompletionStep> {
@@ -483,12 +414,12 @@ async function completeWithCommit(
 	const shared = parent === undefined ? null : sharedWorktreeRoot(cwd, parent);
 	if (shared !== null) {
 		return {
-			kind: "ok",
+			kind: "passed",
 			note: `Shared worktree with the parent agent (${shared}): this completion committed nothing; the parent agent integrates and commits these changes.`,
 		};
 	}
 	const named = `Task ${JSON.stringify(completed.title)} (${completed.id})`;
-	if (clause === undefined) {
+	if (clause === null) {
 		const state = await workState(cwd, artifactsDir, agent);
 		switch (state.kind) {
 			case "failed":
@@ -496,7 +427,7 @@ async function completeWithCommit(
 			case "no-repository":
 			case "clean":
 			case "foreign":
-				return { kind: "ok" };
+				return { kind: "passed", note: null };
 			case "own":
 				return {
 					kind: "refused",
@@ -523,13 +454,13 @@ async function completeWithCommit(
 	);
 	switch (outcome.kind) {
 		case "committed":
-			completed.commit = outcome.commit;
 			return {
-				kind: "ok",
+				kind: "committed",
+				commit: outcome.commit,
 				note: `Committed ${commitRecordText(outcome.commit)} (${commitScopeText(outcome.commit.scope)}) in ${outcome.root}.`,
 			};
 		case "inert":
-			return { kind: "ok", note: INERT_NOTES[outcome.because] };
+			return { kind: "passed", note: INERT_NOTES[outcome.because] };
 		case "failed":
 			return { kind: "refused", message: outcome.message };
 		default: {
@@ -537,6 +468,17 @@ async function completeWithCommit(
 			throw new Error(`Unexpected commit outcome: ${String(unreachable)}`);
 		}
 	}
+}
+
+function withCommit(state: TodoMoreState, id: string, commit: CommitRecord): TodoMoreState {
+	if (state.kind === "empty") return state;
+	return {
+		...state,
+		phases: state.phases.map((phase) => ({
+			...phase,
+			items: phase.items.map((item) => (item.id === id ? { ...item, commit } : item)),
+		})),
+	};
 }
 
 export async function runTodo(
@@ -557,42 +499,43 @@ export async function runTodo(
 	if (!hasTodoMutation(parsed.params)) {
 		return viewTodo(session, previous, waits, parsed.params.view, now);
 	}
-	const before = working(previous).phases;
-	const prior = priorItems(before);
-	const { phases, allocateId } = working(previous);
-	const rules: BudgetRules = { leafMaxMinutes, overtimeWarned: facts.overtimeWarned };
-	const applied = validateAndApply(parsed.params, previous, phases, allocateId, rules, waits, now);
-	if (applied.kind === "rejected") {
-		return result(session, previous, formatCompactView(previous, now, waits, { errors: applied.errors, readOnly: true }), {
+	const plan = planTodo(parsed.params, previous, { leafMaxMinutes, overtimeWarned: facts.overtimeWarned }, now, waits);
+	if (plan.kind === "rejected") {
+		return result(session, previous, formatCompactView(previous, now, waits, { errors: plan.errors, readOnly: true }), {
 			isError: true,
 		});
 	}
-	if (previous.kind === "empty") prior.clear();
-	stampTransitions(phases, prior, now);
-	const op: TodoMoreDetails["op"] = applied.operations.length === 1 ? applied.operations[0] : "batch";
+	const op: TodoMoreDetails["op"] = plan.operations.length === 1 ? plan.operations[0] : "batch";
 	const notes: string[] = [];
-	if (applied.completed !== undefined) {
-		const clause = parsed.params.commit === undefined ? undefined : commitClauseOf(parsed.params.commit);
-		const step = await completeWithCommit(session, clause, applied.completed, parentCwd, agent);
-		if (step.kind === "refused") {
-			return result(session, previous, formatCompactView(previous, now, waits, { errors: [step.message], readOnly: true }), {
-				op,
-				operations: applied.operations,
-				isError: true,
-			});
+	let next = plan.next;
+	if (plan.completion !== null) {
+		const clause = parsed.params.commit === undefined ? null : commitClauseOf(parsed.params.commit);
+		const step = await completeWithCommit(session, clause, plan.completion, parentCwd, agent);
+		switch (step.kind) {
+			case "refused":
+				return result(session, previous, formatCompactView(previous, now, waits, { errors: [step.message], readOnly: true }), {
+					op,
+					operations: plan.operations,
+					isError: true,
+				});
+			case "committed":
+				next = withCommit(next, plan.completion.id, step.commit);
+				notes.push(step.note);
+				break;
+			case "passed":
+				if (step.note !== null) notes.push(step.note);
+				break;
+			default: {
+				const unreachable: never = step;
+				throw new Error(`Unexpected completion step: ${String(unreachable)}`);
+			}
 		}
-		if (step.note !== undefined) notes.push(step.note);
 	}
-	const next = stateOf(applied.state.kind === "list" ? applied.state.goal : { kind: "missing" }, phases);
 	commitTodoState(session, next);
-	const summary = formatCompactView(next, now, waits, {
-		notes,
-		...(applied.explainedTitles.size > 0 ? { highlightExplanations: applied.explainedTitles } : {}),
-	});
-	return result(session, next, summary, {
+	return result(session, next, formatCompactView(next, now, waits, { notes, highlightExplanations: plan.explained }), {
 		op,
-		operations: applied.operations,
-		changes: applied.changes,
-		completedTasks: completionTransitions(before, phases),
+		operations: plan.operations,
+		changes: plan.changes,
+		completedTasks: plan.completedTasks,
 	});
 }

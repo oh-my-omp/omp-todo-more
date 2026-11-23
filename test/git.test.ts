@@ -7,7 +7,7 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { ChangeJournal } from "@oh-my-pi/pi-coding-agent/commit/selective/journal";
 import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { readTodoMore } from "../src/branch.ts";
+import { foldBranch } from "../src/branch.ts";
 import type { TodoSession } from "../src/commit.ts";
 import type { ModelRef } from "../src/models.ts";
 import { type CommitRecord, type TodoMoreSnapshot, toSnapshot } from "../src/state.ts";
@@ -78,7 +78,7 @@ async function fixture(cwd: string, options: FixtureOptions = {}): Promise<Harne
 			if (result.isError === true) throw new Error(`plan failed: ${textOf(result)}`);
 		},
 		done: (id, commit) => call({ done_id: id, ...(commit === undefined ? {} : { commit }) }),
-		snapshot: (): TodoMoreSnapshot => toSnapshot(readTodoMore(sessionManager.getBranch())),
+		snapshot: (): TodoMoreSnapshot => toSnapshot(foldBranch(sessionManager.getBranch()).state),
 		edit: async (file, content) => {
 			const path = join(cwd, file);
 			const before = (await Bun.file(path).exists()) ? await Bun.file(path).text() : null;
@@ -101,7 +101,7 @@ const textOf = (result: { content: { type: string; text?: string }[] }): string 
 
 function commitOf(harness: Harness, title: string): CommitRecord {
 	const commit = itemOf(harness.snapshot(), title).commit;
-	if (commit === undefined) throw new Error(`Expected a commit on ${title}`);
+	if (commit === null) throw new Error(`Expected a commit on ${title}`);
 	return commit;
 }
 
@@ -181,7 +181,7 @@ describe("the git association of a completion", () => {
 		const message = await harness.done("t2", { message: "Nothing of mine" });
 		expect(message.isError).not.toBe(true);
 		expect(textOf(message)).toContain("none of the uncommitted changes are this agent's");
-		expect(itemOf(harness.snapshot(), "Skim").commit).toBeUndefined();
+		expect(itemOf(harness.snapshot(), "Skim").commit).toBeNull();
 		expect(await git(harness.cwd, "rev-parse", "HEAD")).toBe(head);
 		expect(await git(harness.cwd, "status", "--porcelain")).toBe("M other.txt");
 	});
@@ -212,7 +212,7 @@ describe("the git association of a completion", () => {
 		expect(textOf(result)).toContain('Task ID "ghost" not found');
 		expect(textOf(result)).not.toContain("Committed");
 		expect(itemOf(harness.snapshot(), "Implement").status).not.toBe("completed");
-		expect(itemOf(harness.snapshot(), "Implement").commit).toBeUndefined();
+		expect(itemOf(harness.snapshot(), "Implement").commit).toBeNull();
 		expect(await git(harness.cwd, "rev-parse", "HEAD")).toBe(head);
 		expect(await git(harness.cwd, "status", "--porcelain")).toBe("M a.txt");
 	});
@@ -380,7 +380,7 @@ describe("the git association of a completion", () => {
 		const inert = await clean.done("t1", { message: "Nothing to commit here" });
 		expect(inert.isError).not.toBe(true);
 		expect(textOf(inert)).toContain("Nothing to commit: the working tree is clean");
-		expect(itemOf(clean.snapshot(), "Verify").commit).toBeUndefined();
+		expect(itemOf(clean.snapshot(), "Verify").commit).toBeNull();
 		expect(await git(clean.cwd, "rev-parse", "HEAD")).toBe(cleanHead);
 
 		const outside = await mkdtemp(join(tmpdir(), "todo-more-plain-"));
@@ -390,7 +390,7 @@ describe("the git association of a completion", () => {
 		const none = await plain.done("t1", { message: "No repository to commit in" });
 		expect(none.isError).not.toBe(true);
 		expect(textOf(none)).toContain("No git repository here");
-		expect(itemOf(plain.snapshot(), "Verify").commit).toBeUndefined();
+		expect(itemOf(plain.snapshot(), "Verify").commit).toBeNull();
 	});
 
 	test("a committed completion survives the branch and the host projection", async () => {
@@ -519,7 +519,7 @@ describe("a subagent's completion in its parent's worktree", () => {
 			expect(textOf(result)).toContain(`Shared worktree with the parent agent (${cwd})`);
 			expect(textOf(result)).toContain("the parent agent integrates and commits these changes");
 			expect(itemOf(harness.snapshot(), `Investigate ${index + 1}`).status).toBe("completed");
-			expect(itemOf(harness.snapshot(), `Investigate ${index + 1}`).commit).toBeUndefined();
+			expect(itemOf(harness.snapshot(), `Investigate ${index + 1}`).commit).toBeNull();
 		}
 		expect(await git(cwd, "rev-parse", "HEAD")).toBe(head);
 		expect(await git(cwd, "status", "--porcelain")).toBe("M a.txt\n?? foreign.txt");

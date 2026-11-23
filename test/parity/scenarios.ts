@@ -1,8 +1,3 @@
-/**
- * Reminder continuations race subsequent steps, so a step that leaves todos open is
- * either last or is followed by a `sleep` step carrying the continuation
- * turns — the sleep drains the chain deterministically before the next prompt.
- */
 import type { ScriptedTurn } from "./mock-provider.ts";
 
 export type Variant = "baseline" | "candidate";
@@ -88,9 +83,6 @@ export const SCENARIOS: readonly Scenario[] = [
 				text: "Work the goal.",
 				turns: [
 					call("goal", { op: "get" }),
-					// After a drop the host removes the `goal` tool asynchronously; a sleep
-					// in the same batch makes the next request wait for that rebuild instead
-					// of racing it.
 					calls({ name: "goal", arguments: { op: "drop" } }, bashTool("sleep 1")),
 					call("goal", { op: "resume" }),
 					call("goal", { op: "get" }),
@@ -549,8 +541,6 @@ export const SCENARIOS: readonly Scenario[] = [
 					{
 						error: {
 							status: 429,
-							// The hint must exceed pi-ai's 30 s retry budget so the 429
-							// propagates as an error instead of being retried transparently.
 							body: '{"error":{"message":"You have exhausted your capacity for this model; Please retry in 45s","type":"rate_limit_error"}}',
 						},
 					},
@@ -683,9 +673,6 @@ export const SCENARIOS: readonly Scenario[] = [
 		name: "slash-ui",
 		expect: ["Todo More editor requires an interactive UI"],
 		noUi: true,
-		// The model prompt runs first: a slash prompt that spawns a custom message
-		// (ui-unavailable) parks the input gate and the next model prompt never
-		// admits, so slash prompts go last.
 		steps: [
 			{ kind: "prompt", text: "Plan.", turns: [INIT1, say("Done."), say("Reminder turn.")] },
 			{ kind: "prompt", text: "/todo-more-cancel", turns: [] },

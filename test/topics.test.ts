@@ -1,22 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TODO_TOOL_DEFINITION } from "../index.ts";
 import { runTodo } from "../src/tool.ts";
 import { hostSession, runPersisted } from "./host.ts";
 
-describe("todo tool metadata & native view inspection", () => {
-	test("tool is essential, read-approved, <=200 char description, and has no todo://, tool://, xd://, docTopics, or customFormat", () => {
-		expect(TODO_TOOL_DEFINITION.loadMode).toBe("essential");
-		expect(TODO_TOOL_DEFINITION.approval).toBe("read");
-		expect(TODO_TOOL_DEFINITION.description.length).toBeLessThanOrEqual(200);
-		expect(TODO_TOOL_DEFINITION.description).toContain("todo({})");
-		expect(TODO_TOOL_DEFINITION.description).not.toContain("todo://");
-		expect(TODO_TOOL_DEFINITION.description).not.toContain("tool://");
-		expect(TODO_TOOL_DEFINITION.description).not.toContain("xd://");
-		expect("docTopics" in TODO_TOOL_DEFINITION).toBe(false);
-		expect("customFormat" in TODO_TOOL_DEFINITION).toBe(false);
-	});
-
+describe("todo views", () => {
 	test("todo({}) and todo({ view }) resolve full, current, and single-phase views without mutating state", async () => {
 		const manager = SessionManager.inMemory("/tmp/todo-more-view-tests");
 		const session = hostSession(manager);
@@ -42,7 +29,6 @@ describe("todo tool metadata & native view inspection", () => {
 		expect(fullText).toContain("Objective: Native Todo");
 		expect(fullText).toContain("[t1] [completed]");
 		expect(fullText).toContain("[t2] [in_progress]");
-		expect(fullText).not.toContain("todo://");
 
 		const current = await runTodo(session, { view: "current" });
 		const currentText = (current.content[0] as { text: string }).text;

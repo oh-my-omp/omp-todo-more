@@ -1,15 +1,14 @@
 import { z } from "@oh-my-pi/omptype/zod";
 import { tr } from "../omomp-shared/i18n.ts";
 import { commitTodoState, type HostListSession, liveState } from "./commit.ts";
-import { stateOf, type TodoGoal, type TodoMoreState, todoGoalSchema } from "./state.ts";
+import { nonEmptyText, stateOf, type TodoGoal, type TodoMoreState, todoGoalSchema } from "./state.ts";
 
-export type TodoEdit = { kind: "set_goal"; goal: TodoGoal } | { kind: "explain"; title: string; explanation: string };
+export type TodoEdit = { kind: "set_goal"; goal: TodoGoal } | { kind: "explain"; id: string; explanation: string };
 export type TodoEditResult = { kind: "saved"; state: TodoMoreState } | { kind: "rejected"; message: string };
 type AppliedEdit = { kind: "ok"; state: TodoMoreState } | { kind: "rejected"; message: string };
-const nonEmpty = z.string().refine((value) => value.trim().length > 0, "must not be empty");
 const editSchema = z.union([
 	z.object({ kind: z.literal("set_goal"), goal: todoGoalSchema }),
-	z.object({ kind: z.literal("explain"), title: nonEmpty, explanation: nonEmpty }),
+	z.object({ kind: z.literal("explain"), id: nonEmptyText, explanation: nonEmptyText }),
 ]);
 
 export function applyTodoEdit(state: TodoMoreState, edit: TodoEdit): AppliedEdit {
@@ -18,7 +17,7 @@ export function applyTodoEdit(state: TodoMoreState, edit: TodoEdit): AppliedEdit
 	if (!parsed.success)
 		return {
 			kind: "rejected",
-			message: tr("Goal fields, task title and explanation must not be empty.", "目标字段、任务标题和说明不能为空。"),
+			message: tr("Goal fields, task ID and explanation must not be empty.", "目标字段、任务 ID 和说明不能为空。"),
 		};
 	const intent = parsed.data;
 	switch (intent.kind) {
@@ -27,8 +26,8 @@ export function applyTodoEdit(state: TodoMoreState, edit: TodoEdit): AppliedEdit
 			return { kind: "ok", state: stateOf({ kind: "set", goal: intent.goal }, state.phases) };
 		}
 		case "explain": {
-			const item = state.phases.flatMap((phase) => phase.items).find((candidate) => candidate.title === intent.title);
-			if (item === undefined) return { kind: "rejected", message: `${tr("Task", "任务")} "${intent.title}" ${tr("not found", "未找到")}` };
+			const item = state.phases.flatMap((phase) => phase.items).find((candidate) => candidate.id === intent.id);
+			if (item === undefined) return { kind: "rejected", message: `${tr("Task", "任务")} ${intent.id} ${tr("not found", "未找到")}` };
 			if (state.goal.kind === "missing")
 				return {
 					kind: "rejected",
@@ -50,7 +49,6 @@ export function applyTodoEdit(state: TodoMoreState, edit: TodoEdit): AppliedEdit
 	}
 }
 
-/** Like a `todo` call, a save writes the host list and the plugin's notes; an edit leaves the host list's content unchanged. */
 export function saveTodoEdit(session: HostListSession, edit: TodoEdit): TodoEditResult {
 	const applied = applyTodoEdit(liveState(session), edit);
 	if (applied.kind === "rejected") return applied;

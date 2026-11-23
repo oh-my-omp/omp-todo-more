@@ -30,7 +30,6 @@ function session(manager: SessionManager) {
 }
 
 describe("host reminders carry the plugin's content", () => {
-	// A reminder the host has just queued is not on the branch yet, and the `todo` result before it may not be either.
 	test("an unpersisted nudge takes the host list, not a branch that lags the last todo call", async () => {
 		const manager = SessionManager.inMemory("/tmp/todo-more-reminders-tests");
 		const { host, session: own } = session(manager);
@@ -53,7 +52,6 @@ describe("host reminders carry the plugin's content", () => {
 });
 
 describe("the continuation reminder reads the live host list", () => {
-	// `continuation` runs at `agent_end`, before the last `todo` result has reached the branch.
 	function stopped(manager: SessionManager) {
 		const host = hostSession(manager);
 		const own = {

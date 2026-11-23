@@ -1,7 +1,3 @@
-/**
- * A scenario needing a tighter bound must script a wait wider than a
- * bucket.
- */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { SCENARIOS } from "./scenarios.ts";

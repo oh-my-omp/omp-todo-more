@@ -7,11 +7,10 @@ import { actionableItems, type TodoMoreState, type TodoStatus } from "./state.ts
 
 function statusCounts(state: TodoMoreState): TodoReadCounts {
 	const counts: Record<TodoStatus, number> = { pending: 0, in_progress: 0, completed: 0, abandoned: 0 };
-	if (state.kind === "list") for (const phase of state.phases) for (const item of phase.items) counts[item.status]++;
+	if (state.kind === "list") for (const phase of state.phases) for (const item of phase.items) counts[item.progress.status]++;
 	return counts;
 }
 
-/** Synchronous request/reply only: branch reads, no IO, cache, timers or writes. */
 export function registerReviewApi(pi: ExtensionAPI): void {
 	const unsubscribe = pi.events.on(TODO_READ_EVENT, (request) => {
 		if (!isTodoReadRequest(request)) return;

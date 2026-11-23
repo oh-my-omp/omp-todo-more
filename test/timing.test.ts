@@ -1,33 +1,35 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
-import { foldBranch, readTodoMore } from "../src/branch.ts";
+import { foldBranch } from "../src/branch.ts";
 import {
-	elapsedTime,
+	dueAt,
+	type Estimate,
+	elapsedOf,
 	estimatedMinutesSchema,
-	type ItemTime,
+	FRESH,
 	OVERTIME_TYPE,
+	type Progress,
 	stateOf,
 	TODO_MORE_NOTES_TYPE,
 	type TodoItem,
 	type TodoMoreState,
 	toNotes,
 	toSnapshot,
-	transitionTime,
+	transition,
 } from "../src/state.ts";
 import { stateEntries, todoResultMessage } from "./host.ts";
+
+const stateOfBranch = (branch: readonly SessionEntry[]): TodoMoreState => foldBranch(branch).state;
 
 const hasOvertimeWarning = (branch: readonly SessionEntry[], budgetId: string): boolean => foldBranch(branch).overtimeWarned.has(budgetId);
 
 const epoch = Date.parse("2026-10-15T12:00:00.000Z");
 const title = "Build runtime";
 const goal = { objective: "Ship timing", measure: "Active time survives replay", doneWhen: "Timing is verified" };
-const budget: Extract<ItemTime, { kind: "estimated" }> = {
-	kind: "estimated",
-	budgetId: "runtime-budget",
-	minutes: 1,
-	elapsedMs: 1_250,
-	runningSince: null,
-};
+const budgetId = "runtime-budget";
+const estimate: Estimate = { kind: "estimated", budgetId, minutes: 1 };
+const idle: Progress = { status: "pending", startedAt: null, elapsedMs: 1_250, pausedAt: null };
+const running: Progress = { status: "in_progress", startedAt: epoch, elapsedMs: 1_250, runningSince: epoch };
 
 function customEntry(
 	id: string,
@@ -39,26 +41,25 @@ function customEntry(
 	return { type: "custom", id, parentId, timestamp: new Date(at).toISOString(), customType, data };
 }
 
-function warningEntry(budgetId: string): Extract<SessionEntry, { type: "custom_message" }> {
+function warningEntry(warnedBudget: string): Extract<SessionEntry, { type: "custom_message" }> {
 	return {
 		type: "custom_message",
-		id: `warning-${budgetId}`,
+		id: `warning-${warnedBudget}`,
 		parentId: "snapshot-result",
 		timestamp: new Date(epoch + 100_000).toISOString(),
 		customType: OVERTIME_TYPE,
 		content: "This budget has exceeded its estimate.",
 		display: true,
-		details: { budgetId, title, estimatedMinutes: 1, elapsedMs: 100_000 },
+		details: { budgetId: warnedBudget, title, estimatedMinutes: 1, elapsedMs: 100_000 },
 	};
 }
 
-function currentState(time: ItemTime = { ...budget, runningSince: epoch }): TodoMoreState {
-	return stateOf({ kind: "set", goal }, [
-		{
-			name: "Delivery",
-			items: [{ title, explanation: { kind: "explained", text: "Implement the runtime" }, status: "in_progress", time }],
-		},
-	]);
+function itemOf(progress: Progress, value: Estimate = estimate): TodoItem {
+	return { id: "t1", title, explanation: { kind: "missing" }, estimate: value, progress, commit: null };
+}
+
+function currentState(progress: Progress = running, value: Estimate = estimate): TodoMoreState {
+	return stateOf({ kind: "set", goal }, [{ name: "Delivery", items: [itemOf(progress, value)] }]);
 }
 
 function requireItem(state: TodoMoreState, itemTitle: string = title): TodoItem {
@@ -66,11 +67,6 @@ function requireItem(state: TodoMoreState, itemTitle: string = title): TodoItem 
 	const item = state.phases.flatMap((phase) => phase.items).find((candidate) => candidate.title === itemTitle);
 	if (item === undefined) throw new Error(`Expected item ${itemTitle}`);
 	return item;
-}
-
-function requireEstimate(time: ItemTime): Extract<ItemTime, { kind: "estimated" }> {
-	if (time.kind !== "estimated") throw new Error("Expected an estimated item");
-	return time;
 }
 
 describe("estimatedMinutesSchema", () => {
@@ -105,49 +101,107 @@ describe("estimatedMinutesSchema", () => {
 
 describe("active wall-time transitions", () => {
 	test("pending pauses accumulated time until the item resumes", () => {
-		const active = transitionTime(budget, "in_progress", epoch);
-		expect(active).toEqual({ ...budget, runningSince: epoch });
-		expect(elapsedTime(requireEstimate(active), epoch + 4_000)).toBe(5_250);
+		const active = transition(idle, "in_progress", epoch);
+		expect(active).toEqual({ status: "in_progress", startedAt: epoch, elapsedMs: 1_250, runningSince: epoch });
+		expect(elapsedOf(active, epoch + 4_000)).toBe(5_250);
 
-		const paused = transitionTime(active, "pending", epoch + 6_000);
-		expect(paused).toEqual({ ...budget, elapsedMs: 7_250 });
-		expect(elapsedTime(requireEstimate(paused), epoch + 25_000)).toBe(7_250);
+		const paused = transition(active, "pending", epoch + 6_000);
+		expect(paused).toEqual({ status: "pending", startedAt: epoch, elapsedMs: 7_250, pausedAt: epoch + 6_000 });
+		expect(elapsedOf(paused, epoch + 25_000)).toBe(7_250);
 
-		const resumed = transitionTime(paused, "in_progress", epoch + 30_000);
-		expect(resumed).toEqual({ ...budget, elapsedMs: 7_250, runningSince: epoch + 30_000 });
-		expect(elapsedTime(requireEstimate(resumed), epoch + 35_000)).toBe(12_250);
-		expect(transitionTime(resumed, "completed", epoch + 35_000)).toEqual({ ...budget, elapsedMs: 12_250 });
-		expect(budget).toEqual({ kind: "estimated", budgetId: "runtime-budget", minutes: 1, elapsedMs: 1_250, runningSince: null });
+		const resumed = transition(paused, "in_progress", epoch + 30_000);
+		expect(resumed).toEqual({ status: "in_progress", startedAt: epoch, elapsedMs: 7_250, runningSince: epoch + 30_000 });
+		expect(elapsedOf(resumed, epoch + 35_000)).toBe(12_250);
+		expect(transition(resumed, "completed", epoch + 35_000)).toEqual({
+			status: "completed",
+			startedAt: epoch,
+			elapsedMs: 12_250,
+			closedAt: epoch + 35_000,
+		});
+		expect(idle).toEqual({ status: "pending", startedAt: null, elapsedMs: 1_250, pausedAt: null });
+	});
+
+	test("a pause folds running time only up to the waits already spent", () => {
+		const active = transition(FRESH, "in_progress", epoch);
+		const paused = transition(active, "pending", epoch + 10_000, [{ start: epoch + 2_000, end: epoch + 5_000 }]);
+		expect(paused).toEqual({ status: "pending", startedAt: epoch, elapsedMs: 7_000, pausedAt: epoch + 10_000 });
 	});
 
 	test("repeated active transitions preserve the original running interval", () => {
-		const active = transitionTime(budget, "in_progress", epoch);
-		const repeated = transitionTime(active, "in_progress", epoch + 2_000);
-		expect(repeated).toEqual({ ...budget, runningSince: epoch });
-		expect(elapsedTime(requireEstimate(repeated), epoch + 3_000)).toBe(4_250);
-		expect(transitionTime(repeated, "pending", epoch + 4_000)).toEqual({ ...budget, elapsedMs: 5_250 });
+		const active = transition(idle, "in_progress", epoch);
+		const repeated = transition(active, "in_progress", epoch + 2_000);
+		expect(repeated).toBe(active);
+		expect(elapsedOf(repeated, epoch + 3_000)).toBe(4_250);
+		expect(transition(repeated, "pending", epoch + 4_000)).toEqual({
+			status: "pending",
+			startedAt: epoch,
+			elapsedMs: 5_250,
+			pausedAt: epoch + 4_000,
+		});
 	});
 
-	test("status transitions never invent an estimate for imported items", () => {
-		for (const status of ["in_progress", "pending", "completed", "abandoned"] as const) {
-			expect(transitionTime({ kind: "missing" }, status, epoch)).toEqual({ kind: "missing" });
-		}
+	test("transitions anchor only the state they enter", () => {
+		expect(transition(FRESH, "pending", epoch)).toBe(FRESH);
+		expect(transition(FRESH, "in_progress", epoch)).toEqual({
+			status: "in_progress",
+			startedAt: epoch,
+			elapsedMs: 0,
+			runningSince: epoch,
+		});
+		expect(transition(FRESH, "completed", epoch)).toEqual({ status: "completed", startedAt: null, elapsedMs: 0, closedAt: epoch });
+		expect(transition(FRESH, "abandoned", epoch + 1)).toEqual({
+			status: "abandoned",
+			startedAt: null,
+			elapsedMs: 0,
+			closedAt: epoch + 1,
+		});
+		const closed: Progress = { status: "completed", startedAt: epoch, elapsedMs: 5_000, closedAt: epoch + 9_000 };
+		expect(transition(closed, "pending", epoch + 10_000)).toEqual({
+			status: "pending",
+			startedAt: epoch,
+			elapsedMs: 5_000,
+			pausedAt: null,
+		});
+	});
+
+	test("time spent waiting on the user is excluded from elapsed work", () => {
+		const active = transition(FRESH, "in_progress", epoch);
+		expect(elapsedOf(active, epoch + 10_000, [{ start: epoch + 2_000, end: epoch + 5_000 }])).toBe(7_000);
+		expect(elapsedOf(active, epoch + 10_000, [{ start: epoch + 2_000, end: null }])).toBe(2_000);
+		expect(elapsedOf(active, epoch + 10_000, [{ start: epoch - 5_000, end: epoch + 2_000 }])).toBe(8_000);
+		expect(elapsedOf(active, epoch + 10_000, [{ start: epoch - 20_000, end: epoch - 10_000 }])).toBe(10_000);
+		expect(elapsedOf(active, epoch + 10_000, [])).toBe(10_000);
+	});
+
+	test("the deadline is the remaining budget at the current time, shifted by waits", () => {
+		const active = transition(FRESH, "in_progress", epoch);
+		expect(dueAt(itemOf(active), epoch + 20_000)).toBe(epoch + 60_000);
+		expect(dueAt(itemOf(active), epoch + 50_000, [{ start: epoch + 10_000, end: epoch + 40_000 }])).toBe(epoch + 90_000);
+
+		const paused = transition(active, "pending", epoch + 10_000);
+		expect(dueAt(itemOf(paused), epoch + 20_000)).toBeUndefined();
+		const unanchored: Progress = { status: "in_progress", startedAt: epoch, elapsedMs: 0, runningSince: null };
+		expect(dueAt(itemOf(unanchored), epoch + 20_000)).toBeUndefined();
+		expect(dueAt(itemOf(active, { kind: "missing" }), epoch + 20_000)).toBeUndefined();
 	});
 });
 
 describe("branch timing replay", () => {
 	test("a host result saved with a blocked task reads back as pending and keeps the item's notes", () => {
-		const time: Extract<ItemTime, { kind: "estimated" }> = {
-			kind: "estimated",
-			budgetId: "waiting-budget",
-			minutes: 6,
-			elapsedMs: 45_000,
-			runningSince: null,
-		};
+		const progress: Progress = { status: "pending", startedAt: epoch, elapsedMs: 45_000, pausedAt: epoch };
 		const state = stateOf({ kind: "set", goal }, [
 			{
 				name: "Delivery",
-				items: [{ title: "Waiting", explanation: { kind: "explained", text: "Blocked earlier" }, status: "pending", time }],
+				items: [
+					{
+						id: "t1",
+						title: "Waiting",
+						explanation: { kind: "explained", text: "Blocked earlier" },
+						estimate: { kind: "estimated", budgetId: "waiting-budget", minutes: 6 },
+						progress,
+						commit: null,
+					},
+				],
 			},
 		]);
 		const [notes] = stateEntries("blocked", epoch, state);
@@ -157,27 +211,36 @@ describe("branch timing replay", () => {
 			id: "blocked-result",
 			parentId: null,
 			timestamp: new Date(epoch).toISOString(),
-			message: todoResultMessage(
-				{ op: "update", phases: [{ name: "Delivery", tasks: [{ content: "Waiting", status: "blocked" }] }] },
-				epoch,
-			),
+			message: todoResultMessage({ phases: [{ name: "Delivery", tasks: [{ content: "Waiting", status: "blocked" }] }] }, epoch),
 		};
-		const item = requireItem(readTodoMore([notes, result]), "Waiting");
-		expect(item.status).toBe("pending");
+		const item = requireItem(stateOfBranch([notes, result]), "Waiting");
+		expect(item.progress.status).toBe("pending");
+		expect(item.progress).toEqual(progress);
 		expect("blocker" in item).toBe(false);
 		expect(item.explanation).toEqual({ kind: "explained", text: "Blocked earlier" });
-		expect(item.time).toEqual(time);
+		expect(item.estimate).toEqual({ kind: "estimated", budgetId: "waiting-budget", minutes: 6 });
 	});
 
-	test("an item the host list holds without notes reads as lacking an explanation and a clock", () => {
+	test("an item the host list holds without notes reads as lacking an explanation and an estimate", () => {
 		const result = stateEntries("host-only", epoch, currentState())[1];
 		if (result === undefined) throw new Error("Expected the host result entry");
-		const state = readTodoMore([result]);
-		expect(state).toEqual({
+		expect(stateOfBranch([result])).toEqual({
 			kind: "list",
 			goal: { kind: "missing" },
 			phases: [
-				{ name: "Delivery", items: [{ title, explanation: { kind: "missing" }, status: "in_progress", time: { kind: "missing" } }] },
+				{
+					name: "Delivery",
+					items: [
+						{
+							id: "t1",
+							title,
+							explanation: { kind: "missing" },
+							estimate: { kind: "missing" },
+							progress: { status: "in_progress", startedAt: null, elapsedMs: 0, runningSince: null },
+							commit: null,
+						},
+					],
+				},
 			],
 		});
 	});
@@ -187,16 +250,18 @@ describe("branch timing replay", () => {
 		if (notes === undefined || result === undefined) throw new Error("Expected both entries");
 		const removed = stateEntries("removed", epoch + 5_000, stateOf({ kind: "set", goal }, [{ name: "Delivery", items: [] }]))[1];
 		if (removed === undefined) throw new Error("Expected the host result entry");
-		expect(readTodoMore([notes, result, removed])).toEqual({ kind: "empty" });
+		expect(stateOfBranch([notes, result, removed])).toEqual({ kind: "empty" });
 	});
 
 	test("notes follow the item they are keyed to when the host list reorders and statuses change", () => {
-		const first: TodoItem = { title, explanation: { kind: "explained", text: "First" }, status: "pending", time: { ...budget } };
+		const first: TodoItem = { id: "t1", title, explanation: { kind: "explained", text: "First" }, estimate, progress: idle, commit: null };
 		const second: TodoItem = {
+			id: "t2",
 			title: "Verify results",
 			explanation: { kind: "explained", text: "Second" },
-			status: "completed",
-			time: { ...budget, budgetId: "verification-budget" },
+			estimate: { ...estimate, budgetId: "verification-budget" },
+			progress: { status: "completed", startedAt: epoch, elapsedMs: 0, closedAt: epoch },
+			commit: null,
 		};
 		const notes = stateEntries("two", epoch, stateOf({ kind: "set", goal }, [{ name: "Delivery", items: [first, second] }]))[0];
 		const reordered: SessionEntry = {
@@ -206,7 +271,6 @@ describe("branch timing replay", () => {
 			timestamp: new Date(epoch + 1_000).toISOString(),
 			message: todoResultMessage(
 				{
-					op: "update",
 					phases: [
 						{
 							name: "Delivery",
@@ -221,136 +285,148 @@ describe("branch timing replay", () => {
 			),
 		};
 		if (notes === undefined) throw new Error("Expected the notes entry");
-		const state = readTodoMore([notes, reordered]);
+		const state = stateOfBranch([notes, reordered]);
 		expect(
 			state.kind === "list" &&
-				state.phases[0]?.items.map((item) => [item.title, item.status, item.time.kind === "estimated" && item.time.budgetId]),
+				state.phases[0]?.items.map((item) => [
+					item.id,
+					item.title,
+					item.progress.status,
+					item.estimate.kind === "estimated" && item.estimate.budgetId,
+				]),
 		).toEqual([
-			["Verify results", "in_progress", "verification-budget"],
-			[title, "pending", "runtime-budget"],
+			["t2", "Verify results", "in_progress", "verification-budget"],
+			["t1", title, "pending", "runtime-budget"],
 		]);
 	});
 
-	for (const phases of [[], [{ name: "Cleared", tasks: [] }]]) {
-		test(`an empty ${phases.length === 0 ? "phase list" : "phase"} ends the list and the goal before a same-title rebuild`, () => {
-			const entries = stateEntries("before", epoch, currentState());
-			const cleared = stateEntries("clear", epoch + 5_000, { kind: "empty" });
-			const clearedResult: SessionEntry = {
-				type: "message",
-				id: "clear-result",
-				parentId: null,
-				timestamp: new Date(epoch + 5_000).toISOString(),
-				message: todoResultMessage({ op: "rm", phases }, epoch + 5_000),
-			};
-			const rebuilt = stateEntries(
-				"rebuild",
-				epoch + 10_000,
-				stateOf({ kind: "missing" }, [
-					{ name: "Rebuilt", items: [{ title, explanation: { kind: "missing" }, status: "in_progress", time: { kind: "missing" } }] },
-				]),
-			).slice(1);
-			expect(readTodoMore([...entries, cleared[0]!, clearedResult])).toEqual({ kind: "empty" });
-			expect(readTodoMore([...entries, cleared[0]!, clearedResult, ...rebuilt])).toEqual({
-				kind: "list",
-				goal: { kind: "missing" },
-				phases: [
-					{ name: "Rebuilt", items: [{ title, explanation: { kind: "missing" }, status: "in_progress", time: { kind: "missing" } }] },
-				],
-			});
-		});
-	}
+	test("clearing the host list ends the list and the goal before a same-title rebuild", () => {
+		const entries = stateEntries("before", epoch, currentState());
+		const clearedNotes = stateEntries("clear", epoch + 5_000, { kind: "empty" })[0];
+		if (clearedNotes === undefined) throw new Error("Expected the cleared notes entry");
+		const clearedResults: SessionEntry[] = [[], [{ name: "Cleared", tasks: [] }]].map((phases, index) => ({
+			type: "message",
+			id: `clear-result-${index}`,
+			parentId: null,
+			timestamp: new Date(epoch + 5_000).toISOString(),
+			message: todoResultMessage({ phases }, epoch + 5_000),
+		}));
+		const rebuilt = stateOf({ kind: "missing" }, [
+			{
+				name: "Rebuilt",
+				items: [{ id: "t1", title, explanation: { kind: "missing" }, estimate: { kind: "missing" }, progress: FRESH, commit: null }],
+			},
+		]);
+		for (const clearedResult of clearedResults) {
+			expect(stateOfBranch([...entries, clearedNotes, clearedResult])).toEqual({ kind: "empty" });
+			expect(stateOfBranch([...entries, clearedNotes, clearedResult, ...stateEntries("rebuild", epoch + 10_000, rebuilt)])).toEqual(
+				rebuilt,
+			);
+		}
+	});
 
-	test("notes roundtrip and repeated replay retain each budget ID and running anchor", () => {
+	test("notes roundtrip and repeated replay retain each ID, estimate and running anchor", () => {
 		const state = stateOf({ kind: "set", goal }, [
 			{
 				name: "Delivery",
 				items: [
+					{ id: "t1", title, explanation: { kind: "explained", text: "Implement the runtime" }, estimate, progress: running, commit: null },
 					{
-						title,
-						explanation: { kind: "explained", text: "Implement the runtime" },
-						status: "in_progress",
-						time: { ...budget, runningSince: epoch },
-					},
-					{
+						id: "t2",
 						title: "Verify results",
 						explanation: { kind: "missing" },
-						status: "pending",
-						time: { ...budget, budgetId: "verification-budget", minutes: 4, elapsedMs: 30_000 },
+						estimate: { kind: "estimated", budgetId: "verification-budget", minutes: 4 },
+						progress: { status: "pending", startedAt: null, elapsedMs: 30_000, pausedAt: null },
+						commit: null,
 					},
 				],
 			},
 		]);
 		const entries = stateEntries("roundtrip", epoch + 10_000, state);
-		const firstReplay = readTodoMore(entries);
+		const firstReplay = stateOfBranch(entries);
 		expect(firstReplay).toEqual(state);
-		expect(readTodoMore(entries)).toEqual(firstReplay);
-		expect(readTodoMore(stateEntries("again", epoch + 60_000, firstReplay))).toEqual(state);
-		expect(requireItem(firstReplay).time).toEqual({ ...budget, runningSince: epoch });
-		expect(requireItem(firstReplay, "Verify results").time).toEqual({
-			...budget,
+		expect(stateOfBranch(entries)).toEqual(firstReplay);
+		expect(stateOfBranch(stateEntries("again", epoch + 60_000, firstReplay))).toEqual(state);
+		expect(requireItem(firstReplay).progress).toEqual(running);
+		expect(requireItem(firstReplay, "Verify results").estimate).toEqual({
+			kind: "estimated",
 			budgetId: "verification-budget",
 			minutes: 4,
-			elapsedMs: 30_000,
 		});
-		expect(elapsedTime(requireEstimate(requireItem(firstReplay).time), epoch + 90_000)).toBe(91_250);
+		expect(requireItem(firstReplay, "Verify results").progress).toEqual({
+			status: "pending",
+			startedAt: null,
+			elapsedMs: 30_000,
+			pausedAt: null,
+		});
+		expect(elapsedOf(requireItem(firstReplay).progress, epoch + 90_000)).toBe(91_250);
 	});
 
-	test("a notes entry carries no status or order of its own", () => {
+	test("notes key each item's id, estimate and progress by phase and title", () => {
 		const [notes] = stateEntries("shape", epoch, currentState());
 		expect(notes?.type === "custom" && notes.customType).toBe(TODO_MORE_NOTES_TYPE);
 		const data = toNotes(currentState());
 		expect(Object.keys(data).sort()).toEqual(["goal", "items"]);
-		expect(Object.keys(data.items[0] ?? {}).sort()).toEqual(["explanation", "phase", "time", "title"]);
+		expect(Object.keys(data.items[0] ?? {}).sort()).toEqual(["commit", "estimate", "explanation", "id", "phase", "progress", "title"]);
+	});
+
+	test("a snapshot carries the estimate and status but not the live progress", () => {
+		expect(toSnapshot(currentState()).phases[0]?.items[0]).toEqual({
+			id: "t1",
+			title,
+			explanation: null,
+			status: "in_progress",
+			estimate,
+			commit: null,
+		});
 	});
 });
 
 describe("overtime warning facts", () => {
 	test("warnings belong to a budget, not to an item's current title or replacement estimate", () => {
 		const original = stateEntries("snapshot", epoch, currentState());
-		const warning = warningEntry(budget.budgetId);
+		const warning = warningEntry(budgetId);
 		const replacement = stateEntries(
 			"replacement",
 			epoch + 110_000,
-			currentState({ ...budget, budgetId: "replacement-budget", minutes: 3, runningSince: epoch }),
+			currentState(running, { kind: "estimated", budgetId: "replacement-budget", minutes: 3 }),
 		);
 		const branch: readonly SessionEntry[] = [...original, warning, ...replacement];
-		expect(requireItem(readTodoMore(branch)).title).toBe(title);
-		expect(hasOvertimeWarning(branch, budget.budgetId)).toBe(true);
+		expect(requireItem(stateOfBranch(branch)).title).toBe(title);
+		expect(hasOvertimeWarning(branch, budgetId)).toBe(true);
 		expect(hasOvertimeWarning(branch, "replacement-budget")).toBe(false);
-		expect(hasOvertimeWarning(branch, `${budget.budgetId}-other`)).toBe(false);
+		expect(hasOvertimeWarning(branch, `${budgetId}-other`)).toBe(false);
 		expect(
 			hasOvertimeWarning(
-				[{ ...warning, details: { budgetId: budget.budgetId, title: "Previous title", estimatedMinutes: 1, elapsedMs: 100_000 } }],
-				budget.budgetId,
+				[{ ...warning, details: { budgetId, title: "Previous title", estimatedMinutes: 1, elapsedMs: 100_000 } }],
+				budgetId,
 			),
 		).toBe(true);
 	});
 
 	test("only a matching delivered custom message with complete warning details is a fact", () => {
-		const warning = warningEntry(budget.budgetId);
+		const warning = warningEntry(budgetId);
 		const nonFacts: readonly SessionEntry[] = [
 			customEntry("intent", epoch, OVERTIME_TYPE, warning.details),
 			{ ...warning, id: "other-type", customType: `${OVERTIME_TYPE}.intent` },
-			{ ...warning, id: "incomplete", details: { budgetId: budget.budgetId, title, estimatedMinutes: 1 } },
-			{ ...warning, id: "invalid", details: { budgetId: budget.budgetId, title, estimatedMinutes: "1", elapsedMs: 100_000 } },
+			{ ...warning, id: "incomplete", details: { budgetId, title, estimatedMinutes: 1 } },
+			{ ...warning, id: "invalid", details: { budgetId, title, estimatedMinutes: "1", elapsedMs: 100_000 } },
 		];
-		expect(hasOvertimeWarning(nonFacts, budget.budgetId)).toBe(false);
-		expect(hasOvertimeWarning([...nonFacts, warning], budget.budgetId)).toBe(true);
+		expect(hasOvertimeWarning(nonFacts, budgetId)).toBe(false);
+		expect(hasOvertimeWarning([...nonFacts, warning], budgetId)).toBe(true);
 	});
 
 	test("warning messages neither alter clock snapshots nor survive as copied snapshot facts", () => {
 		const state = currentState();
 		const snapshot = toSnapshot(state);
 		const entries = stateEntries("snapshot", epoch, state);
-		const branch: readonly SessionEntry[] = [...entries, warningEntry(budget.budgetId)];
-		expect(readTodoMore(branch)).toEqual(state);
-		expect(toSnapshot(readTodoMore(branch))).toEqual(snapshot);
-		expect(snapshot.phases[0]?.items[0]?.time).toEqual({ ...budget, runningSince: epoch });
-		expect(snapshot.phases[0]?.items[0]?.time).not.toHaveProperty("notifiedAt");
-		expect(hasOvertimeWarning(branch, budget.budgetId)).toBe(true);
-		const snapshotOnly = stateEntries("restored-snapshot", epoch + 120_000, readTodoMore(branch));
-		expect(readTodoMore(snapshotOnly)).toEqual(state);
-		expect(hasOvertimeWarning(snapshotOnly, budget.budgetId)).toBe(false);
-		expect(hasOvertimeWarning(entries, budget.budgetId)).toBe(false);
+		const branch: readonly SessionEntry[] = [...entries, warningEntry(budgetId)];
+		expect(stateOfBranch(branch)).toEqual(state);
+		expect(toSnapshot(stateOfBranch(branch))).toEqual(snapshot);
+		expect(hasOvertimeWarning(branch, budgetId)).toBe(true);
+		const snapshotOnly = stateEntries("restored-snapshot", epoch + 120_000, stateOfBranch(branch));
+		expect(stateOfBranch(snapshotOnly)).toEqual(state);
+		expect(hasOvertimeWarning(snapshotOnly, budgetId)).toBe(false);
+		expect(hasOvertimeWarning(entries, budgetId)).toBe(false);
 	});
 });

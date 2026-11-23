@@ -2,24 +2,22 @@ import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { type NativeChild, type NativeNode, node, stableKey } from "@oh-my-pi/pi-tui";
 import { isClosedTodo } from "@oh-my-pi/pi-tui/tools/todo";
 import { tr } from "../omomp-shared/i18n.ts";
-import type { parametersSchema } from "./protocol.ts";
+import { type parametersSchema, previewTodoArgs } from "./protocol.ts";
 import {
 	callPreviewLines,
-	compactRemovedLabel,
 	compactTodoLabel,
 	detailsSchema,
-	parseCall,
 	previewOperationCount,
 	progressCounts,
 	type ReadTodoDetails,
 	resultView,
 } from "./render.ts";
-import { commitRecordText, type TodoMoreSnapshot, type TodoStatus } from "./state.ts";
+import { commitRecordText, type SnapshotItem, type TodoMoreSnapshot, type TodoStatus } from "./state.ts";
 import type { TodoMoreDetails } from "./tool.ts";
 
-function uiTimeEstimate(item: TodoMoreSnapshot["phases"][number]["items"][number]): string {
-	return item.time.kind === "estimated"
-		? `${tr("Estimate", "预计")}: ${item.time.minutes} ${tr("min", "分钟")}`
+export function uiTimeEstimate(item: Pick<SnapshotItem, "estimate">): string {
+	return item.estimate.kind === "estimated"
+		? `${tr("Estimate", "预计")}: ${item.estimate.minutes} ${tr("min", "分钟")}`
 		: tr("(no time estimate yet: add one with estimate)", "（尚无时间估计：请使用 estimate 添加）");
 }
 
@@ -46,16 +44,15 @@ function checklistPhases(snapshot: TodoMoreSnapshot) {
 		title: phase.name,
 		collapsed: false,
 		items: phase.items.map((item) => ({
-			id: item.title,
+			id: item.id,
 			text: item.title,
 			status: checklistStatus(item.status),
-			note: `${uiTimeEstimate(item)}\n${tr("Explanation", "说明")}: ${item.explanation ?? tr("[explanation missing]", "[缺少说明]")}${item.commit === undefined ? "" : `\n${tr("Commit", "提交")}: ${commitRecordText(item.commit)}`}`,
+			note: `${uiTimeEstimate(item)}\n${tr("Explanation", "说明")}: ${item.explanation ?? tr("[explanation missing]", "[缺少说明]")}${item.commit === null ? "" : `\n${tr("Commit", "提交")}: ${commitRecordText(item.commit)}`}`,
 		})),
 	}));
 }
 
-/** Callers must read the branch before editing. */
-export function describeSnapshot(snapshot: TodoMoreSnapshot, editable = false, selectedTitle?: string): NativeChild[] {
+export function describeSnapshot(snapshot: TodoMoreSnapshot, editable = false, selectedId?: string): NativeChild[] {
 	const missingGoal = tr("[goal missing]", "[缺少目标]");
 	const body: NativeChild[] = [
 		node(
@@ -93,12 +90,12 @@ export function describeSnapshot(snapshot: TodoMoreSnapshot, editable = false, s
 						"row",
 						{
 							role: "omp.btn",
-							actions: { click: `todo-more.explain:${item.title}` },
+							actions: { click: `todo-more.explain:${item.id}` },
 							title: editExplanation,
-							tone: selectedTitle === item.title ? "accent" : undefined,
+							tone: selectedId === item.id ? "accent" : undefined,
 						},
 						[node("text", { text: editExplanation })],
-						stableKey(item.title),
+						stableKey(item.id),
 					),
 				);
 			}
@@ -189,7 +186,7 @@ export function describeTodoHud(snapshot: TodoMoreSnapshot, expanded = false): N
 }
 
 export const describeTodoCall: NonNullable<ToolDefinition<typeof parametersSchema, TodoMoreDetails>["describeCall"]> = (args) => {
-	const call = parseCall(args);
+	const call = previewTodoArgs(args);
 	const count = previewOperationCount(call);
 	return {
 		tool: {
@@ -212,7 +209,6 @@ export const describeTodoCall: NonNullable<ToolDefinition<typeof parametersSchem
 export const describeTodoResult: NonNullable<ToolDefinition<typeof parametersSchema, TodoMoreDetails>["describeResult"]> = (
 	result,
 	options,
-	args,
 ) => {
 	const parsed = detailsSchema.safeParse(result.details);
 	if (result.isError || !parsed.success) {
@@ -228,16 +224,16 @@ export const describeTodoResult: NonNullable<ToolDefinition<typeof parametersSch
 		tool: total === 0 ? { title: tr("Todo", "待办") } : { title: tr("Todo", "待办"), target: `${closed}/${total}`, targetKind: "text" },
 		open: true,
 		preview: "none",
-		body: [node("col", { role: "todo-more.panel", gap: "sm" }, resultPanel(parsed.data, args, options.expanded))],
+		body: [node("col", { role: "todo-more.panel", gap: "sm" }, resultPanel(parsed.data, options.expanded))],
 	};
 };
 
-function resultPanel(details: ReadTodoDetails, args: unknown, expanded: boolean): NativeChild[] {
+function resultPanel(details: ReadTodoDetails, expanded: boolean): NativeChild[] {
 	const { more } = details;
 	const phases = more.phases.filter((phase) => phase.items.length > 0);
 	const missingGoal = tr("[goal missing]", "[缺少目标]");
 	if (phases.length === 0) return [node("text", { text: tr("Todo list is empty.", "待办列表为空。"), wrap: "word" }, undefined, "empty")];
-	const view = resultView(details, args, expanded);
+	const view = resultView(details, expanded);
 	if (view.kind === "delta") {
 		const children: NativeChild[] = [];
 		if (view.goalChanged) {
@@ -258,46 +254,19 @@ function resultPanel(details: ReadTodoDetails, args: unknown, expanded: boolean)
 			);
 		}
 		if (view.phases.length > 0) {
-			const checklistPhases = view.phases.map((phase, p) => {
-				switch (phase.kind) {
-					case "items":
-						return {
-							id: `p${p}`,
-							title: phase.name,
-							collapsed: false,
-							items: phase.items.map((item, t) => ({
-								id: `p${p}.${t}`,
-								text: compactTodoLabel(item),
-								status: checklistStatus(item.status),
-								...(phase.explained.has(item.title)
-									? { note: `${tr("Explanation", "说明")}: ${item.explanation ?? tr("[explanation missing]", "[缺少说明]")}` }
-									: {}),
-							})),
-						};
-					case "removed_phase":
-						return {
-							id: `p${p}`,
-							title: phase.name,
-							collapsed: false,
-							items: [{ id: `p${p}.0`, text: tr("Phase removed", "阶段已删除"), status: "dropped" as const }],
-						};
-					case "removed_tasks":
-						return {
-							id: `p${p}`,
-							title: tr("Removed", "已删除"),
-							collapsed: false,
-							items: phase.titles.map((title, t) => ({
-								id: `p${p}.${t}`,
-								text: compactRemovedLabel(title),
-								status: "dropped" as const,
-							})),
-						};
-					default: {
-						const unreachable: never = phase;
-						throw new Error(`Unexpected delta phase: ${String(unreachable)}`);
-					}
-				}
-			});
+			const checklistPhases = view.phases.map((phase, p) => ({
+				id: `p${p}`,
+				title: phase.name,
+				collapsed: false,
+				items: phase.items.map((item, t) => ({
+					id: `p${p}.${t}`,
+					text: compactTodoLabel(item),
+					status: checklistStatus(item.status),
+					note: view.explained.has(item.id)
+						? `${tr("Explanation", "说明")}: ${item.explanation ?? tr("[explanation missing]", "[缺少说明]")}`
+						: undefined,
+				})),
+			}));
 			children.push(node("checklist", { role: "todo-more.list", mode: "full", phases: checklistPhases }, undefined, "list"));
 		}
 		return children;
@@ -325,11 +294,9 @@ function resultPanel(details: ReadTodoDetails, args: unknown, expanded: boolean)
 			id: `p${p}.${t}`,
 			text: compactTodoLabel(item),
 			status: checklistStatus(item.status),
-			...(expanded
-				? {
-						note: `${tr("Explanation", "说明")}: ${item.explanation ?? tr("[explanation missing]", "[缺少说明]")}${item.commit === undefined ? "" : `\n${tr("Commit", "提交")}: ${commitRecordText(item.commit)}`}`,
-					}
-				: {}),
+			note: expanded
+				? `${tr("Explanation", "说明")}: ${item.explanation ?? tr("[explanation missing]", "[缺少说明]")}${item.commit === null ? "" : `\n${tr("Commit", "提交")}: ${commitRecordText(item.commit)}`}`
+				: undefined,
 		})),
 	}));
 	return [goal, node("checklist", { role: "todo-more.list", mode: "full", phases: checklistPhases }, undefined, "list")];

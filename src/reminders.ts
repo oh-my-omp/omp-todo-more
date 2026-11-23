@@ -10,7 +10,7 @@ import { isSilentAbort, isUserInterruptAbort } from "@oh-my-pi/pi-tui/chat/messa
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 import { deferDuringCompaction, isCompacting } from "../omomp-shared/compact-handoff.ts";
 import { tr } from "../omomp-shared/i18n.ts";
-import { type BranchFacts, type BranchSource, branchFacts, contextBranch, foldBranch } from "./branch.ts";
+import { type BranchFacts, type BranchSource, branchFacts, foldBranch } from "./branch.ts";
 import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { currentTimeLine, itemTimeSummary } from "./format.ts";
@@ -27,7 +27,6 @@ import {
 	unexplainedItems,
 } from "./state.ts";
 
-/** The host does not export this type; it names `TodoTracker.takeMidRunNudge`'s message. */
 const HOST_MID_RUN_NUDGE_TYPE = "mid-run-todo-nudge";
 const GOAL_MODE_CONTEXT_TYPE = "goal-mode-context";
 const TODO_TOOL = "todo";
@@ -39,12 +38,9 @@ const CANCEL_SHORTCUT = "ctrl+n";
 const CANCEL_SHORTCUT_LABEL = "Ctrl+N";
 const CANCEL_COMMAND = "todo-more-cancel";
 
-/** Shape of `TodoTracker.checkCompletion`'s developer message; the host's wording is the contract. */
 const HOST_STOP_REMINDER_RE =
 	/^<system-reminder>\nYou stopped with \d+ incomplete todo item\(s\):\n[\s\S]*\n\nPlease continue working on these tasks or mark them complete if finished\.\n\(Reminder (\d+)\/(\d+)\)\n<\/system-reminder>$/;
-/** Where the host's goal-mode message starts its own todo snapshot. */
 const HOST_GOAL_TODO_CONTEXT = "\n<todo_context>\nPersisted todos:";
-/** Only the forced variant of the host's eager prelude tells the model it MUST call the tool. */
 const HOST_FORCED_EAGER_MARKER = "You MUST call";
 
 type ListState = Extract<TodoMoreState, { kind: "list" }>;
@@ -82,8 +78,6 @@ const DROP: CutOffStep = { kind: "drop" };
 
 const ownSession = (ctx: ExtensionContext): AgentSession | undefined => sessionOf(ctx.agent.id);
 
-const facts = (ctx: Pick<ExtensionContext, "sessionManager">): BranchFacts => branchFacts(contextBranch(ctx));
-
 function todoToolRef(session: AgentSession): string {
 	const tool = session.getToolByName(TODO_TOOL);
 	return typeof tool?.customWireName === "string" ? tool.customWireName : TODO_TOOL;
@@ -106,7 +100,7 @@ function unexplainedLines(state: ListState): string[] {
 	const unexplained = unexplainedItems(state);
 	if (unexplained.length === 0) return [];
 	return [
-		`Items without an explanation (${unexplained.length}); pass explain: ${unexplained.map((item) => JSON.stringify(item.id ?? item.title)).join(", ")}`,
+		`Items without an explanation (${unexplained.length}); pass explain: ${unexplained.map((item) => JSON.stringify(item.id)).join(", ")}`,
 	];
 }
 
@@ -134,8 +128,7 @@ function reminderText(
 				`- ${phase.name}\n${phase.items
 					.map((item) => {
 						const time = itemTimeSummary(item, now, waits, "inline");
-						const idPrefix = item.id === undefined ? "" : `[${item.id}] `;
-						return `  - ${idPrefix}${item.title}\n    ${explanationText(item).replaceAll("\n", "\n    ")}${time === undefined ? "" : `\n    ${time}`}`;
+						return `  - [${item.id}] ${item.title}\n    ${explanationText(item).replaceAll("\n", "\n    ")}${time === undefined ? "" : `\n    ${time}`}`;
 					})
 					.join("\n")}`,
 		)
@@ -177,12 +170,12 @@ function midRunNudgeText(todo: string, incompleteCount: number, state: ListState
 		state.goal.kind === "set"
 			? `Goal objective: ${state.goal.goal.objective}`
 			: `The list has no goal yet: pass \`goal\` on the next \`${todo}\` call.`;
-	const active = state.phases.flatMap((phase) => phase.items).find((item) => item.status === "in_progress");
+	const active = state.phases.flatMap((phase) => phase.items).find((item) => item.progress.status === "in_progress");
 	const activeTime = active === undefined ? undefined : itemTimeSummary(active, now, waits, "inline");
 	const activeLine =
 		active === undefined
 			? ""
-			: `\nActive item: ${active.id === undefined ? "" : `[${active.id}] `}${JSON.stringify(active.title)}${activeTime === undefined ? "" : ` (${activeTime})`}`;
+			: `\nActive item: [${active.id}] ${JSON.stringify(active.title)}${activeTime === undefined ? "" : ` (${activeTime})`}`;
 	return `<system-reminder>
 ${currentTimeLine(now)}
 ${incompleteCount} todo item${incompleteCount !== 1 ? "s" : ""} still open. If you finished a task since last \`${todo}\` update, mark it done with \`done_id\` now so progress stays visible; otherwise keep working.
@@ -217,15 +210,14 @@ function goalTodoContext(session: AgentSession, state: TodoMoreState, now: numbe
 		`- ${sanitizeGoalTodoText(phase.name)}`,
 		...phase.items.map((item) => {
 			total++;
-			if (item.status === "completed" || item.status === "abandoned") {
+			if (item.progress.status === "completed" || item.progress.status === "abandoned") {
 				closed++;
 			} else {
 				open++;
 			}
 			const time = itemTimeSummary(item, now, waits, "inline");
 			const timeSuffix = time === undefined ? "" : `; ${sanitizeGoalTodoText(time)}`;
-			const idPrefix = item.id === undefined ? "" : `[${sanitizeGoalTodoText(item.id)}] `;
-			return `  - [${item.status}] ${idPrefix}${sanitizeGoalTodoText(item.title)}: ${sanitizeGoalTodoText(explanationText(item))}${timeSuffix}`;
+			return `  - [${item.progress.status}] [${sanitizeGoalTodoText(item.id)}] ${sanitizeGoalTodoText(item.title)}: ${sanitizeGoalTodoText(explanationText(item))}${timeSuffix}`;
 		}),
 	]);
 	const goal =
@@ -276,7 +268,6 @@ function hostReminderOf(message: AgentMessage): HostReminder | undefined {
 	}
 }
 
-/** Index of the branch entry that persisted `message`, or -1 while it is not persisted yet. */
 function entryIndexOf(entries: readonly SessionEntry[], message: AgentMessage): number {
 	if (message.role === "developer") {
 		return entries.findIndex(
@@ -288,7 +279,6 @@ function entryIndexOf(entries: readonly SessionEntry[], message: AgentMessage): 
 		);
 	}
 	if (message.role !== "custom") return -1;
-	// OMP stamps the stored custom_message when it is persisted, a moment after the live message.
 	return entries.findIndex(
 		(entry) =>
 			entry.type === "custom_message" &&
@@ -298,7 +288,6 @@ function entryIndexOf(entries: readonly SessionEntry[], message: AgentMessage): 
 	);
 }
 
-/** An entry's state and waits are fixed by the entry, so each one is folded once per session manager. */
 const factsAtEntries = new WeakMap<BranchSource, Map<string, Pick<BranchFacts, "state" | "waits">>>();
 
 function factsAtEntry(manager: BranchSource, entries: readonly SessionEntry[], index: number): Pick<BranchFacts, "state" | "waits"> {
@@ -318,7 +307,6 @@ function factsAtEntry(manager: BranchSource, entries: readonly SessionEntry[], i
 	return entryFacts;
 }
 
-/** What the host put into `message` becomes the plugin's content for the same moment in the branch. */
 function pluginContent(
 	reminder: HostReminder,
 	message: AgentMessage,
@@ -360,16 +348,9 @@ function withContent(message: AgentMessage, text: string): AgentMessage {
 	return message;
 }
 
-/**
- * The host decides when its todo reminders appear; each one reaches the model with the plugin's content,
- * taken from the list as it stood where the reminder sits in the branch so a rewritten message keeps its bytes.
- */
-export function contextMessages(
-	messages: AgentMessage[],
-	session: AgentSession | undefined,
-	manager: BranchSource,
-): AgentMessage[] | undefined {
+export function contextMessages(messages: AgentMessage[], session: AgentSession | undefined): AgentMessage[] | undefined {
 	if (session === undefined) return undefined;
+	const manager = session.sessionManager;
 	let entries: readonly SessionEntry[] | undefined;
 	let current: TodoMoreState | undefined;
 	let currentWaits: readonly AskWait[] | undefined;
@@ -428,7 +409,6 @@ export const renderReminder: MessageRenderer = (message, _options, theme) => {
 	return new NativeReminderText(theme.fg("warning", `${theme.icon.warning} ${header}`), header);
 };
 
-/** Turns the host's stop-time check skips — a failed provider call, unfinished tool calls, a non-human abort. */
 function cutOffAnswer(message: AgentMessage | undefined): AssistantMessage | undefined {
 	if (message?.role !== "assistant") return undefined;
 	switch (message.stopReason) {
@@ -442,15 +422,13 @@ function cutOffAnswer(message: AgentMessage | undefined): AssistantMessage | und
 	}
 }
 
-/** Whether the list still has open items and the host's `todo.*` settings allow one more reminder. */
 export function continuation(
 	session: Pick<AgentSession, "getPlanModeState" | "settings" | "getActiveToolNames" | "wakeSources" | "sessionManager" | "getTodoPhases">,
-	ctx: Pick<ExtensionContext, "sessionManager">,
 ): Completion {
 	if (session.getPlanModeState()?.enabled === true) return SILENT;
 	if (!cfgTodoEnabled.get(session.settings) || !cfgTodoReminders.get(session.settings)) return SILENT;
 	if (!session.getActiveToolNames().includes(TODO_TOOL)) return SILENT;
-	const branch = facts(ctx);
+	const branch = branchFacts(session.sessionManager);
 	const max = cfgTodoRemindersMax.get(session.settings);
 	if (branch.remindersSinceUserMessage >= max) return SILENT;
 	const state = liveState(session);
@@ -471,7 +449,6 @@ export function registerReminders(pi: ExtensionAPI): void {
 
 	let cutOff: PendingCutOff | undefined;
 	let latch: CutOffLatch = LATCH_OPEN;
-	/** Every path that ends a pending reminder goes through here, so its notice never outlives it. */
 	const clearCutOff = (): void => {
 		if (cutOff === undefined) return;
 		const { ctx, timer, wait } = cutOff;
@@ -488,7 +465,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 		if (latch.kind !== "open") return DROP;
 		if (!ctx.isIdle() || ctx.hasPendingMessages()) return DROP;
 		if (ctx.hasUI && ctx.ui.getEditorText().trim() !== "") return wait.kind === "quota" ? { kind: "wait", ms: DRAFT_RECHECK_MS } : DROP;
-		const completion = continuation(session, ctx);
+		const completion = continuation(session);
 		return completion.kind === "remind" ? { kind: "remind", completion } : DROP;
 	};
 	const schedule = (plan: CutOffPlan, ms: number): void => {
@@ -596,7 +573,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 			if (session === undefined) return;
 			const message = cutOffAnswer(event.messages.at(-1));
 			if (message === undefined || latch.kind !== "open") return;
-			if (continuation(session, ctx).kind === "remind") armCutOff(ctx, session, message);
+			if (continuation(session).kind === "remind") armCutOff(ctx, session, message);
 		} catch (error) {
 			pi.logger.warn("todo-more cut-off check failed", { error: errorText(error) });
 		}
@@ -613,7 +590,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 
 	pi.on("context", (event, ctx) => {
 		try {
-			const messages = contextMessages(event.messages, ownSession(ctx), contextBranch(ctx));
+			const messages = contextMessages(event.messages, ownSession(ctx));
 			return messages === undefined ? undefined : { messages };
 		} catch (error) {
 			pi.logger.warn("todo-more context failed", { error: errorText(error) });

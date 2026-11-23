@@ -1,8 +1,3 @@
-/**
- * Only events baseline todo-more already handled are subscribed: the host
- * awaits extension handlers per event type, so a new event type would shift
- * the host's own persistence order (mode changes vs tool results).
- */
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 import { deferDuringCompaction, isCompacting } from "../omomp-shared/compact-handoff.ts";
@@ -12,7 +7,7 @@ import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { currentTimeLine, formatClock } from "./format.ts";
 import { sessionOf } from "./session.ts";
-import { dueAtTime, elapsedTime, OVERTIME_TYPE } from "./state.ts";
+import { dueAt, elapsedOf, OVERTIME_TYPE } from "./state.ts";
 
 type DeadlineBinding = {
 	readonly ctx: ExtensionContext;
@@ -67,31 +62,29 @@ export function registerOvertime(pi: ExtensionAPI): void {
 			if (state.kind === "list" && !waiting) {
 				for (const phase of state.phases) {
 					for (const item of phase.items) {
-						const time = item.time;
-						if (item.status !== "in_progress" || time.kind === "missing" || time.runningSince === null) continue;
-						if (pending.has(time.budgetId) || facts.overtimeWarned.has(time.budgetId)) continue;
-						const elapsedMs = elapsedTime(time, now, facts.waits);
-						const remainingMs = time.minutes * 60_000 - elapsedMs;
-						if (remainingMs > 0) {
-							const deadline = now + remainingMs;
-							if (nextDeadline === undefined || deadline < nextDeadline) nextDeadline = deadline;
+						const { estimate } = item;
+						const due = dueAt(item, now, facts.waits);
+						if (due === undefined || estimate.kind === "missing") continue;
+						if (pending.has(estimate.budgetId) || facts.overtimeWarned.has(estimate.budgetId)) continue;
+						if (due > now) {
+							if (nextDeadline === undefined || due < nextDeadline) nextDeadline = due;
 							continue;
 						}
-						const dueAt = dueAtTime(time, now, facts.waits) ?? now;
-						const details = { budgetId: time.budgetId, title: item.title, estimatedMinutes: time.minutes, elapsedMs };
+						const elapsedMs = elapsedOf(item.progress, now, facts.waits);
+						const details = { budgetId: estimate.budgetId, title: item.title, estimatedMinutes: estimate.minutes, elapsedMs };
 						try {
 							const notice = deltas.atPrompt(binding.ctx, {
 								kind: "text",
-								body: overtimeBody(item.title, phase.name, dueAt, now),
+								body: overtimeBody(item.title, phase.name, due, now),
 							});
 							if (notice === undefined) continue;
-							pending.add(time.budgetId);
+							pending.add(estimate.budgetId);
 							pi.sendMessage(
 								{ ...notice.message, customType: OVERTIME_TYPE, display: true, details },
 								binding.ctx.isIdle() ? { triggerTurn: false } : { deliverAs: "aside" },
 							);
 						} catch (error) {
-							pending.delete(time.budgetId);
+							pending.delete(estimate.budgetId);
 							throw error;
 						}
 					}

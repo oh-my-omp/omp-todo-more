@@ -70,16 +70,15 @@ type PathspecOutcome =
 	| { readonly kind: "matched"; readonly paths: ReadonlySet<string> }
 	| { readonly kind: "failed"; readonly message: string };
 
-/** The changed paths (root-relative) that git's own pathspec matching selects when run from `cwd`, as `git add -- <specs>` would. */
 async function pathspecMatches(cwd: string, specs: readonly string[]): Promise<PathspecOutcome> {
-	const result = await Bun.$`git --no-optional-locks -C ${cwd} status --porcelain=v1 -z --untracked-files=all --no-renames -- ${specs}`
-		.quiet()
-		.nothrow();
-	if (result.exitCode !== 0) {
-		return { kind: "failed", message: result.stderr.toString().trim() || `git status exited with ${result.exitCode}` };
-	}
+	const child = Bun.spawn(
+		["git", "--no-optional-locks", "-C", cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--", ...specs],
+		{ stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+	);
+	const [stdout, stderr, exitCode] = await Promise.all([child.stdout.text(), child.stderr.text(), child.exited]);
+	if (exitCode !== 0) return { kind: "failed", message: stderr.trim() || `git status exited with ${exitCode}` };
 	const paths = new Set<string>();
-	for (const entry of result.stdout.toString().split("\0")) if (entry.length > 3) paths.add(entry.slice(3));
+	for (const entry of stdout.split("\0")) if (entry.length > 3) paths.add(entry.slice(3));
 	return { kind: "matched", paths };
 }
 

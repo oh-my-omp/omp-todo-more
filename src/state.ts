@@ -4,8 +4,9 @@ import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 
 export const TODO_MORE_ENTRY_TYPE = "mouriya.omp.todo-more";
 
-/** The plugin's own part of the list: goal, explanations, timers and commit records. Structure and statuses live in the host list. */
 export const TODO_MORE_NOTES_TYPE = `${TODO_MORE_ENTRY_TYPE}.notes`;
+
+export const PLANNING_DELIVERY_TYPE = `${TODO_MORE_ENTRY_TYPE}.planning`;
 
 export const TODO_MORE_RESULT_MARK = "todoMore";
 
@@ -19,8 +20,12 @@ export const overtimeDetailsSchema = z.object({
 	elapsedMs: z.number(),
 });
 
+export const planningDeliverySchema = z.object({ key: z.string() });
+
 export const TODO_STATUSES = ["pending", "in_progress", "completed", "abandoned"] as const;
 export type TodoStatus = (typeof TODO_STATUSES)[number];
+
+export const nonEmptyText = z.string().refine((value) => value.trim().length > 0, "must not be empty");
 
 export type TodoGoal = { readonly objective: string; readonly measure: string; readonly doneWhen: string };
 
@@ -49,26 +54,36 @@ export const estimatedMinutesSchema = z
 	.positive()
 	.max(Math.floor(Number.MAX_SAFE_INTEGER / 60_000));
 const timestampSchema = z.number().nonnegative().max(Number.MAX_SAFE_INTEGER);
-export const itemTimeSchema = z.union([
+
+export const estimateSchema = z.union([
 	z.object({ kind: z.literal("missing") }),
+	z.object({ kind: z.literal("estimated"), budgetId: z.string().min(1), minutes: estimatedMinutesSchema }),
+]);
+export type Estimate = z.infer<typeof estimateSchema>;
+
+export const progressSchema = z.union([
 	z.object({
-		kind: z.literal("estimated"),
-		budgetId: z.string().min(1),
-		minutes: estimatedMinutesSchema,
+		status: z.literal("pending"),
+		startedAt: timestampSchema.nullable(),
+		elapsedMs: timestampSchema,
+		pausedAt: timestampSchema.nullable(),
+	}),
+	z.object({
+		status: z.literal("in_progress"),
+		startedAt: timestampSchema.nullable(),
 		elapsedMs: timestampSchema,
 		runningSince: timestampSchema.nullable(),
 	}),
+	z.object({
+		status: z.enum(["completed", "abandoned"]),
+		startedAt: timestampSchema.nullable(),
+		elapsedMs: timestampSchema,
+		closedAt: timestampSchema.nullable(),
+	}),
 ]);
-export type ItemTime = z.infer<typeof itemTimeSchema>;
+export type Progress = z.infer<typeof progressSchema>;
 
-export const itemTimestampsSchema = z.object({
-	startedAt: timestampSchema.optional(),
-	pausedAt: timestampSchema.optional(),
-	completedAt: timestampSchema.optional(),
-	abandonedAt: timestampSchema.optional(),
-	statusChangedAt: timestampSchema.optional(),
-});
-export type ItemTimestamps = z.infer<typeof itemTimestampsSchema>;
+export const FRESH: Progress = { status: "pending", startedAt: null, elapsedMs: 0, pausedAt: null };
 
 export type AskWait = { readonly start: number; readonly end: number | null };
 
@@ -87,71 +102,62 @@ function waitedIn(waits: readonly AskWait[], from: number, to: number): number {
 	return total;
 }
 
-export function transitionTime(time: ItemTime, status: TodoStatus, now: number, waits: readonly AskWait[] = []): ItemTime {
-	if (time.kind === "missing") return time;
-	if (status === "in_progress") return time.runningSince === null ? { ...time, runningSince: now } : time;
-	return time.runningSince === null ? time : { ...time, elapsedMs: elapsedTime(time, now, waits), runningSince: null };
+export function elapsedOf(progress: Progress, now: number, waits: readonly AskWait[] = []): number {
+	if (progress.status !== "in_progress" || progress.runningSince === null) return progress.elapsedMs;
+	return progress.elapsedMs + Math.max(0, now - progress.runningSince - waitedIn(waits, progress.runningSince, now));
 }
 
-export function elapsedTime(time: Extract<ItemTime, { kind: "estimated" }>, now: number, waits: readonly AskWait[] = []): number {
-	if (time.runningSince === null) return time.elapsedMs;
-	return time.elapsedMs + Math.max(0, now - time.runningSince - waitedIn(waits, time.runningSince, now));
-}
-
-export function dueAtTime(time: Extract<ItemTime, { kind: "estimated" }>, now: number, waits: readonly AskWait[] = []): number | undefined {
-	if (time.runningSince === null) return undefined;
-	return now + (time.minutes * 60_000 - elapsedTime(time, now, waits));
-}
-
-export function transitionTimestamps(
-	previousStatus: TodoStatus | undefined,
-	nextStatus: TodoStatus,
-	timestamps: ItemTimestamps | undefined,
-	now: number,
-	fallbackStartedAt?: number,
-): ItemTimestamps | undefined {
-	if (previousStatus === nextStatus) return timestamps;
-	const startedAt = timestamps?.startedAt ?? fallbackStartedAt;
-	switch (nextStatus) {
+export function transition(progress: Progress, status: TodoStatus, now: number, waits: readonly AskWait[] = []): Progress {
+	if (progress.status === status) return progress;
+	const startedAt = progress.startedAt;
+	const elapsedMs = elapsedOf(progress, now, waits);
+	switch (status) {
 		case "in_progress":
-			return { startedAt: startedAt ?? now, statusChangedAt: now };
+			return { status, startedAt: startedAt ?? now, elapsedMs, runningSince: now };
 		case "pending":
-			if (previousStatus === "in_progress") {
-				return {
-					...(startedAt === undefined ? {} : { startedAt }),
-					pausedAt: now,
-					statusChangedAt: now,
-				};
-			}
-			return { ...(startedAt === undefined ? {} : { startedAt }), statusChangedAt: now };
+			return { status, startedAt, elapsedMs, pausedAt: progress.status === "in_progress" ? now : null };
 		case "completed":
-			return {
-				...(startedAt === undefined ? {} : { startedAt }),
-				completedAt: now,
-				statusChangedAt: now,
-			};
 		case "abandoned":
-			return {
-				...(startedAt === undefined ? {} : { startedAt }),
-				abandonedAt: now,
-				statusChangedAt: now,
-			};
+			return { status, startedAt, elapsedMs, closedAt: now };
 		default: {
-			const unreachable: never = nextStatus;
+			const unreachable: never = status;
+			throw new Error(`Unexpected todo status: ${String(unreachable)}`);
+		}
+	}
+}
+
+function adopt(progress: Progress, status: TodoStatus): Progress {
+	if (progress.status === status) return progress;
+	const { startedAt, elapsedMs } = progress;
+	switch (status) {
+		case "in_progress":
+			return { status, startedAt, elapsedMs, runningSince: null };
+		case "pending":
+			return { status, startedAt, elapsedMs, pausedAt: null };
+		case "completed":
+		case "abandoned":
+			return { status, startedAt, elapsedMs, closedAt: null };
+		default: {
+			const unreachable: never = status;
 			throw new Error(`Unexpected todo status: ${String(unreachable)}`);
 		}
 	}
 }
 
 export type TodoItem = {
-	readonly id?: string;
+	readonly id: string;
 	readonly title: string;
 	readonly explanation: Explanation;
-	readonly status: TodoStatus;
-	readonly time: ItemTime;
-	readonly timestamps?: ItemTimestamps;
-	readonly commit?: CommitRecord;
+	readonly estimate: Estimate;
+	readonly progress: Progress;
+	readonly commit: CommitRecord | null;
 };
+
+export function dueAt(item: TodoItem, now: number, waits: readonly AskWait[] = []): number | undefined {
+	const { estimate, progress } = item;
+	if (estimate.kind === "missing" || progress.status !== "in_progress" || progress.runningSince === null) return undefined;
+	return now + estimate.minutes * 60_000 - elapsedOf(progress, now, waits);
+}
 
 export type TodoPhase = { readonly name: string; readonly items: readonly TodoItem[] };
 
@@ -161,43 +167,112 @@ export type TodoMoreState =
 
 export const EMPTY: TodoMoreState = { kind: "empty" };
 
-const nonEmpty = z.string().refine((value) => value.trim().length > 0, "must not be empty");
+export const todoGoalSchema = z.object({ objective: nonEmptyText, measure: nonEmptyText, doneWhen: nonEmptyText });
 
-export const todoGoalSchema = z.object({ objective: nonEmpty, measure: nonEmpty, doneWhen: nonEmpty });
-
-// Session data written before the blocked status was removed still says "blocked"; it reads back as pending, as the host reads it.
 export const persistedStatusSchema = z
 	.enum([...TODO_STATUSES, "blocked"])
 	.transform((status): TodoStatus => (status === "blocked" ? "pending" : status));
 
-const itemSnapshotSchema = z.object({
-	id: z.string().min(1).optional(),
-	title: z.string(),
-	explanation: z.string().nullable(),
-	status: persistedStatusSchema,
-	commit: commitRecordSchema.optional(),
-	time: itemTimeSchema.default(() => ({ kind: "missing" })),
-	timestamps: itemTimestampsSchema.optional(),
-});
-
 export const todoMoreSnapshotSchema = z.object({
 	goal: todoGoalSchema.nullable(),
-	phases: z.array(z.object({ name: z.string(), items: z.array(itemSnapshotSchema) })),
+	phases: z.array(
+		z.object({
+			name: z.string(),
+			items: z.array(
+				z.object({
+					id: z.string(),
+					title: z.string(),
+					explanation: z.string().nullable(),
+					status: z.enum(TODO_STATUSES),
+					estimate: estimateSchema,
+					commit: commitRecordSchema.nullable(),
+				}),
+			),
+		}),
+	),
 });
 export type TodoMoreSnapshot = z.infer<typeof todoMoreSnapshotSchema>;
+export type SnapshotItem = TodoMoreSnapshot["phases"][number]["items"][number];
 
-const itemNoteSchema = z.object({
-	id: z.string().min(1).optional(),
-	phase: z.string(),
-	title: z.string(),
-	explanation: z.string().nullable(),
-	time: itemTimeSchema,
-	timestamps: itemTimestampsSchema.optional(),
-	commit: commitRecordSchema.optional(),
-});
+const itemNoteSchema = z
+	.object({
+		id: z.string().min(1),
+		phase: z.string(),
+		title: z.string(),
+		explanation: z.string().nullable(),
+		estimate: estimateSchema,
+		progress: progressSchema,
+		commit: commitRecordSchema.nullable(),
+	})
+	.strict();
+type ItemNote = z.infer<typeof itemNoteSchema>;
 
-/** What the host list cannot hold, attached to its items by phase name and title. */
-export const todoNotesSchema = z.object({ goal: todoGoalSchema.nullable(), items: z.array(itemNoteSchema) });
+const legacyItemNoteSchema = z
+	.object({
+		id: z.string().min(1).optional(),
+		phase: z.string(),
+		title: z.string(),
+		explanation: z.string().nullable(),
+		time: z.union([
+			z.object({ kind: z.literal("missing") }),
+			z.object({
+				kind: z.literal("estimated"),
+				budgetId: z.string().min(1),
+				minutes: estimatedMinutesSchema,
+				elapsedMs: timestampSchema,
+				runningSince: timestampSchema.nullable(),
+			}),
+		]),
+		timestamps: z
+			.object({
+				startedAt: timestampSchema.optional(),
+				pausedAt: timestampSchema.optional(),
+				completedAt: timestampSchema.optional(),
+				abandonedAt: timestampSchema.optional(),
+			})
+			.optional(),
+		commit: commitRecordSchema.optional(),
+	})
+	.transform((legacy) => {
+		const time = legacy.time;
+		const stamps = legacy.timestamps ?? {};
+		const elapsedMs = time.kind === "estimated" ? time.elapsedMs : 0;
+		const runningSince = time.kind === "estimated" ? time.runningSince : null;
+		const startedAt = stamps.startedAt ?? runningSince;
+		const progress: Progress =
+			runningSince !== null
+				? { status: "in_progress", startedAt, elapsedMs, runningSince }
+				: stamps.completedAt !== undefined
+					? { status: "completed", startedAt, elapsedMs, closedAt: stamps.completedAt }
+					: stamps.abandonedAt !== undefined
+						? { status: "abandoned", startedAt, elapsedMs, closedAt: stamps.abandonedAt }
+						: { status: "pending", startedAt, elapsedMs, pausedAt: stamps.pausedAt ?? null };
+		return {
+			id: legacy.id,
+			phase: legacy.phase,
+			title: legacy.title,
+			explanation: legacy.explanation,
+			estimate: time.kind === "estimated" ? { kind: "estimated" as const, budgetId: time.budgetId, minutes: time.minutes } : time,
+			progress,
+			commit: legacy.commit ?? null,
+		};
+	});
+
+export function idAllocator(existing: Iterable<string>): () => string {
+	let max = 0;
+	for (const id of existing) {
+		const match = /^t(\d+)$/.exec(id);
+		if (match?.[1] !== undefined) max = Math.max(max, Number(match[1]));
+	}
+	return () => `t${++max}`;
+}
+
+export const todoNotesSchema = z
+	.object({ goal: todoGoalSchema.nullable(), items: z.array(z.union([itemNoteSchema, legacyItemNoteSchema])) })
+	.transform(({ goal, items }) => {
+		const allocate = idAllocator(items.flatMap((item) => (item.id === undefined ? [] : [item.id])));
+		return { goal, items: items.map((item): ItemNote => ({ ...item, id: item.id ?? allocate() })) };
+	});
 export type TodoNotes = z.infer<typeof todoNotesSchema>;
 
 export const NO_NOTES: TodoNotes = { goal: null, items: [] };
@@ -209,74 +284,44 @@ const hostPhasesSchema = z.array(
 	}),
 );
 
-const hostResultSchema = z
-	.object({
-		role: z.literal("toolResult"),
-		toolName: z.literal("todo"),
-		isError: z.boolean().optional(),
-		details: z.object({ op: z.string().optional(), phases: hostPhasesSchema }).passthrough(),
-	})
-	.passthrough();
-
-export function itemCount(phases: readonly TodoPhase[]): number {
-	return phases.reduce((total, phase) => total + phase.items.length, 0);
-}
+const hostResultSchema = z.object({
+	role: z.literal("toolResult"),
+	toolName: z.literal("todo"),
+	isError: z.boolean().optional(),
+	details: z.object({ op: z.string().optional(), phases: hostPhasesSchema }),
+});
 
 export function stateOf(goal: GoalState, phases: readonly TodoPhase[]): TodoMoreState {
-	return itemCount(phases) === 0 ? EMPTY : { kind: "list", goal, phases };
+	return phases.every((phase) => phase.items.length === 0) ? EMPTY : { kind: "list", goal, phases };
 }
+
+const goalValue = (goal: GoalState): TodoGoal | null => (goal.kind === "set" ? goal.goal : null);
+export const explanationValue = (explanation: Explanation): string | null => (explanation.kind === "explained" ? explanation.text : null);
 
 export function toSnapshot(state: TodoMoreState): TodoMoreSnapshot {
-	switch (state.kind) {
-		case "empty":
-			return { goal: null, phases: [] };
-		case "list":
-			return {
-				goal: state.goal.kind === "set" ? state.goal.goal : null,
-				phases: state.phases.map((phase) => ({
-					name: phase.name,
-					items: phase.items.map((item) => ({
-						...(item.id === undefined ? {} : { id: item.id }),
-						title: item.title,
-						explanation: item.explanation.kind === "explained" ? item.explanation.text : null,
-						status: item.status,
-						time: item.time,
-						...(item.timestamps === undefined ? {} : { timestamps: item.timestamps }),
-						...(item.commit === undefined ? {} : { commit: item.commit }),
-					})),
-				})),
-			};
-		default: {
-			const unreachable: never = state;
-			throw new Error(`Unexpected todo-more state: ${String(unreachable)}`);
-		}
-	}
-}
-
-export function snapshotToState(snapshot: TodoMoreSnapshot): TodoMoreState {
-	const phases: TodoPhase[] = snapshot.phases.map((phase) => ({
-		name: phase.name,
-		items: phase.items.map(
-			(item): TodoItem => ({
-				...(item.id === undefined ? {} : { id: item.id }),
+	if (state.kind === "empty") return { goal: null, phases: [] };
+	return {
+		goal: goalValue(state.goal),
+		phases: state.phases.map((phase) => ({
+			name: phase.name,
+			items: phase.items.map((item) => ({
+				id: item.id,
 				title: item.title,
-				explanation: item.explanation === null ? { kind: "missing" } : { kind: "explained", text: item.explanation },
-				status: item.status,
-				time: item.time,
-				...(item.timestamps === undefined ? {} : { timestamps: item.timestamps }),
-				...(item.commit === undefined ? {} : { commit: item.commit }),
-			}),
-		),
-	}));
-	return stateOf(snapshot.goal === null ? { kind: "missing" } : { kind: "set", goal: snapshot.goal }, phases);
+				explanation: explanationValue(item.explanation),
+				status: item.progress.status,
+				estimate: item.estimate,
+				commit: item.commit,
+			})),
+		})),
+	};
 }
 
-/** One record the list is read from: the plugin's notes, or the host list a `todo` result carried. */
-export type ListRecord =
+export type BranchRecord =
 	| { readonly kind: "notes"; readonly notes: TodoNotes }
-	| { readonly kind: "phases"; readonly phases: HostTodoPhase[] };
+	| { readonly kind: "phases"; readonly phases: HostTodoPhase[] }
+	| { readonly kind: "view" };
 
-export function recordOf(entry: SessionEntry): ListRecord | undefined {
+export function recordOf(entry: SessionEntry): BranchRecord | undefined {
 	if (entry.type === "custom") {
 		if (entry.customType !== TODO_MORE_NOTES_TYPE) return undefined;
 		const parsed = todoNotesSchema.safeParse(entry.data);
@@ -284,28 +329,29 @@ export function recordOf(entry: SessionEntry): ListRecord | undefined {
 	}
 	if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.toolName !== "todo") return undefined;
 	const parsed = hostResultSchema.safeParse(entry.message);
-	if (!parsed.success || parsed.data.isError === true || parsed.data.details.op === "view") return undefined;
-	return { kind: "phases", phases: parsed.data.details.phases };
+	if (!parsed.success || parsed.data.isError === true) return undefined;
+	return parsed.data.details.op === "view" ? { kind: "view" } : { kind: "phases", phases: parsed.data.details.phases };
 }
 
-const noteKey = (phase: string, title: string): string => `${phase}\u0000${title}`;
-
-/** Structure and statuses come from the host list only; a note with no matching host item contributes nothing. */
 export function joinHost(phases: readonly HostTodoPhase[], notes: TodoNotes): TodoMoreState {
-	const known = new Map<string, TodoNotes["items"][number]>();
-	for (const note of notes.items) known.set(noteKey(note.phase, note.title), note);
+	const known = new Map<string, ItemNote>();
+	for (const note of notes.items) known.set(`${note.phase}\u0000${note.title}`, note);
+	const allocate = idAllocator(notes.items.map((note) => note.id));
+	const taken = new Set<string>();
 	const joined = phases.map((phase) => ({
 		name: phase.name,
 		items: phase.tasks.map((task): TodoItem => {
-			const note = known.get(noteKey(phase.name, task.content));
+			const note = known.get(`${phase.name}\u0000${task.content}`);
+			const id = note !== undefined && !taken.has(note.id) ? note.id : allocate();
+			taken.add(id);
+			const text = note?.explanation ?? null;
 			return {
-				...(note?.id === undefined ? {} : { id: note.id }),
+				id,
 				title: task.content,
-				explanation: note?.explanation == null ? { kind: "missing" } : { kind: "explained", text: note.explanation },
-				time: note?.time ?? { kind: "missing" },
-				status: task.status,
-				...(note?.timestamps === undefined ? {} : { timestamps: note.timestamps }),
-				...(note?.commit === undefined ? {} : { commit: note.commit }),
+				explanation: text === null ? { kind: "missing" } : { kind: "explained", text },
+				estimate: note?.estimate ?? { kind: "missing" },
+				progress: adopt(note?.progress ?? FRESH, task.status),
+				commit: note?.commit ?? null,
 			};
 		}),
 	}));
@@ -313,51 +359,39 @@ export function joinHost(phases: readonly HostTodoPhase[], notes: TodoNotes): To
 }
 
 export function toNotes(state: TodoMoreState): TodoNotes {
-	switch (state.kind) {
-		case "empty":
-			return NO_NOTES;
-		case "list":
-			return {
-				goal: state.goal.kind === "set" ? state.goal.goal : null,
-				items: state.phases.flatMap((phase) =>
-					phase.items.map((item) => ({
-						...(item.id === undefined ? {} : { id: item.id }),
-						phase: phase.name,
-						title: item.title,
-						explanation: item.explanation.kind === "explained" ? item.explanation.text : null,
-						time: item.time,
-						...(item.timestamps === undefined ? {} : { timestamps: item.timestamps }),
-						...(item.commit === undefined ? {} : { commit: item.commit }),
-					})),
-				),
-			};
-		default: {
-			const unreachable: never = state;
-			throw new Error(`Unexpected todo-more state: ${String(unreachable)}`);
-		}
-	}
+	if (state.kind === "empty") return NO_NOTES;
+	return {
+		goal: goalValue(state.goal),
+		items: state.phases.flatMap((phase) =>
+			phase.items.map((item) => ({
+				id: item.id,
+				phase: phase.name,
+				title: item.title,
+				explanation: explanationValue(item.explanation),
+				estimate: item.estimate,
+				progress: item.progress,
+				commit: item.commit,
+			})),
+		),
+	};
 }
 
 export function hostPhases(state: TodoMoreState): HostTodoPhase[] {
-	switch (state.kind) {
-		case "empty":
-			return [];
-		case "list":
-			return state.phases.map((phase) => ({
-				name: phase.name,
-				tasks: phase.items.map((item) => ({ content: item.title, status: item.status })),
-			}));
-		default: {
-			const unreachable: never = state;
-			throw new Error(`Unexpected todo-more state: ${String(unreachable)}`);
-		}
-	}
+	if (state.kind === "empty") return [];
+	return state.phases.map((phase) => ({
+		name: phase.name,
+		tasks: phase.items.map((item) => ({ content: item.title, status: item.progress.status })),
+	}));
+}
+
+export function isOpen(status: TodoStatus): boolean {
+	return status === "pending" || status === "in_progress";
 }
 
 export function actionableItems(state: TodoMoreState): { readonly phase: string; readonly item: TodoItem }[] {
 	if (state.kind === "empty") return [];
 	return state.phases.flatMap((phase) =>
-		phase.items.filter((item) => item.status === "pending" || item.status === "in_progress").map((item) => ({ phase: phase.name, item })),
+		phase.items.filter((item) => isOpen(item.progress.status)).map((item) => ({ phase: phase.name, item })),
 	);
 }
 
@@ -371,16 +405,7 @@ export function goalLines(goal: TodoGoal): string[] {
 }
 
 export function explanationText(item: TodoItem): string {
-	switch (item.explanation.kind) {
-		case "explained":
-			return item.explanation.text;
-		case "missing":
-			return "(no explanation yet: add one with explain)";
-		default: {
-			const unreachable: never = item.explanation;
-			throw new Error(`Unexpected explanation: ${String(unreachable)}`);
-		}
-	}
+	return explanationValue(item.explanation) ?? "(no explanation yet: add one with explain)";
 }
 
 export function phaseSlug(name: string): string {
@@ -394,40 +419,48 @@ export function phaseSlug(name: string): string {
 	return slug || encodeURIComponent(name.trim().toLowerCase());
 }
 
-export function itemDisplayIds(phases: readonly TodoPhase[]): WeakMap<TodoItem, string> {
-	const used = new Set<string>();
-	let maxNum = 0;
-	for (const phase of phases) {
-		for (const item of phase.items) {
-			if (item.id !== undefined) {
-				used.add(item.id);
-				const match = /^t(\d+)$/.exec(item.id);
-				if (match?.[1] !== undefined) maxNum = Math.max(maxNum, Number(match[1]));
-			}
-		}
-	}
-	const ids = new WeakMap<TodoItem, string>();
-	for (const phase of phases) {
-		for (const item of phase.items) {
-			if (item.id !== undefined) {
-				ids.set(item, item.id);
-			} else {
-				let candidate: string;
-				do {
-					candidate = `t${++maxNum}`;
-				} while (used.has(candidate));
-				used.add(candidate);
-				ids.set(item, candidate);
-			}
-		}
-	}
-	return ids;
-}
-
 export function commitRecordText(commit: CommitRecord): string {
 	return `${commit.sha.slice(0, 7)} ${JSON.stringify(commit.message)}`;
 }
 
 export function commitScopeText(scope: CommitScope): string {
 	return scope.kind === "all" ? "this agent's changes" : scope.files.join(" ");
+}
+
+const minuteOf = (ms: number | null | undefined): number | null => (ms == null ? null : Math.floor(ms / 60_000));
+
+function progressMark(item: TodoItem, now: number, waits: readonly AskWait[]): number | null {
+	const progress = item.progress;
+	switch (progress.status) {
+		case "in_progress":
+			return minuteOf(dueAt(item, now, waits));
+		case "pending":
+			return progress.startedAt === null ? null : minuteOf(progress.pausedAt);
+		case "completed":
+		case "abandoned":
+			return minuteOf(progress.closedAt);
+		default: {
+			const unreachable: never = progress;
+			throw new Error(`Unexpected progress: ${String(unreachable)}`);
+		}
+	}
+}
+
+export function semanticStateKey(state: TodoMoreState, now: number, waits: readonly AskWait[]): string {
+	if (state.kind === "empty") return "empty";
+	return JSON.stringify({
+		goal: goalValue(state.goal),
+		phases: state.phases.map((phase) => ({
+			name: phase.name,
+			items: phase.items.map((item) => ({
+				id: item.id,
+				title: item.title,
+				status: item.progress.status,
+				explanation: explanationValue(item.explanation),
+				minutes: item.estimate.kind === "estimated" ? item.estimate.minutes : null,
+				mark: progressMark(item, now, waits),
+				commit: item.commit?.sha ?? null,
+			})),
+		})),
+	});
 }

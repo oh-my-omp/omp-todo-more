@@ -1,35 +1,33 @@
 import { z } from "@oh-my-pi/omptype/zod";
-import { type CommitScope, estimatedMinutesSchema } from "./state.ts";
-
-const nonEmpty = z.string().refine((value) => value.trim().length > 0, "must not be empty");
+import { type CommitScope, estimatedMinutesSchema, nonEmptyText } from "./state.ts";
 
 export const goalParamSchema = z.object({
-	title: nonEmpty.describe("Objective title"),
-	summary: nonEmpty.describe("How progress is measured"),
-	acceptance: nonEmpty.describe("Concrete done criteria"),
+	title: nonEmptyText.describe("Objective title"),
+	summary: nonEmptyText.describe("How progress is measured"),
+	acceptance: nonEmptyText.describe("Concrete done criteria"),
 });
 
 export const addItemParamSchema = z.object({
 	phase: z.string().optional().describe('Phase name (defaults to "Tasks")'),
-	title: nonEmpty.describe("Concise 5-10 word task title"),
-	detail: nonEmpty.describe("Scope and completion criteria"),
-	minutes: estimatedMinutesSchema.describe("Positive integer estimate in minutes (<= leafMaxMinutes, default 60)"),
+	title: nonEmptyText.describe("Concise 5-10 word task title"),
+	detail: nonEmptyText.describe("Scope and completion criteria"),
+	minutes: estimatedMinutesSchema.describe("Positive integer estimate in minutes (<= the leafMaxMinutes setting)"),
 });
 
 export const explainParamSchema = z.object({
-	id: nonEmpty.describe("Task ID"),
-	note: nonEmpty.describe("Updated explanation"),
+	id: nonEmptyText.describe("Task ID"),
+	note: nonEmptyText.describe("Updated explanation"),
 });
 
 export const estimateParamSchema = z.object({
-	id: nonEmpty.describe("Task ID"),
-	minutes: estimatedMinutesSchema.describe("New positive integer minutes (<= leafMaxMinutes; rejected after overtime)"),
+	id: nonEmptyText.describe("Task ID"),
+	minutes: estimatedMinutesSchema.describe("New positive integer minutes (<= the leafMaxMinutes setting; rejected after overtime)"),
 });
 
 export const commitParamSchema = z.object({
-	message: nonEmpty.describe("Commit message: first line is the subject, later lines the body; Model: trailers are appended"),
+	message: nonEmptyText.describe("Commit message: first line is the subject, later lines the body; Model: trailers are appended"),
 	paths: z
-		.array(nonEmpty)
+		.array(nonEmptyText)
 		.min(1)
 		.optional()
 		.describe(
@@ -39,18 +37,22 @@ export const commitParamSchema = z.object({
 
 export const parametersSchema = z.object({
 	goal: goalParamSchema.optional().describe("Initialize or update the goal (required when creating a new list)"),
-	add: z.array(addItemParamSchema).min(1).optional().describe("Add tasks; split work over 60 min into multiple items"),
-	start_id: nonEmpty.optional().describe("Task ID to mark in_progress"),
+	add: z
+		.array(addItemParamSchema)
+		.min(1)
+		.optional()
+		.describe("Add tasks; split work longer than the leafMaxMinutes setting into multiple items"),
+	start_id: nonEmptyText.optional().describe("Task ID to mark in_progress"),
 	explain: z.array(explainParamSchema).min(1).optional().describe("Update explanations for existing tasks by ID"),
 	estimate: z.array(estimateParamSchema).min(1).optional().describe("Revise estimates by ID before an overtime warning"),
-	done_id: nonEmpty.optional().describe("Task ID to mark completed; one per call because one completion owes one commit"),
+	done_id: nonEmptyText.optional().describe("Task ID to mark completed; one per call because one completion owes one commit"),
 	commit: commitParamSchema
 		.optional()
 		.describe(
 			"Commit owed by the done_id completion; only valid with done_id. Required while this agent has uncommitted work; ignored in a subagent sharing its parent's worktree",
 		),
-	drop_ids: z.array(nonEmpty).min(1).optional().describe("Task IDs to mark abandoned"),
-	view: nonEmpty.optional().describe('Inspect without mutating: "all" (default on empty call), "current", or a phase name/slug'),
+	drop_ids: z.array(nonEmptyText).min(1).optional().describe("Task IDs to mark abandoned"),
+	view: nonEmptyText.optional().describe('Inspect without mutating: "all" (default on empty call), "current", or a phase name/slug'),
 });
 
 export type GoalParam = z.infer<typeof goalParamSchema>;
@@ -110,7 +112,7 @@ export function parseTodoParams(raw: unknown): ParsedTodoParams {
 	return { kind: "ok", params: parsed.data };
 }
 
-export type TodoPreview = {
+export type TodoCallPreview = {
 	goal?: Partial<GoalParam>;
 	add: { phase?: string; title?: string; detail?: string; minutes?: number }[];
 	start_id?: string;
@@ -159,8 +161,8 @@ const partialParamsSchema = z.object({
 	view: z.string().optional(),
 });
 
-export function previewTodoArgs(raw: unknown): TodoPreview {
-	const empty: TodoPreview = {
+export function previewTodoArgs(raw: unknown): TodoCallPreview {
+	const empty: TodoCallPreview = {
 		add: [],
 		explain: [],
 		estimate: [],
@@ -176,16 +178,16 @@ export function previewTodoArgs(raw: unknown): TodoPreview {
 	}
 	const parsed = parseTodoParams(raw);
 	return {
-		...(partial.data.goal === undefined ? {} : { goal: partial.data.goal }),
+		goal: partial.data.goal,
 		add: partial.data.add ?? [],
-		...(partial.data.start_id === undefined ? {} : { start_id: partial.data.start_id }),
+		start_id: partial.data.start_id,
 		explain: partial.data.explain ?? [],
 		estimate: partial.data.estimate ?? [],
-		...(partial.data.done_id === undefined ? {} : { done_id: partial.data.done_id }),
-		...(partial.data.commit === undefined ? {} : { commit: partial.data.commit }),
+		done_id: partial.data.done_id,
+		commit: partial.data.commit,
 		drop_ids: partial.data.drop_ids ?? [],
-		...(partial.data.view === undefined ? {} : { view: partial.data.view }),
+		view: partial.data.view,
 		complete: parsed.kind === "ok",
-		...(parsed.kind === "invalid" ? { error: parsed.message } : {}),
+		error: parsed.kind === "invalid" ? parsed.message : undefined,
 	};
 }

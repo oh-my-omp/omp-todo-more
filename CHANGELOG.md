@@ -14,6 +14,15 @@
 ### Changed
 
 - Updated the shared copy of `compact-handoff.ts` to oh-my-omp/shared@db9dde4.
+- Each item's progress is recorded in a shape fixed by its status (pending: first start and pause time; in progress: first start and running clock; completed or abandoned: first start and close time). The clock now runs for items without an estimate too, so an estimate added later counts the time already spent. The notes entry stores item IDs, estimates and progress; notes written by earlier versions still load.
+- Items are identified by ID everywhere after the host list is joined with the notes: the `/todo-more` editor edits explanations by ID, and planning highlights and card deltas follow IDs.
+- The planning reminder records each delivery as a `mouriya.omp.todo-more.planning` session entry and decides what the model last saw from the branch fold, instead of scanning its own reminder text and rebuilding the session context on every tool result.
+- The `/todo-more` panel and the HUD read the live host list, as the `todo` tool does.
+- The `todo` description and parameter hints name the `leafMaxMinutes` setting instead of a fixed 60 minutes.
+
+### Removed
+
+- Todo result cards no longer read results written by earlier versions; those show as invalid result details.
 
 ## [0.2.5] - 2026-11-23
 

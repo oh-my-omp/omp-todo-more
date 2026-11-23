@@ -1,33 +1,32 @@
 import { z } from "@oh-my-pi/omptype/zod";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { ExtensionContext, SessionEntry, SessionManager } from "@oh-my-pi/pi-coding-agent";
+import type { SessionEntry, SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { SESSION_EXIT_CUSTOM_TYPE, TOOL_EXECUTION_START_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import {
 	type AskWait,
+	type BranchRecord,
 	EMPTY,
 	joinHost,
-	type ListRecord,
 	NO_NOTES,
 	OVERTIME_TYPE,
 	overtimeDetailsSchema,
+	PLANNING_DELIVERY_TYPE,
+	planningDeliverySchema,
 	REMINDER_TYPE,
 	recordOf,
+	semanticStateKey,
 	type TodoMoreState,
 	type TodoNotes,
 } from "./state.ts";
 
-export type HumanMark =
-	| { readonly kind: "message"; readonly timestamp: number; readonly content: unknown; readonly state: TodoMoreState }
-	| {
-			readonly kind: "custom";
-			readonly customType: string;
-			readonly timestamp: number;
-			readonly content: unknown;
-			readonly state: TodoMoreState;
-	  };
+export type SeenList = { readonly key: string; readonly state: TodoMoreState };
 
-/** Callers MUST NOT mutate the collections. */
+export type PlanningFacts = {
+	readonly delivered: string | null;
+	readonly seen: SeenList | null;
+	readonly recovered: boolean;
+};
+
 export type BranchFacts = {
 	readonly state: TodoMoreState;
 	readonly notes: TodoNotes;
@@ -35,7 +34,7 @@ export type BranchFacts = {
 	readonly overtimeWarned: ReadonlySet<string>;
 	readonly remindersSinceUserMessage: number;
 	readonly modelsSinceCommit: readonly string[];
-	readonly humans: readonly HumanMark[];
+	readonly planning: PlanningFacts;
 };
 
 type Accumulator = {
@@ -50,7 +49,7 @@ type Accumulator = {
 	remindersSinceUserMessage: number;
 	readonly commitShas: Set<string>;
 	modelsSinceCommit: string[];
-	readonly humans: HumanMark[];
+	planning: PlanningFacts;
 	facts: BranchFacts | undefined;
 };
 
@@ -67,7 +66,7 @@ function emptyAccumulator(): Accumulator {
 		remindersSinceUserMessage: 0,
 		commitShas: new Set(),
 		modelsSinceCommit: [],
-		humans: [],
+		planning: { delivered: null, seen: null, recovered: true },
 		facts: undefined,
 	};
 }
@@ -78,11 +77,6 @@ function waitsOf(acc: Accumulator): AskWait[] {
 	const waits = acc.closedWaits.slice();
 	for (const start of acc.openAsks.values()) waits.push({ start, end: null });
 	return waits;
-}
-
-export function isHumanMessage(message: AgentMessage): message is Extract<AgentMessage, { role: "user" | "custom" }> {
-	if (message.role === "user") return message.attribution !== "agent" && !message.synthetic;
-	return message.role === "custom" && message.attribution === "user" && message.display !== false;
 }
 
 function foldAsk(acc: Accumulator, entry: SessionEntry): void {
@@ -102,30 +96,40 @@ function foldAsk(acc: Accumulator, entry: SessionEntry): void {
 	}
 }
 
-function foldState(acc: Accumulator, record: ListRecord | undefined): void {
+function foldState(acc: Accumulator, entry: SessionEntry, record: BranchRecord | undefined): void {
 	if (record === undefined) return;
 	switch (record.kind) {
 		case "notes":
 			acc.notes = record.notes;
-			break;
+			acc.state = joinHost(acc.phases, acc.notes);
+			return;
 		case "phases":
 			acc.phases = record.phases;
+			acc.state = joinHost(acc.phases, acc.notes);
+			break;
+		case "view":
 			break;
 		default: {
 			const unreachable: never = record;
 			throw new Error(`Unexpected todo record: ${String(unreachable)}`);
 		}
 	}
-	acc.state = joinHost(acc.phases, acc.notes);
+	const key = semanticStateKey(acc.state, Date.parse(entry.timestamp), waitsOf(acc));
+	acc.planning = { ...acc.planning, seen: { key, state: acc.state } };
 }
 
-function commitShasOf(record: ListRecord | undefined): string[] {
-	if (record?.kind !== "notes") return [];
-	return record.notes.items.flatMap((note) => (note.commit === undefined ? [] : [note.commit.sha]));
+function foldPlanning(acc: Accumulator, entry: SessionEntry): void {
+	if (entry.type === "compaction" || entry.type === "branch_summary") {
+		acc.planning = { ...acc.planning, recovered: false };
+		return;
+	}
+	if (entry.type !== "custom" || entry.customType !== PLANNING_DELIVERY_TYPE) return;
+	const parsed = planningDeliverySchema.safeParse(entry.data);
+	if (parsed.success) acc.planning = { delivered: parsed.data.key, seen: { key: parsed.data.key, state: acc.state }, recovered: true };
 }
 
-function foldModels(acc: Accumulator, entry: SessionEntry, record: ListRecord | undefined): void {
-	const shas = commitShasOf(record);
+function foldModels(acc: Accumulator, entry: SessionEntry, record: BranchRecord | undefined): void {
+	const shas = record?.kind === "notes" ? record.notes.items.flatMap((note) => (note.commit === null ? [] : [note.commit.sha])) : [];
 	if (shas.some((sha) => !acc.commitShas.has(sha))) {
 		for (const sha of shas) acc.commitShas.add(sha);
 		acc.modelsSinceCommit = [];
@@ -138,11 +142,7 @@ function foldModels(acc: Accumulator, entry: SessionEntry, record: ListRecord | 
 
 function foldMessages(acc: Accumulator, entry: SessionEntry): void {
 	if (entry.type === "message") {
-		const message = entry.message;
-		if (message.role === "user" && message.synthetic !== true) acc.remindersSinceUserMessage = 0;
-		if (isHumanMessage(message)) {
-			acc.humans.push({ kind: "message", timestamp: message.timestamp, content: message.content, state: acc.state });
-		}
+		if (entry.message.role === "user" && entry.message.synthetic !== true) acc.remindersSinceUserMessage = 0;
 		return;
 	}
 	if (entry.type !== "custom_message") return;
@@ -151,21 +151,13 @@ function foldMessages(acc: Accumulator, entry: SessionEntry): void {
 		const parsed = overtimeDetailsSchema.safeParse(entry.details);
 		if (parsed.success) acc.overtimeWarned.add(parsed.data.budgetId);
 	}
-	if (entry.attribution === "user" && entry.display !== false) {
-		acc.humans.push({
-			kind: "custom",
-			customType: entry.customType,
-			timestamp: Date.parse(entry.timestamp),
-			content: entry.content,
-			state: acc.state,
-		});
-	}
 }
 
 function foldEntry(acc: Accumulator, entry: SessionEntry): void {
 	const record = recordOf(entry);
 	foldAsk(acc, entry);
-	foldState(acc, record);
+	foldState(acc, entry, record);
+	foldPlanning(acc, entry);
 	foldModels(acc, entry, record);
 	foldMessages(acc, entry);
 }
@@ -191,7 +183,7 @@ function factsOf(acc: Accumulator): BranchFacts {
 		overtimeWarned: acc.overtimeWarned,
 		remindersSinceUserMessage: acc.remindersSinceUserMessage,
 		modelsSinceCommit: acc.modelsSinceCommit,
-		humans: acc.humans,
+		planning: acc.planning,
 	};
 	return acc.facts;
 }
@@ -202,19 +194,7 @@ export function foldBranch(entries: readonly SessionEntry[]): BranchFacts {
 	return factsOf(acc);
 }
 
-export function readTodoMore(entries: readonly SessionEntry[]): TodoMoreState {
-	return foldBranch(entries).state;
-}
-
-export function askWaits(entries: readonly SessionEntry[]): AskWait[] {
-	return foldBranch(entries).waits.slice();
-}
-
 export type BranchSource = Pick<SessionManager, "getBranchView" | "getLeafId">;
-
-export function contextBranch(ctx: Pick<ExtensionContext, "sessionManager">): BranchSource {
-	return ctx.sessionManager as SessionManager;
-}
 
 const accumulators = new WeakMap<BranchSource, Accumulator>();
 
@@ -228,24 +208,4 @@ export function branchFacts(manager: BranchSource): BranchFacts {
 	}
 	foldFrom(acc, view);
 	return factsOf(acc);
-}
-
-export function stateForHumanMessage(facts: BranchFacts, message: Extract<AgentMessage, { role: "user" | "custom" }>): TodoMoreState {
-	if (message.role === "custom") {
-		// OMP can stamp the stored custom_message a millisecond after the live
-		// message. Use the first matching record at or after its emission, not
-		// exact equality or the newest matching text (which conflates repeats).
-		const mark = facts.humans.find(
-			(human) =>
-				human.kind === "custom" &&
-				human.customType === message.customType &&
-				human.timestamp >= message.timestamp &&
-				Bun.deepEquals(human.content, message.content),
-		);
-		return mark?.state ?? facts.state;
-	}
-	const mark = facts.humans.findLast(
-		(human) => human.kind === "message" && human.timestamp === message.timestamp && Bun.deepEquals(human.content, message.content),
-	);
-	return mark?.state ?? facts.state;
 }

@@ -2,7 +2,6 @@ import type { AgentTool, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core
 import type { AgentSession, ExtensionAPI, ExtensionContext, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
-import type { ToolRenderer } from "@oh-my-pi/pi-tui/tools/renderer";
 import { logger } from "@oh-my-pi/pi-utils";
 import { canonicalToolOrder } from "./omomp-shared/active-tools.ts";
 import { tr } from "./omomp-shared/i18n.ts";
@@ -57,15 +56,20 @@ async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promis
 		await session.setActiveToolsByName(canonicalToolOrder(session.getAllToolInfos(), [...enabled, TOOL_NAME]));
 		return;
 	}
-	const hostTool = {
+	const hostTool: AgentTool<typeof parametersSchema, TodoMoreDetails> = {
 		...TOOL_FIELDS,
 		get label(): string {
 			return tr("Todo", "待办");
 		},
 		execute: async (_toolCallId: string, params: unknown) => executeTodo(session, params, ctx),
-	} satisfies AgentTool<typeof parametersSchema, TodoMoreDetails, Theme> & ToolRenderer;
-	// refreshRpcHostTools' AgentTool[] parameter cannot express a Theme-typed renderCall in strict variance; the satisfies above pins the real shape.
-	await session.refreshRpcHostTools([hostTool as AgentTool]);
+		renderCall: (args, options, theme) => (isTheme(theme) ? renderTodoCall(args, options, theme) : undefined),
+		renderResult: (result, options, theme) => (isTheme(theme) ? renderTodoResult(result, options, theme) : undefined),
+	};
+	await session.refreshRpcHostTools([hostTool]);
+}
+
+function isTheme(value: unknown): value is Theme {
+	return typeof value === "object" && value !== null && "fg" in value && "bold" in value && "styledSymbol" in value;
 }
 
 const guardedSessions = new WeakSet<AgentSession>();
@@ -118,6 +122,5 @@ export default async function todoMore(pi: ExtensionAPI): Promise<void> {
 	registerPlanning(pi);
 	registerUi(pi);
 	await initializeTernPlugin();
-	// Subscribed after the Tern await: a factory rejected by Tern initialization never reaches this line, so its event-bus listener cannot outlive the dropped plugin.
 	registerReviewApi(pi);
 }

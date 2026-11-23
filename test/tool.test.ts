@@ -3,14 +3,17 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
-import { branchFacts, readTodoMore } from "../src/branch.ts";
+import { branchFacts, foldBranch } from "../src/branch.ts";
 import type { TodoSession } from "../src/commit.ts";
 import { formatClock, formatDateTime } from "../src/format.ts";
 import { DEFAULT_SETTINGS } from "../src/settings.ts";
 import {
-	elapsedTime,
-	type ItemTime,
+	type Estimate,
+	elapsedOf,
+	FRESH,
+	joinHost,
 	OVERTIME_TYPE,
+	type Progress,
 	TODO_MORE_ENTRY_TYPE,
 	TODO_MORE_NOTES_TYPE,
 	type TodoGoal,
@@ -32,12 +35,36 @@ const goalInput = {
 	summary: goal.measure,
 	acceptance: goal.doneWhen,
 };
-type SnapshotItem = TodoMoreSnapshot["phases"][number]["items"][number];
-type EstimatedTime = Extract<ItemTime, { kind: "estimated" }>;
+type ItemNote = TodoNotes["items"][number];
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const missing: Estimate = { kind: "missing" };
+const time = (budgetId: string, minutes: number): Estimate => ({ kind: "estimated", budgetId, minutes });
+const active = (startedAt: number | null, elapsedMs = 0, runningSince: number | null = null): Progress => ({
+	status: "in_progress",
+	startedAt,
+	elapsedMs,
+	runningSince,
+});
+const parked = (startedAt: number | null, elapsedMs = 0, pausedAt: number | null = null): Progress => ({
+	status: "pending",
+	startedAt,
+	elapsedMs,
+	pausedAt,
+});
+const closed = (status: "completed" | "abandoned", startedAt: number | null, elapsedMs = 0, closedAt: number | null = null): Progress => ({
+	status,
+	startedAt,
+	elapsedMs,
+	closedAt,
+});
 
-async function at<T>(time: number, invoke: () => Promise<T>, tick = 0): Promise<T> {
+function note(id: string, phase: string, title: string, explanation: string | null, estimate: Estimate, progress: Progress): ItemNote {
+	return { id, phase, title, explanation, estimate, progress, commit: null };
+}
+
+async function at<T>(now: number, invoke: () => Promise<T>, tick = 0): Promise<T> {
 	let reads = 0;
-	const clock = spyOn(Date, "now").mockImplementation(() => time + tick * reads++);
+	const clock = spyOn(Date, "now").mockImplementation(() => now + tick * reads++);
 	try {
 		return await invoke();
 	} finally {
@@ -49,30 +76,32 @@ type Fixture = {
 	session: TodoSession;
 	projections: HostTodoPhase[][];
 	snapshot: () => TodoMoreSnapshot;
+	notes: () => TodoNotes;
 	notesEntries: () => SessionEntry[];
 	run: (raw: unknown, leafMaxMinutes?: number) => Promise<AgentToolResult<TodoMoreDetails>>;
 	call: (args: unknown) => Promise<AgentToolResult<TodoMoreDetails>>;
-	callAt: (time: number, args: unknown) => Promise<AgentToolResult<TodoMoreDetails>>;
+	callAt: (now: number, args: unknown) => Promise<AgentToolResult<TodoMoreDetails>>;
 };
 
-function notesOf(snapshot: TodoMoreSnapshot): TodoNotes {
-	return {
-		goal: snapshot.goal,
-		items: snapshot.phases.flatMap((phase) =>
-			phase.items.map((item) => ({
-				...(item.id === undefined ? {} : { id: item.id }),
-				phase: phase.name,
-				title: item.title,
-				explanation: item.explanation,
-				time: item.time,
-				...(item.timestamps === undefined ? {} : { timestamps: item.timestamps }),
-				...(item.commit === undefined ? {} : { commit: item.commit }),
-			})),
-		),
-	};
+function phasesOf(notes: TodoNotes): HostTodoPhase[] {
+	const phases: { name: string; tasks: { content: string; status: ItemNote["progress"]["status"] }[] }[] = [];
+	for (const item of notes.items) {
+		const phase = phases.find((candidate) => candidate.name === item.phase) ?? { name: item.phase, tasks: [] };
+		if (!phases.includes(phase)) phases.push(phase);
+		phase.tasks.push({ content: item.title, status: item.progress.status });
+	}
+	return phases;
 }
 
-function fixture(initial?: TodoMoreSnapshot): Fixture {
+function snapshotOf(notes: TodoNotes): TodoMoreSnapshot {
+	return toSnapshot(joinHost(phasesOf(notes), notes));
+}
+
+function withItem(notes: TodoNotes, id: string, patch: Partial<ItemNote>): TodoNotes {
+	return { ...notes, items: notes.items.map((item) => (item.id === id ? { ...item, ...patch } : item)) };
+}
+
+function fixture(initial?: TodoNotes): Fixture {
 	const sessionManager = SessionManager.inMemory("/tmp/todo-more-tool-tests");
 	const projections: HostTodoPhase[][] = [];
 	let list: HostTodoPhase[] = [];
@@ -86,20 +115,21 @@ function fixture(initial?: TodoMoreSnapshot): Fixture {
 		},
 	};
 	if (initial !== undefined) {
-		list = projected(initial);
-		sessionManager.appendCustomEntry(TODO_MORE_NOTES_TYPE, notesOf(initial));
-		sessionManager.appendMessage(todoResultMessage({ op: "update", phases: projected(initial) }, epoch));
+		list = phasesOf(initial);
+		sessionManager.appendCustomEntry(TODO_MORE_NOTES_TYPE, initial);
+		sessionManager.appendMessage(todoResultMessage({ op: "batch", phases: phasesOf(initial) }, epoch));
 	}
 	const run: Fixture["run"] = async (raw, leafMaxMinutes) => {
 		const result = await runTodo(session, raw, leafMaxMinutes);
 		sessionManager.appendMessage(todoResultMessage(result.details, Date.now(), result.isError === true));
 		return result;
 	};
-	const callAt = (time: number, args: unknown): Promise<AgentToolResult<TodoMoreDetails>> => at(time, () => run(args));
+	const callAt = (now: number, args: unknown): Promise<AgentToolResult<TodoMoreDetails>> => at(now, () => run(args));
 	return {
 		session,
 		projections,
-		snapshot: () => toSnapshot(readTodoMore(sessionManager.getBranch())),
+		snapshot: () => toSnapshot(foldBranch(sessionManager.getBranch()).state),
+		notes: () => branchFacts(sessionManager).notes,
 		notesEntries: () => sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === TODO_MORE_NOTES_TYPE),
 		run,
 		call: (args) => callAt(epoch, args),
@@ -107,35 +137,28 @@ function fixture(initial?: TodoMoreSnapshot): Fixture {
 	};
 }
 
-function projected(snapshot: TodoMoreSnapshot): HostTodoPhase[] {
-	return snapshot.phases.map((phase) => ({
-		name: phase.name,
-		tasks: phase.items.map((item) => ({ content: item.title, status: item.status })),
-	}));
+function expectSaved(harness: Fixture, result: AgentToolResult<TodoMoreDetails>, expected: TodoNotes, previousProjections: number): void {
+	const snapshot = snapshotOf(expected);
+	expect(result.isError).not.toBe(true);
+	expect(harness.snapshot()).toEqual(snapshot);
+	expect(result.details?.more).toEqual(snapshot);
+	expect(result.details?.phases).toStrictEqual(phasesOf(expected));
+	expect(harness.session.getTodoPhases()).toStrictEqual(phasesOf(expected));
+	expect(harness.notes()).toEqual(expected);
+	expect(harness.projections).toHaveLength(previousProjections + 1);
+	expect(harness.projections.at(-1)).toStrictEqual(phasesOf(expected));
+	expectNoFullListEntry(harness);
 }
 
-function expectSaved(
-	harness: Fixture,
-	result: AgentToolResult<TodoMoreDetails>,
-	expected: TodoMoreSnapshot,
-	previousProjections: number,
-): void {
-	expect(result.isError).not.toBe(true);
-	expect(harness.snapshot()).toEqual(expected);
-	expect(result.details?.more).toEqual(expected);
-	expect(result.details?.phases).toStrictEqual(projected(expected));
-	expect(harness.session.getTodoPhases()).toStrictEqual(projected(expected));
-	expect(branchFacts(harness.session.sessionManager).notes).toEqual(notesOf(expected));
-	expect(harness.projections).toHaveLength(previousProjections + 1);
-	expect(harness.projections.at(-1)).toStrictEqual(projected(expected));
-	expectNoFullListEntry(harness);
+function keysOf(data: unknown): string[] {
+	return typeof data === "object" && data !== null ? Object.keys(data).sort() : [];
 }
 
 function expectNoFullListEntry(harness: Fixture): void {
 	for (const entry of harness.session.sessionManager.getBranch()) {
 		if (entry.type !== "custom" || !entry.customType.startsWith(TODO_MORE_ENTRY_TYPE)) continue;
 		expect(entry.customType).toBe(TODO_MORE_NOTES_TYPE);
-		expect(Object.keys(entry.data as object).sort()).toEqual(["goal", "items"]);
+		expect(keysOf(entry.data)).toEqual(["goal", "items"]);
 	}
 }
 
@@ -150,8 +173,8 @@ async function expectRejected(
 	const result = await invoke();
 	expect(result.isError).toBe(true);
 	expect(result.details?.more).toEqual(before);
-	expect(result.details?.phases).toStrictEqual(projected(before));
-	expect(result.details).not.toHaveProperty("changes");
+	expect(result.details?.phases).toStrictEqual(phasesOf(harness.notes()));
+	expect(result.details?.changes).toBeUndefined();
 	expect(harness.snapshot()).toEqual(before);
 	expect(harness.notesEntries()).toEqual(notes);
 	expect(harness.session.getTodoPhases()).toEqual(list);
@@ -159,7 +182,7 @@ async function expectRejected(
 	return result;
 }
 
-function itemOf(snapshot: TodoMoreSnapshot, title: string): SnapshotItem {
+function itemOf(snapshot: TodoMoreSnapshot, title: string) {
 	const item = snapshot.phases.flatMap((phase) => phase.items).find((candidate) => candidate.title === title);
 	if (item === undefined) throw new Error(`Expected task ${title}`);
 	return item;
@@ -169,51 +192,47 @@ function resultText(result: AgentToolResult<TodoMoreDetails>): string {
 	return result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 }
 
-function estimateOf(snapshot: TodoMoreSnapshot, title: string): EstimatedTime {
-	const time = itemOf(snapshot, title).time;
-	if (time.kind !== "estimated") throw new Error(`Expected estimate for ${title}`);
-	return time;
+function estimateOf(snapshot: TodoMoreSnapshot, title: string): Extract<Estimate, { kind: "estimated" }> {
+	const estimate = itemOf(snapshot, title).estimate;
+	if (estimate.kind !== "estimated") throw new Error(`Expected estimate for ${title}`);
+	return estimate;
 }
 
-function time(budgetId: string, minutes: number, elapsedMs = 0, runningSince: number | null = null): EstimatedTime {
-	return { kind: "estimated", budgetId, minutes, elapsedMs, runningSince };
+function createdEstimate(harness: Fixture, title: string, minutes: number): Extract<Estimate, { kind: "estimated" }> {
+	const estimate = estimateOf(harness.snapshot(), title);
+	expect(estimate.budgetId).toMatch(uuidPattern);
+	expect(estimate.minutes).toBe(minutes);
+	return estimate;
 }
 
-function createdTime(harness: Fixture, title: string, minutes: number, runningSince: number | null, elapsedMs = 0): EstimatedTime {
-	const budgetId = estimateOf(harness.snapshot(), title).budgetId;
-	expect(budgetId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
-	return time(budgetId, minutes, elapsedMs, runningSince);
+function progressOf(harness: Fixture, title: string): Progress {
+	const item = harness.notes().items.find((candidate) => candidate.title === title);
+	if (item === undefined) throw new Error(`Expected task ${title}`);
+	return item.progress;
 }
 
-function populated(): TodoMoreSnapshot {
+function populated(): TodoNotes {
 	return {
 		goal,
-		phases: [
-			{
-				name: "Delivery",
-				items: [
-					{ id: "t1", title: "Implement", explanation: "Consume complete commands", status: "in_progress", time: { kind: "missing" } },
-					{ id: "t2", title: "Review", explanation: "Review original behavior", status: "pending", time: { kind: "missing" } },
-				],
-			},
-			{
-				name: "Verification",
-				items: [
-					{ id: "t3", title: "Runtime", explanation: "Use the real host", status: "pending", time: { kind: "missing" } },
-					{ id: "t4", title: "Already checked", explanation: "Retain earlier evidence", status: "completed", time: { kind: "missing" } },
-					{ id: "t5", title: "Old approach", explanation: "Keep historical scope", status: "abandoned", time: { kind: "missing" } },
-				],
-			},
+		items: [
+			note("t1", "Delivery", "Implement", "Consume complete commands", missing, active(null)),
+			note("t2", "Delivery", "Review", "Review original behavior", missing, parked(null)),
+			note("t3", "Verification", "Runtime", "Use the real host", missing, parked(null)),
+			note("t4", "Verification", "Already checked", "Retain earlier evidence", missing, closed("completed", null)),
+			note("t5", "Verification", "Old approach", "Keep historical scope", missing, closed("abandoned", null)),
 		],
 	};
 }
 
-function timed(): TodoMoreSnapshot {
-	const snapshot = populated();
-	itemOf(snapshot, "Implement").time = time("implement-budget", 10, 1_250, epoch);
-	itemOf(snapshot, "Review").time = time("review-budget", 20, 500);
-	itemOf(snapshot, "Runtime").time = time("runtime-budget", 30, 750);
-	return snapshot;
+function timed(): TodoNotes {
+	return withItem(
+		withItem(withItem(populated(), "t1", { estimate: time("implement-budget", 10), progress: active(epoch, 1_250, epoch) }), "t2", {
+			estimate: time("review-budget", 20),
+			progress: parked(null, 500),
+		}),
+		"t3",
+		{ estimate: time("runtime-budget", 30), progress: parked(null, 750) },
+	);
 }
 
 describe("atomic structured todo execution", () => {
@@ -226,36 +245,17 @@ describe("atomic structured todo execution", () => {
 				{ title: "Review", detail: "Check all fields", minutes: 20 },
 			],
 		});
-		const implement = createdTime(harness, "Implement", 10, epoch);
-		const review = createdTime(harness, "Review", 20, null);
+		const implement = createdEstimate(harness, "Implement", 10);
+		const review = createdEstimate(harness, "Review", 20);
 		expect(implement.budgetId).not.toBe(review.budgetId);
 		expectSaved(
 			harness,
 			result,
 			{
 				goal,
-				phases: [
-					{
-						name: "Tasks",
-						items: [
-							{
-								id: "t1",
-								title: "Implement",
-								explanation: "Consume the structured input",
-								status: "in_progress",
-								time: implement,
-								timestamps: { startedAt: epoch, statusChangedAt: epoch },
-							},
-							{
-								id: "t2",
-								title: "Review",
-								explanation: "Check all fields",
-								status: "pending",
-								time: review,
-								timestamps: { statusChangedAt: epoch },
-							},
-						],
-					},
+				items: [
+					note("t1", "Tasks", "Implement", "Consume the structured input", implement, active(epoch, 0, epoch)),
+					note("t2", "Tasks", "Review", "Check all fields", review, FRESH),
 				],
 			},
 			0,
@@ -327,7 +327,7 @@ describe("atomic structured todo execution", () => {
 			measure: "Measured",
 			doneWhen: "Complete",
 		});
-		expect(itemOf(harness.snapshot(), "Implement").time).toEqual(time("implement-budget", 10, 1_250, epoch));
+		expectSaved(harness, result, { goal: { objective: "Updated", measure: "Measured", doneWhen: "Complete" }, items: timed().items }, 0);
 	});
 
 	test("goal on an empty list without add is rejected", async () => {
@@ -337,7 +337,7 @@ describe("atomic structured todo execution", () => {
 	});
 
 	test("missing goal requires goal alongside mutations", async () => {
-		const noGoal: TodoMoreSnapshot = { ...populated(), goal: null };
+		const noGoal: TodoNotes = { ...populated(), goal: null };
 		const harness = fixture(noGoal);
 		await expectRejected(harness, () => harness.call({ done_id: "t1" }));
 		const fixed = await harness.call({ goal: goalInput, done_id: "t1" });
@@ -394,7 +394,7 @@ describe("host list authority", () => {
 		expect(more?.phases[0]?.items.map((item) => item.explanation)).toEqual(["Open the list", "Now active"]);
 	});
 
-	test("a todo result and the notes together reproduce the list; the notes alone do not", async () => {
+	test("the branch state combines the notes with the host list, which the notes alone do not reproduce", async () => {
 		const harness = fixture();
 		await harness.call({
 			goal: goalInput,
@@ -403,10 +403,16 @@ describe("host list authority", () => {
 				{ title: "Second", detail: "Follow it", minutes: 20 },
 			],
 		});
-		const rebuilt = readTodoMore(harness.session.sessionManager.getBranch());
-		expect(toSnapshot(rebuilt)).toEqual(harness.snapshot());
+		const facts = foldBranch(harness.session.sessionManager.getBranch());
+		expect(facts.state.kind === "list" ? facts.state.phases.flatMap((phase) => phase.items.map((item) => item.title)) : []).toEqual([
+			"First",
+			"Second",
+		]);
+		expect(toSnapshot(facts.state)).toEqual(harness.snapshot());
 		const notesOnly = harness.session.sessionManager.getBranch().filter((entry) => entry.type === "custom");
-		expect(readTodoMore(notesOnly)).toEqual({ kind: "empty" });
+		const alone = foldBranch(notesOnly);
+		expect(alone.state).toEqual({ kind: "empty" });
+		expect(alone.notes.items.map((item) => item.title)).toEqual(["First", "Second"]);
 	});
 });
 
@@ -430,45 +436,19 @@ describe("atomic batch timing through the authority branch", () => {
 				}),
 			1_000,
 		);
-		const first = createdTime(harness, "First", 2, null);
-		const second = createdTime(harness, "Second", 3, null);
-		const third = createdTime(harness, "Third", 4, anchor);
+		const first = createdEstimate(harness, "First", 2);
+		const second = createdEstimate(harness, "Second", 3);
+		const third = createdEstimate(harness, "Third", 4);
 		expect(new Set([first.budgetId, second.budgetId, third.budgetId]).size).toBe(3);
 		expectSaved(
 			harness,
 			result,
 			{
 				goal,
-				phases: [
-					{
-						name: "Tasks",
-						items: [
-							{
-								id: "t1",
-								title: "First",
-								explanation: "Complete within the batch",
-								status: "completed",
-								time: first,
-								timestamps: { completedAt: anchor, statusChangedAt: anchor },
-							},
-							{
-								id: "t2",
-								title: "Second",
-								explanation: "Pause within the batch",
-								status: "abandoned",
-								time: second,
-								timestamps: { abandonedAt: anchor, statusChangedAt: anchor },
-							},
-							{
-								id: "t3",
-								title: "Third",
-								explanation: "Accepted active explanation",
-								status: "in_progress",
-								time: third,
-								timestamps: { startedAt: anchor, statusChangedAt: anchor },
-							},
-						],
-					},
+				items: [
+					note("t1", "Tasks", "First", "Complete within the batch", first, closed("completed", null, 0, anchor)),
+					note("t2", "Tasks", "Second", "Pause within the batch", second, closed("abandoned", null, 0, anchor)),
+					note("t3", "Tasks", "Third", "Accepted active explanation", third, active(anchor, 0, anchor)),
 				],
 			},
 			0,
@@ -488,17 +468,9 @@ describe("atomic batch timing through the authority branch", () => {
 				}),
 			1_000,
 		);
-		const expected = timed();
-		Object.assign(itemOf(expected, "Implement"), {
-			status: "pending",
-			time: time("implement-budget", 10, 7_250),
-			timestamps: { startedAt: epoch, pausedAt: anchor, statusChangedAt: anchor },
-		});
-		Object.assign(itemOf(expected, "Review"), {
-			status: "in_progress",
+		const expected = withItem(withItem(initial, "t1", { progress: parked(epoch, 7_250, anchor) }), "t2", {
 			explanation: "Continue with review",
-			time: time("review-budget", 20, 500, anchor),
-			timestamps: { startedAt: anchor, statusChangedAt: anchor },
+			progress: active(anchor, 500, anchor),
 		});
 		expectSaved(harness, result, expected, 0);
 	});
@@ -506,71 +478,29 @@ describe("atomic batch timing through the authority branch", () => {
 	test("start_id pauses the clock, paused estimate, resume, active estimate and done_id preserve active elapsed time", async () => {
 		const initial = timed();
 		const harness = fixture(initial);
-		const paused: TodoMoreSnapshot = {
-			goal,
-			phases: [
-				{
-					name: "Delivery",
-					items: [
-						{
-							id: "t1",
-							title: "Implement",
-							explanation: "Consume complete commands",
-							status: "pending",
-							time: time("implement-budget", 10, 7_250),
-							timestamps: { startedAt: epoch, pausedAt: epoch + 6_000, statusChangedAt: epoch + 6_000 },
-						},
-						{
-							id: "t2",
-							title: "Review",
-							explanation: "Review original behavior",
-							status: "in_progress",
-							time: time("review-budget", 20, 500, epoch + 6_000),
-							timestamps: { startedAt: epoch + 6_000, statusChangedAt: epoch + 6_000 },
-						},
-					],
-				},
-				initial.phases[1]!,
-			],
-		};
+		const paused = withItem(withItem(initial, "t1", { progress: parked(epoch, 7_250, epoch + 6_000) }), "t2", {
+			progress: active(epoch + 6_000, 500, epoch + 6_000),
+		});
 		expectSaved(harness, await harness.callAt(epoch + 6_000, { start_id: "t2" }), paused, 0);
 		const reestimated = await harness.callAt(epoch + 20_000, { estimate: [{ id: "t1", minutes: 12 }] });
-		const changedBudget = createdTime(harness, "Implement", 12, null, 7_250);
+		const changedBudget = createdEstimate(harness, "Implement", 12);
 		expect(changedBudget.budgetId).not.toBe("implement-budget");
-		const changed = structuredClone(paused);
-		itemOf(changed, "Implement").time = changedBudget;
+		const changed = withItem(paused, "t1", { estimate: changedBudget });
 		expectSaved(harness, reestimated, changed, 1);
 		expect(reestimated.details?.changes).toEqual([{ op: "estimate", id: "t1", title: "Implement", estimatedMinutes: 12 }]);
-		expect(elapsedTime(estimateOf(harness.snapshot(), "Implement"), epoch + 29_000)).toBe(7_250);
+		expect(elapsedOf(progressOf(harness, "Implement"), epoch + 29_000)).toBe(7_250);
 
 		const sameEstimate = await harness.callAt(epoch + 25_000, { estimate: [{ id: "t1", minutes: 12 }] });
-		expect(sameEstimate.isError).not.toBe(true);
-		expect(harness.snapshot()).toEqual(changed);
+		expectSaved(harness, sameEstimate, changed, 2);
 
-		const resumed = structuredClone(changed);
-		Object.assign(itemOf(resumed, "Implement"), {
-			status: "in_progress",
-			time: time(changedBudget.budgetId, 12, 7_250, epoch + 30_000),
-			timestamps: { startedAt: epoch, statusChangedAt: epoch + 30_000 },
-		});
-		Object.assign(itemOf(resumed, "Review"), {
-			status: "pending",
-			time: time("review-budget", 20, 24_500),
-			timestamps: { startedAt: epoch + 6_000, pausedAt: epoch + 30_000, statusChangedAt: epoch + 30_000 },
+		const resumed = withItem(withItem(changed, "t1", { progress: active(epoch, 7_250, epoch + 30_000) }), "t2", {
+			progress: parked(epoch + 6_000, 24_500, epoch + 30_000),
 		});
 		expectSaved(harness, await harness.callAt(epoch + 30_000, { start_id: "t1" }), resumed, 3);
-		expect(elapsedTime(estimateOf(harness.snapshot(), "Implement"), epoch + 35_000)).toBe(12_250);
+		expect(elapsedOf(progressOf(harness, "Implement"), epoch + 35_000)).toBe(12_250);
 
-		const final = structuredClone(resumed);
-		Object.assign(itemOf(final, "Implement"), {
-			status: "completed",
-			time: time(changedBudget.budgetId, 12, 12_250),
-			timestamps: { startedAt: epoch, completedAt: epoch + 35_000, statusChangedAt: epoch + 35_000 },
-		});
-		Object.assign(itemOf(final, "Review"), {
-			status: "in_progress",
-			time: time("review-budget", 20, 24_500, epoch + 35_000),
-			timestamps: { startedAt: epoch + 6_000, statusChangedAt: epoch + 35_000 },
+		const final = withItem(withItem(resumed, "t1", { progress: closed("completed", epoch, 12_250, epoch + 35_000) }), "t2", {
+			progress: active(epoch + 6_000, 24_500, epoch + 35_000),
 		});
 		expectSaved(harness, await harness.callAt(epoch + 35_000, { done_id: "t1" }), final, 4);
 	});
@@ -592,8 +522,10 @@ describe("atomic batch timing through the authority branch", () => {
 			isError: false,
 			timestamp: epoch + 302_000,
 		});
-		expect((await harness.callAt(epoch + 306_000, { done_id: "t1" })).isError).not.toBe(true);
-		expect(estimateOf(harness.snapshot(), "Implement")).toEqual(time("implement-budget", 10, 7_250));
+		const expected = withItem(withItem(timed(), "t1", { progress: closed("completed", epoch, 7_250, epoch + 306_000) }), "t2", {
+			progress: active(epoch + 306_000, 500, epoch + 306_000),
+		});
+		expectSaved(harness, await harness.callAt(epoch + 306_000, { done_id: "t1" }), expected, 0);
 	});
 
 	const limit = DEFAULT_SETTINGS.leafMaxMinutes;
@@ -664,7 +596,7 @@ describe("atomic batch timing through the authority branch", () => {
 				estimate: [{ id: "missing", minutes: 20 }],
 			}),
 		);
-		expect(harness.snapshot()).toEqual(timed());
+		expect(harness.snapshot()).toEqual(snapshotOf(timed()));
 		expect(harness.notesEntries()).toHaveLength(1);
 		expect(harness.projections).toHaveLength(0);
 	});
@@ -719,8 +651,8 @@ describe("compact mutation output and clock-time conversion", () => {
 		});
 		const t1 = t0 + 4 * 60_000;
 		await harness.callAt(t1, { done_id: "t1", start_id: "t3" });
-		expect(itemOf(harness.snapshot(), "A").timestamps).toEqual({ startedAt: t0, completedAt: t1, statusChangedAt: t1 });
-		expect(itemOf(harness.snapshot(), "B").timestamps).toEqual({ statusChangedAt: t0 });
-		expect(itemOf(harness.snapshot(), "C").timestamps).toEqual({ startedAt: t1, statusChangedAt: t1 });
+		expect(progressOf(harness, "A")).toEqual(closed("completed", t0, 4 * 60_000, t1));
+		expect(progressOf(harness, "B")).toEqual(FRESH);
+		expect(progressOf(harness, "C")).toEqual(active(t1, 0, t1));
 	});
 });

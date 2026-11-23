@@ -130,7 +130,7 @@ async function scenarioIdleLoop(): Promise<void> {
 	if (hasBase) console.log(`base checkout available at ${baseDir}: same-load cost delta reported below`);
 	const fx = makeFixture("idle-loop");
 	const hud = makeHud(fx);
-	hud.describe(); // cold call seeds any offset; steady state is what §4 measures
+	hud.describe();
 	const rounds = 30;
 	const callsPerRound = 100;
 	const refTime: number[] = [];

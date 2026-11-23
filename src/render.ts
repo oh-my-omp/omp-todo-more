@@ -7,66 +7,27 @@ import { renderStatusLine } from "@oh-my-pi/pi-tui/render/status-line";
 import { isClosedTodo, phaseRomanNumeral, selectCollapsedTodos } from "@oh-my-pi/pi-tui/tools/todo";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { tr } from "../omomp-shared/i18n.ts";
-import { previewTodoArgs, type TodoPreview } from "./protocol.ts";
-import { commitScopeSchema, persistedStatusSchema, type TodoMoreSnapshot, todoGoalSchema, todoMoreSnapshotSchema } from "./state.ts";
-import { OPS, type Op } from "./tool.ts";
+import { previewTodoArgs, type TodoCallPreview } from "./protocol.ts";
+import { type SnapshotItem, TODO_STATUSES, type TodoMoreSnapshot, todoMoreSnapshotSchema } from "./state.ts";
+import { OPS, RESULT_OPS } from "./tool.ts";
 
-const itemParamSchema = z.object({
-	id: z.string().optional(),
-	title: z.string(),
-	explanation: z.string(),
-	estimatedMinutes: z.number(),
-});
-
-// Results written before the DSL and BLOCK/UNBLOCK were retired still name those operations.
-const HISTORICAL_OPS = ["append", "rm", "view"] as const;
-const LEGACY_OPS = ["block", "unblock"] as const;
-type HistoricalOp = (typeof HISTORICAL_OPS)[number];
-type LegacyOp = (typeof LEGACY_OPS)[number];
-type StoredOp = Op | HistoricalOp;
-const ALL_STORED_OPS = [...OPS, ...HISTORICAL_OPS] as const;
-const ALL_RESULT_OPS = [...OPS, "batch", ...HISTORICAL_OPS, "update"] as const;
-const isLegacyOp = (op: string): op is LegacyOp => (LEGACY_OPS as readonly string[]).includes(op);
-const currentOp = (op: StoredOp | LegacyOp): op is StoredOp => !isLegacyOp(op);
-
-const changeSchema = z.object({
-	op: z.enum([...ALL_STORED_OPS, ...LEGACY_OPS]),
-	id: z.string().optional(),
-	title: z.string().optional(),
-	goal: todoGoalSchema.optional(),
-	list: z.array(z.object({ phase: z.string(), items: z.array(itemParamSchema) })).optional(),
-	task: z.string().optional(),
-	phase: z.string().optional(),
-	items: z.array(itemParamSchema).optional(),
-	explanation: z.string().optional(),
-	estimatedMinutes: z.number().optional(),
-	commit: z.object({ scope: commitScopeSchema, message: z.string() }).optional(),
-});
-
-type Change = z.infer<typeof changeSchema>;
+const changeSchema = z.union([
+	z.object({ op: z.literal("goal") }),
+	z.object({ op: z.literal("add"), items: z.array(z.object({ id: z.string() })) }),
+	z.object({ op: z.enum(["start", "explain", "estimate", "done", "drop"]), id: z.string() }),
+]);
 
 export const detailsSchema = z.object({
-	op: z
-		.enum([...ALL_RESULT_OPS, ...LEGACY_OPS])
-		.optional()
-		.transform((op) => (op === undefined || isLegacyOp(op) ? undefined : op)),
-	operations: z
-		.array(z.enum([...ALL_STORED_OPS, ...LEGACY_OPS]))
-		.optional()
-		.transform((operations) => operations?.filter(currentOp)),
-	changes: z
-		.array(changeSchema)
-		.optional()
-		.transform((changes) => changes?.filter((change): change is Change & { op: StoredOp } => currentOp(change.op))),
-	phases: z.array(z.object({ name: z.string(), tasks: z.array(z.object({ content: z.string(), status: persistedStatusSchema })) })),
+	op: z.enum(RESULT_OPS).optional(),
+	operations: z.array(z.enum(OPS)).optional(),
+	changes: z.array(changeSchema).optional(),
+	phases: z.array(z.object({ name: z.string(), tasks: z.array(z.object({ content: z.string(), status: z.enum(TODO_STATUSES) })) })),
 	storage: z.enum(["session", "memory"]),
-	completedTasks: z.array(z.object({ phase: z.string(), content: z.string() })).optional(),
 	todoMore: z.literal(true),
 	more: todoMoreSnapshotSchema,
 });
 
 export type ReadTodoDetails = Omit<z.infer<typeof detailsSchema>, "phases">;
-type Item = TodoMoreSnapshot["phases"][number]["items"][number];
 
 function goalUiLines(goal: TodoMoreSnapshot["goal"]): string[] {
 	const missing = tr("[goal missing]", "[缺少目标]");
@@ -84,12 +45,7 @@ function goalUiLines(goal: TodoMoreSnapshot["goal"]): string[] {
 	];
 }
 
-type Call = TodoPreview;
-export function parseCall(args: unknown): Call {
-	return previewTodoArgs(args);
-}
-
-export function previewOperationCount(call: Call): number {
+export function previewOperationCount(call: TodoCallPreview): number {
 	return (
 		(call.goal === undefined ? 0 : 1) +
 		call.add.length +
@@ -101,7 +57,7 @@ export function previewOperationCount(call: Call): number {
 	);
 }
 
-export function callPreviewLines(call: Call): string[] {
+export function callPreviewLines(call: TodoCallPreview): string[] {
 	const lines = [tr("Preview only — not committed.", "仅预览 — 未提交。")];
 	if (call.goal !== undefined) {
 		lines.push(
@@ -160,8 +116,7 @@ export function progressCounts(more: TodoMoreSnapshot): { closed: number; total:
 
 const COLLAPSED_ITEMS = 8;
 
-// The host selects the rows but words its summary in English only; recompute the count from the selection so the summary stays localized.
-function selectCollapsed(items: Item[]): { items: Item[]; summary: string } {
+function selectCollapsed(items: SnapshotItem[]): { items: SnapshotItem[]; summary: string } {
 	const selected = selectCollapsedTodos(items, () => false, COLLAPSED_ITEMS);
 	if (selected.summary === "") return { items: selected.items, summary: "" };
 	const open = items.filter((item) => !isClosedTodo(item));
@@ -179,136 +134,57 @@ function selectCollapsed(items: Item[]): { items: Item[]; summary: string } {
 	return { items: selected.items, summary: tr(`… ${hidden} more todo${hidden === 1 ? "" : "s"}`, `… 还有 ${hidden} 个待办`) };
 }
 
-export type DeltaPhase =
-	| { readonly kind: "items"; readonly name: string; readonly items: readonly Item[]; readonly explained: ReadonlySet<string> }
-	| { readonly kind: "removed_phase"; readonly name: string }
-	| { readonly kind: "removed_tasks"; readonly titles: readonly string[] };
+export type DeltaPhase = { readonly name: string; readonly items: readonly SnapshotItem[] };
 
 export type ResultView =
 	| { readonly kind: "full" }
-	| { readonly kind: "delta"; readonly goalChanged: boolean; readonly phases: readonly DeltaPhase[] };
+	| {
+			readonly kind: "delta";
+			readonly goalChanged: boolean;
+			readonly phases: readonly DeltaPhase[];
+			readonly explained: ReadonlySet<string>;
+	  };
 
-export function compactRemovedLabel(title: string): string {
-	return `${forDisplay(title)} · ${tr("removed", "已删除")}`;
-}
-
-function titleById(more: TodoMoreSnapshot, id: string): string | undefined {
-	for (const phase of more.phases) {
-		const found = phase.items.find((item) => item.id === id);
-		if (found) return found.title;
-	}
-	return undefined;
-}
-
-export function resultView(details: ReadTodoDetails, args: unknown, expanded: boolean): ResultView {
-	if (expanded) return { kind: "full" };
-	const call = parseCall(args);
-	if (
-		details.op === "init" ||
-		details.op === "view" ||
-		details.operations?.includes("init") ||
-		details.changes?.some((change) => change.op === "init" || change.op === "view")
-	) {
-		return { kind: "full" };
-	}
-	let goalChanged = details.op === "goal";
-	const touchedTasks = new Set<string>();
-	const explainedTasks = new Set<string>();
-	const removedTaskCandidates: string[] = [];
-	const removedPhaseCandidates: string[] = [];
-	for (const completed of details.completedTasks ?? []) touchedTasks.add(completed.content);
-	if (details.changes !== undefined && details.changes.length > 0) {
-		for (const change of details.changes) {
-			switch (change.op) {
-				case "init":
-				case "view":
-					return { kind: "full" };
-				case "goal":
-					goalChanged = true;
-					break;
-				case "add":
-				case "append":
-					for (const item of change.items ?? []) touchedTasks.add(item.title);
-					break;
-				case "start":
-				case "estimate": {
-					const name = change.title ?? change.task ?? (change.id === undefined ? undefined : titleById(details.more, change.id));
-					if (name !== undefined) touchedTasks.add(name);
-					break;
-				}
-				case "explain": {
-					const name = change.title ?? change.task ?? (change.id === undefined ? undefined : titleById(details.more, change.id));
-					if (name !== undefined) {
-						touchedTasks.add(name);
-						explainedTasks.add(name);
-					}
-					break;
-				}
-				case "done":
-				case "drop": {
-					const name = change.title ?? change.task ?? (change.id === undefined ? undefined : titleById(details.more, change.id));
-					if (name !== undefined) {
-						touchedTasks.add(name);
-					} else if (change.phase !== undefined) {
-						const phase = details.more.phases.find((candidate) => candidate.name === change.phase);
-						if (phase) for (const item of phase.items) touchedTasks.add(item.title);
-					} else {
-						for (const phase of details.more.phases) for (const item of phase.items) touchedTasks.add(item.title);
-					}
-					break;
-				}
-				case "rm":
-					if (change.task !== undefined) removedTaskCandidates.push(change.task);
-					else if (change.phase !== undefined) removedPhaseCandidates.push(change.phase);
-					break;
-				default: {
-					const unreachable: never = change.op;
-					throw new Error(`Unexpected todo operation: ${String(unreachable)}`);
-				}
+export function resultView(details: ReadTodoDetails, expanded: boolean): ResultView {
+	if (expanded || details.changes === undefined) return { kind: "full" };
+	if (details.op === "init" || details.op === "view" || details.operations?.includes("init")) return { kind: "full" };
+	let goalChanged = false;
+	const touched = new Set<string>();
+	const explained = new Set<string>();
+	for (const change of details.changes) {
+		switch (change.op) {
+			case "goal":
+				goalChanged = true;
+				break;
+			case "add":
+				for (const item of change.items) touched.add(item.id);
+				break;
+			case "explain":
+				explained.add(change.id);
+				touched.add(change.id);
+				break;
+			case "start":
+			case "estimate":
+			case "done":
+			case "drop":
+				touched.add(change.id);
+				break;
+			default: {
+				const unreachable: never = change;
+				throw new Error(`Unexpected todo change: ${String(unreachable)}`);
 			}
 		}
-	} else if (previewOperationCount(call) > 0) {
-		if (call.goal !== undefined) goalChanged = true;
-		for (const item of call.add) if (item.title !== undefined) touchedTasks.add(item.title);
-		if (call.start_id !== undefined) {
-			const name = titleById(details.more, call.start_id);
-			if (name !== undefined) touchedTasks.add(name);
-		}
-		for (const entry of call.explain) {
-			const name = entry.id === undefined ? undefined : titleById(details.more, entry.id);
-			if (name !== undefined) {
-				touchedTasks.add(name);
-				explainedTasks.add(name);
-			}
-		}
-		for (const entry of call.estimate) {
-			const name = entry.id === undefined ? undefined : titleById(details.more, entry.id);
-			if (name !== undefined) touchedTasks.add(name);
-		}
-		if (call.done_id !== undefined) {
-			const name = titleById(details.more, call.done_id);
-			if (name !== undefined) touchedTasks.add(name);
-		}
-		for (const id of call.drop_ids) {
-			const name = titleById(details.more, id);
-			if (name !== undefined) touchedTasks.add(name);
-		}
 	}
-	const phases: DeltaPhase[] = [];
-	const existingTitles = new Set(details.more.phases.flatMap((phase) => phase.items.map((item) => item.title)));
-	for (const phase of details.more.phases) {
-		const items = phase.items.filter((item) => touchedTasks.has(item.title));
-		if (items.length > 0) phases.push({ kind: "items", name: phase.name, items, explained: explainedTasks });
-	}
-	for (const name of new Set(removedPhaseCandidates)) {
-		if (!details.more.phases.some((phase) => phase.name === name && phase.items.length > 0)) {
-			phases.push({ kind: "removed_phase", name });
-		}
-	}
-	const removedTitles = [...new Set(removedTaskCandidates)].filter((title) => !existingTitles.has(title));
-	if (removedTitles.length > 0) phases.push({ kind: "removed_tasks", titles: removedTitles });
+	const phases = details.more.phases.flatMap((phase) => {
+		const items = phase.items.filter((item) => touched.has(item.id));
+		return items.length > 0 ? [{ name: phase.name, items }] : [];
+	});
 	if (!goalChanged && phases.length === 0) return { kind: "full" };
-	return { kind: "delta", goalChanged, phases };
+	return { kind: "delta", goalChanged, phases, explained };
+}
+
+export function completedIds(details: ReadTodoDetails): ReadonlySet<string> {
+	return new Set(details.changes?.flatMap((change) => (change.op === "done" ? [change.id] : [])));
 }
 
 function strike(text: string): string {
@@ -323,14 +199,14 @@ function completionLabel(text: string, transitioned: boolean, frame: number | un
 	return `${strike(chars.slice(0, count).join(""))}${chars.slice(count).join("")}`;
 }
 
-export function compactTodoLabel(item: Item): string {
-	const parts = [forDisplay(item.title), item.time.kind === "estimated" ? `${item.time.minutes}m` : tr("no estimate", "无估计")];
+export function compactTodoLabel(item: SnapshotItem): string {
+	const parts = [forDisplay(item.title), item.estimate.kind === "estimated" ? `${item.estimate.minutes}m` : tr("no estimate", "无估计")];
 	if (item.explanation === null) parts.push(tr("[explanation missing]", "[缺少说明]"));
-	if (item.commit !== undefined) parts.push(item.commit.sha.slice(0, 7));
+	if (item.commit !== null) parts.push(item.commit.sha.slice(0, 7));
 	return parts.join(" · ");
 }
 
-function formatItem(item: Item, theme: Theme, transitioned: boolean, frame: number | undefined): string {
+function formatItem(item: SnapshotItem, theme: Theme, transitioned: boolean, frame: number | undefined): string {
 	const text = compactTodoLabel(item);
 	switch (item.status) {
 		case "completed":
@@ -365,17 +241,12 @@ function framedCard(theme: Theme, header: string, build: () => string[], error =
 }
 
 export function renderTodoCall(args: unknown, _options: ToolRenderResultOptions, theme: Theme): Component {
-	const call = parseCall(args);
+	const call = previewTodoArgs(args);
 	const header = statusLine(theme, theme.styledSymbol("status.pending", "muted"), tr("preview — not committed", "预览 — 未提交"));
 	return framedCard(theme, header, () => callPreviewLines(call).map((line) => theme.fg("dim", line)));
 }
 
-export function renderTodoResult(
-	result: AgentToolResult<unknown>,
-	options: ToolRenderResultOptions,
-	theme: Theme,
-	args?: unknown,
-): Component {
+export function renderTodoResult(result: AgentToolResult<unknown>, options: ToolRenderResultOptions, theme: Theme): Component {
 	const text = result.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
 	const parsed = detailsSchema.safeParse(result.details);
 	if (result.isError || !parsed.success) {
@@ -389,67 +260,32 @@ export function renderTodoResult(
 	}
 	const details: ReadTodoDetails = parsed.data;
 	const phases = details.more.phases.filter((phase) => phase.items.length > 0);
-	const completed = details.completedTasks ?? [];
-	const completionKeys = new Set(completed.map((item) => `${item.phase}\u0000${item.content}`));
+	const completed = completedIds(details);
 	const { closed, total } = progressCounts(details.more);
 	const header = statusLine(theme, theme.styledSymbol("tool.todo", "accent"), `${closed}/${total}`);
 	if (total === 0) return new Text(`${header}\n  ${theme.fg("dim", tr("No todos", "没有待办"))}`, 0, 0);
 	return framedCard(theme, header, () => {
 		const lines: string[] = [];
 		const { expanded, spinnerFrame } = options;
-		const view = resultView(details, args, expanded);
+		const view = resultView(details, expanded);
 		if (view.kind === "delta") {
 			if (view.goalChanged) {
 				if (details.more.goal === null)
 					lines.push(theme.fg("warning", `${tr("Objective", "目标")}: ${tr("[goal missing]", "[缺少目标]")}`));
 				else for (const line of goalUiLines(details.more.goal)) lines.push(theme.fg("dim", forDisplay(line)));
 			}
-			for (let index = 0; index < view.phases.length; index++) {
-				const phase = view.phases[index];
-				if (phase === undefined) continue;
-				switch (phase.kind) {
-					case "items": {
-						const name = `${phaseRomanNumeral(index + 1)}. ${forDisplay(phase.name)}`;
-						lines.push(theme.fg("accent", theme.bold(name)));
-						for (let row = 0; row < phase.items.length; row++) {
-							const item = phase.items[row];
-							if (item === undefined) continue;
-							const last = row === phase.items.length - 1;
-							const branch = theme.fg("dim", last ? theme.tree.last : theme.tree.branch);
-							const continued = last ? "   " : `${theme.tree.vertical}  `;
-							lines.push(`  ${branch} ${formatItem(item, theme, completionKeys.has(`${phase.name}\u0000${item.title}`), spinnerFrame)}`);
-							if (phase.explained.has(item.title)) {
-								const explanation = forDisplay(
-									item.explanation ?? tr("(no explanation yet: add one with explain)", "（尚无说明：请使用 explain 添加）"),
-								);
-								for (const line of explanation.split("\n")) lines.push(`  ${theme.fg("dim", continued)}  ${theme.fg("dim", line)}`);
-							}
-						}
-						break;
-					}
-					case "removed_phase": {
-						const name = `${phaseRomanNumeral(index + 1)}. ${forDisplay(phase.name)}`;
-						lines.push(theme.fg("accent", theme.bold(name)));
-						lines.push(
-							`  ${theme.fg("dim", theme.tree.last)} ${theme.fg("error", `${theme.checkbox.unchecked} ${strike(tr("Phase removed", "阶段已删除"))}`)}`,
+			for (const [index, phase] of view.phases.entries()) {
+				lines.push(theme.fg("accent", theme.bold(`${phaseRomanNumeral(index + 1)}. ${forDisplay(phase.name)}`)));
+				for (const [row, item] of phase.items.entries()) {
+					const last = row === phase.items.length - 1;
+					const branch = theme.fg("dim", last ? theme.tree.last : theme.tree.branch);
+					const continued = last ? "   " : `${theme.tree.vertical}  `;
+					lines.push(`  ${branch} ${formatItem(item, theme, completed.has(item.id), spinnerFrame)}`);
+					if (view.explained.has(item.id)) {
+						const explanation = forDisplay(
+							item.explanation ?? tr("(no explanation yet: add one with explain)", "（尚无说明：请使用 explain 添加）"),
 						);
-						break;
-					}
-					case "removed_tasks": {
-						const name = `${phaseRomanNumeral(index + 1)}. ${tr("Removed", "已删除")}`;
-						lines.push(theme.fg("accent", theme.bold(name)));
-						for (let row = 0; row < phase.titles.length; row++) {
-							const title = phase.titles[row];
-							if (title === undefined) continue;
-							const last = row === phase.titles.length - 1;
-							const branch = theme.fg("dim", last ? theme.tree.last : theme.tree.branch);
-							lines.push(`  ${branch} ${theme.fg("error", `${theme.checkbox.unchecked} ${strike(compactRemovedLabel(title))}`)}`);
-						}
-						break;
-					}
-					default: {
-						const unreachable: never = phase;
-						throw new Error(`Unexpected delta phase: ${String(unreachable)}`);
+						for (const line of explanation.split("\n")) lines.push(`  ${theme.fg("dim", continued)}  ${theme.fg("dim", line)}`);
 					}
 				}
 			}
@@ -476,7 +312,7 @@ export function renderTodoResult(
 				const last = row === selection.items.length - 1 && selection.summary === "";
 				const branch = theme.fg("dim", last ? theme.tree.last : theme.tree.branch);
 				const continued = last ? "   " : `${theme.tree.vertical}  `;
-				lines.push(`  ${branch} ${formatItem(item, theme, completionKeys.has(`${phase.name}\u0000${item.title}`), spinnerFrame)}`);
+				lines.push(`  ${branch} ${formatItem(item, theme, completed.has(item.id), spinnerFrame)}`);
 				if (expanded && !isClosedTodo(item)) {
 					const explanation = forDisplay(
 						item.explanation ?? tr("(no explanation yet: add one with explain)", "（尚无说明：请使用 explain 添加）"),

@@ -9,7 +9,6 @@ import { type ParentCwd, runTodo, type TodoMoreDetails } from "../src/tool.ts";
 
 type Message = Parameters<SessionManager["appendMessage"]>[0];
 
-/** A `todo` result as the host persists it: the list it carries is the host's record of the list. */
 export function todoResultMessage(details: unknown, timestamp: number, isError = false): Message {
 	return {
 		role: "toolResult",
@@ -22,16 +21,14 @@ export function todoResultMessage(details: unknown, timestamp: number, isError =
 	};
 }
 
-/** The host list of `state`, as a persisted `todo` result. */
 export function stateResultMessage(state: TodoMoreState, timestamp: number): Message {
-	return todoResultMessage({ op: "update", phases: hostPhases(state) }, timestamp);
+	return todoResultMessage({ op: "batch", phases: hostPhases(state) }, timestamp);
 }
 
 export function appendStateResult(manager: SessionManager, state: TodoMoreState, timestamp: number): string {
 	return manager.appendMessage(stateResultMessage(state, timestamp));
 }
 
-/** The branch entries a plugin write leaves: its notes, then the host's `todo` result. */
 export function stateEntries(id: string, at: number, state: TodoMoreState): SessionEntry[] {
 	return [
 		{
@@ -46,7 +43,6 @@ export function stateEntries(id: string, at: number, state: TodoMoreState): Sess
 	];
 }
 
-/** A session whose host list is a plain array, as the host's `TodoTracker` keeps it. */
 export function hostSession(sessionManager: SessionManager, model?: ModelRef): TodoSession {
 	let list: HostTodoPhase[] = [];
 	return {
@@ -59,7 +55,6 @@ export function hostSession(sessionManager: SessionManager, model?: ModelRef): T
 	};
 }
 
-/** Runs the tool, then persists its result the way the host does. */
 export async function runPersisted(
 	session: TodoSession,
 	raw: unknown,

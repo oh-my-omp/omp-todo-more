@@ -2,19 +2,17 @@ import {
 	type AskWait,
 	commitRecordText,
 	commitScopeText,
-	dueAtTime,
+	dueAt,
 	explanationText,
 	goalLines,
-	itemDisplayIds,
+	isOpen,
 	type TodoItem,
 	type TodoMoreState,
 	type TodoPhase,
-	type TodoStatus,
 	unexplainedItems,
 } from "./state.ts";
 
-const isOpen = (status: TodoStatus): boolean => status === "pending" || status === "in_progress";
-const isClosed = (status: TodoStatus): boolean => status === "completed" || status === "abandoned";
+const isClosed = (item: TodoItem): boolean => !isOpen(item.progress.status);
 
 function pad2(n: number): string {
 	return String(n).padStart(2, "0");
@@ -42,65 +40,43 @@ export function itemTimeSummary(
 	waits: readonly AskWait[] = [],
 	detail: "inline" | "full" = "inline",
 ): string | undefined {
-	const startedAt =
-		item.timestamps?.startedAt ??
-		(item.status === "in_progress" && item.time.kind === "estimated" ? (item.time.runningSince ?? undefined) : undefined);
-	switch (item.status) {
+	const { progress, estimate } = item;
+	const started = progress.startedAt === null ? undefined : `started ${formatClock(progress.startedAt, now)}`;
+	const unestimated = "no time estimate yet: add one with estimate";
+	const parts: string[] = [];
+	switch (progress.status) {
 		case "in_progress": {
-			const parts: string[] = [];
-			if (startedAt !== undefined) parts.push(`started ${formatClock(startedAt, now)}`);
-			if (item.time.kind === "missing") {
-				parts.push("no time estimate yet: add one with estimate");
-			} else {
-				const due = dueAtTime(item.time, now, waits);
-				if (due !== undefined) {
-					parts.push(`due by ${formatClock(due, now)}${now > due ? " (overdue)" : ""}`);
-				}
-			}
-			return parts.length > 0 ? parts.join(", ") : undefined;
+			if (started !== undefined) parts.push(started);
+			const due = dueAt(item, now, waits);
+			if (estimate.kind === "missing") parts.push(unestimated);
+			else if (due !== undefined) parts.push(`due by ${formatClock(due, now)}${now > due ? " (overdue)" : ""}`);
+			break;
 		}
-		case "pending": {
-			const pausedAt = item.timestamps?.pausedAt;
-			const paused = pausedAt !== undefined || (item.time.kind === "estimated" && item.time.elapsedMs > 0);
-			const parts: string[] = [];
-			if (paused) {
-				if (detail === "full" && startedAt !== undefined) parts.push(`started ${formatClock(startedAt, now)}`);
-				parts.push(
-					pausedAt !== undefined
-						? detail === "full"
-							? `paused ${formatClock(pausedAt, now)} (deadline resumes on start)`
-							: `paused ${formatClock(pausedAt, now)}`
-						: "paused",
-				);
-			} else if (detail === "full" && item.time.kind === "estimated") {
+		case "pending":
+			if (started !== undefined) {
+				if (detail === "full") parts.push(started);
+				const resumes = detail === "full" ? " (deadline resumes on start)" : "";
+				parts.push(progress.pausedAt === null ? "paused" : `paused ${formatClock(progress.pausedAt, now)}${resumes}`);
+			} else if (detail === "full" && estimate.kind === "estimated") {
 				parts.push("not started (deadline set on start)");
 			}
-			if (item.time.kind === "missing") parts.push("no time estimate yet: add one with estimate");
-			return parts.length > 0 ? parts.join(", ") : undefined;
-		}
-		case "completed": {
-			const completedAt = item.timestamps?.completedAt;
-			const parts: string[] = [];
-			if (detail === "full" && startedAt !== undefined) parts.push(`started ${formatClock(startedAt, now)}`);
-			if (completedAt !== undefined) parts.push(`completed ${formatClock(completedAt, now)}`);
-			return parts.length > 0 ? parts.join(", ") : undefined;
-		}
-		case "abandoned": {
-			const abandonedAt = item.timestamps?.abandonedAt;
-			const parts: string[] = [];
-			if (detail === "full" && startedAt !== undefined) parts.push(`started ${formatClock(startedAt, now)}`);
-			if (abandonedAt !== undefined) parts.push(`abandoned ${formatClock(abandonedAt, now)}`);
-			return parts.length > 0 ? parts.join(", ") : undefined;
-		}
+			if (estimate.kind === "missing") parts.push(unestimated);
+			break;
+		case "completed":
+		case "abandoned":
+			if (detail === "full" && started !== undefined) parts.push(started);
+			if (progress.closedAt !== null) parts.push(`${progress.status} ${formatClock(progress.closedAt, now)}`);
+			break;
 		default: {
-			const unreachable: never = item.status;
-			throw new Error(`Unexpected todo status: ${String(unreachable)}`);
+			const unreachable: never = progress;
+			throw new Error(`Unexpected progress: ${String(unreachable)}`);
 		}
 	}
+	return parts.length > 0 ? parts.join(", ") : undefined;
 }
 
 function unestimatedItems(state: Extract<TodoMoreState, { kind: "list" }>): TodoItem[] {
-	return state.phases.flatMap((phase) => phase.items.filter((item) => isOpen(item.status) && item.time.kind === "missing"));
+	return state.phases.flatMap((phase) => phase.items.filter((item) => !isClosed(item) && item.estimate.kind === "missing"));
 }
 
 function goalSection(state: Extract<TodoMoreState, { kind: "list" }>): string[] {
@@ -110,8 +86,8 @@ function goalSection(state: Extract<TodoMoreState, { kind: "list" }>): string[] 
 
 function overallLine(phases: readonly TodoPhase[]): string {
 	const items = phases.flatMap((phase) => phase.items);
-	const completed = items.filter((item) => item.status === "completed").length;
-	const abandoned = items.filter((item) => item.status === "abandoned").length;
+	const completed = items.filter((item) => item.progress.status === "completed").length;
+	const abandoned = items.filter((item) => item.progress.status === "abandoned").length;
 	const closed = completed + abandoned;
 	const open = items.length - closed;
 	const breakdown = abandoned > 0 ? ` (${completed} completed, ${abandoned} abandoned)` : "";
@@ -119,23 +95,23 @@ function overallLine(phases: readonly TodoPhase[]): string {
 }
 
 function closedPhasesLine(phases: readonly TodoPhase[]): string | undefined {
-	const closedPhases = phases.filter((phase) => phase.items.length > 0 && phase.items.every((item) => isClosed(item.status)));
+	const closedPhases = phases.filter((phase) => phase.items.length > 0 && phase.items.every(isClosed));
 	if (closedPhases.length === 0) return undefined;
 	return `Closed phases: ${closedPhases.map((phase) => `${JSON.stringify(phase.name)} (${phase.items.length}/${phase.items.length})`).join(", ")}`;
 }
 
-function defectLines(state: Extract<TodoMoreState, { kind: "list" }>, ids: WeakMap<TodoItem, string>): string[] {
+function defectLines(state: Extract<TodoMoreState, { kind: "list" }>): string[] {
 	const lines: string[] = [];
 	const unexplained = unexplainedItems(state);
 	if (unexplained.length > 0) {
 		lines.push(
-			`Items without an explanation (${unexplained.length}); pass explain: ${unexplained.map((item) => JSON.stringify(ids.get(item) ?? item.title)).join(", ")}`,
+			`Items without an explanation (${unexplained.length}); pass explain: ${unexplained.map((item) => JSON.stringify(item.id)).join(", ")}`,
 		);
 	}
 	const unestimated = unestimatedItems(state);
 	if (unestimated.length > 0) {
 		lines.push(
-			`Open items without a time estimate (${unestimated.length}); pass estimate: ${unestimated.map((item) => JSON.stringify(ids.get(item) ?? item.title)).join(", ")}`,
+			`Open items without a time estimate (${unestimated.length}); pass estimate: ${unestimated.map((item) => JSON.stringify(item.id)).join(", ")}`,
 		);
 	}
 	return lines;
@@ -146,13 +122,12 @@ function indentMultiline(prefix: string, text: string): string {
 	return `${prefix}${text.replaceAll("\n", `\n${continuation}`)}`;
 }
 
-function renderDetailedItem(item: TodoItem, id: string | undefined, now: number, waits: readonly AskWait[], indent: string): string[] {
+function renderDetailedItem(item: TodoItem, now: number, waits: readonly AskWait[], indent: string): string[] {
 	const time = itemTimeSummary(item, now, waits, "full");
 	const suffix = time === undefined ? "" : ` (${time})`;
-	const idPrefix = id === undefined ? "" : `[${id}] `;
-	const lines = [`${indent}- ${idPrefix}[${item.status}] ${JSON.stringify(item.title)}${suffix}`];
+	const lines = [`${indent}- [${item.id}] [${item.progress.status}] ${JSON.stringify(item.title)}${suffix}`];
 	lines.push(indentMultiline(`${indent}  Explanation: `, explanationText(item)));
-	if (item.commit !== undefined) {
+	if (item.commit !== null) {
 		lines.push(`${indent}  Commit: ${commitRecordText(item.commit)} (${commitScopeText(item.commit.scope)})`);
 	}
 	return lines;
@@ -183,20 +158,18 @@ export function formatCompactView(
 		return lines.join("\n");
 	}
 	const { phases } = state;
-	const ids = itemDisplayIds(phases);
 	lines.push(...goalSection(state));
 	lines.push(overallLine(phases));
 	const closedSummary = closedPhasesLine(phases);
 	if (closedSummary !== undefined) lines.push(closedSummary);
 
-	const activePhaseIndex = phases.findIndex((phase) => phase.items.some((item) => isOpen(item.status)));
-	const workedAhead =
-		activePhaseIndex >= 0 && phases.some((phase, index) => index > activePhaseIndex && phase.items.some((item) => isClosed(item.status)));
+	const activePhaseIndex = phases.findIndex((phase) => !phase.items.every(isClosed));
+	const workedAhead = activePhaseIndex >= 0 && phases.some((phase, index) => index > activePhaseIndex && phase.items.some(isClosed));
 
 	let omittedClosed = false;
 	let omittedPendingExplanations = false;
 	for (const [index, phase] of phases.entries()) {
-		const openItems = phase.items.filter((item) => isOpen(item.status));
+		const openItems = phase.items.filter((item) => !isClosed(item));
 		const closedCount = phase.items.length - openItems.length;
 		if (closedCount > 0) omittedClosed = true;
 		if (openItems.length === 0) continue;
@@ -212,12 +185,10 @@ export function formatCompactView(
 			const time = itemTimeSummary(item, now, waits, "inline");
 			const flags: string[] = [];
 			if (time !== undefined) flags.push(time);
-			if (item.status === "pending" && item.explanation.kind === "missing") flags.push("missing explanation");
+			if (item.progress.status === "pending" && item.explanation.kind === "missing") flags.push("missing explanation");
 			const suffix = flags.length > 0 ? ` (${flags.join("; ")})` : "";
-			const id = ids.get(item);
-			const idPrefix = id === undefined ? "" : `[${id}] `;
-			lines.push(`  - ${idPrefix}[${item.status}] ${JSON.stringify(item.title)}${suffix}`);
-			if (item.status === "in_progress" || options.highlightExplanations?.has(item.title)) {
+			lines.push(`  - [${item.id}] [${item.progress.status}] ${JSON.stringify(item.title)}${suffix}`);
+			if (item.progress.status === "in_progress" || options.highlightExplanations?.has(item.id)) {
 				lines.push(indentMultiline("    Explanation: ", explanationText(item)));
 			} else if (item.explanation.kind === "explained") {
 				omittedPendingExplanations = true;
@@ -225,7 +196,7 @@ export function formatCompactView(
 		}
 	}
 
-	lines.push(...defectLines(state, ids));
+	lines.push(...defectLines(state));
 	if (options.notes !== undefined && options.notes.length > 0) lines.push(...options.notes);
 
 	const omitted: string[] = [];
@@ -244,7 +215,6 @@ export function formatOpenView(state: TodoMoreState, now: number, waits: readonl
 		return lines.join("\n");
 	}
 	const { phases } = state;
-	const ids = itemDisplayIds(phases);
 	lines.push(...goalSection(state));
 	lines.push(overallLine(phases));
 	const closedSummary = closedPhasesLine(phases);
@@ -252,17 +222,15 @@ export function formatOpenView(state: TodoMoreState, now: number, waits: readonl
 
 	let omittedClosed = false;
 	for (const [index, phase] of phases.entries()) {
-		const openItems = phase.items.filter((item) => isOpen(item.status));
+		const openItems = phase.items.filter((item) => !isClosed(item));
 		const closedCount = phase.items.length - openItems.length;
 		if (closedCount > 0) omittedClosed = true;
 		if (openItems.length === 0) continue;
 		lines.push(`Phase ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (${closedCount}/${phase.items.length} done):`);
-		for (const item of openItems) {
-			lines.push(...renderDetailedItem(item, ids.get(item), now, waits, "  "));
-		}
+		for (const item of openItems) lines.push(...renderDetailedItem(item, now, waits, "  "));
 	}
 
-	lines.push(...defectLines(state, ids));
+	lines.push(...defectLines(state));
 	if (omittedClosed) {
 		lines.push('Closed items omitted. Call todo({}) or todo({ view: "<phase>" }) to inspect completed/abandoned items.');
 	}
@@ -282,47 +250,24 @@ export function formatFullView(
 		return lines.join("\n");
 	}
 	const { phases } = state;
-	const ids = itemDisplayIds(phases);
 	lines.push(...goalSection(state));
 	lines.push(overallLine(phases));
 	for (const [index, phase] of phases.entries()) {
-		const closedCount = phase.items.filter((item) => isClosed(item.status)).length;
+		const closedCount = phase.items.filter(isClosed).length;
 		lines.push(`Phase ${index + 1}/${phases.length} ${JSON.stringify(phase.name)} (${closedCount}/${phase.items.length} done):`);
-		for (const item of phase.items) {
-			lines.push(...renderDetailedItem(item, ids.get(item), now, waits, "  "));
-		}
+		for (const item of phase.items) lines.push(...renderDetailedItem(item, now, waits, "  "));
 	}
-	lines.push(...defectLines(state, ids));
+	lines.push(...defectLines(state));
 	return lines.join("\n");
 }
 
-export function formatPhaseView(phase: TodoPhase, now: number, waits: readonly AskWait[] = [], ids?: WeakMap<TodoItem, string>): string {
-	const resolvedIds = ids ?? itemDisplayIds([phase]);
-	const closedCount = phase.items.filter((item) => isClosed(item.status)).length;
+export function formatPhaseView(phase: TodoPhase, now: number, waits: readonly AskWait[] = []): string {
+	const closedCount = phase.items.filter(isClosed).length;
 	const openCount = phase.items.length - closedCount;
 	const lines: string[] = [
 		currentTimeLine(now),
 		`Phase ${JSON.stringify(phase.name)} (${closedCount}/${phase.items.length} done, ${openCount} open):`,
 	];
-	for (const item of phase.items) {
-		lines.push(...renderDetailedItem(item, resolvedIds.get(item), now, waits, "  "));
-	}
-	return lines.join("\n");
-}
-
-export function formatItemView(phaseName: string, item: TodoItem, now: number, waits: readonly AskWait[] = []): string {
-	const time = itemTimeSummary(item, now, waits, "full") ?? "none";
-	const lines: string[] = [
-		currentTimeLine(now),
-		...(item.id === undefined ? [] : [`ID: ${item.id}`]),
-		`Phase: ${phaseName}`,
-		`Title: ${item.title}`,
-		`Status: ${item.status}`,
-		`Time: ${time}`,
-		indentMultiline("Explanation: ", explanationText(item)),
-	];
-	if (item.commit !== undefined) {
-		lines.push(`Commit: ${commitRecordText(item.commit)} (${commitScopeText(item.commit.scope)})`);
-	}
+	for (const item of phase.items) lines.push(...renderDetailedItem(item, now, waits, "  "));
 	return lines.join("\n");
 }

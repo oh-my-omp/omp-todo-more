@@ -150,9 +150,6 @@ function startOmp(
 		stderr: "pipe",
 	});
 	const frames: Frame[] = [];
-	// A waiter resolves only on frames that arrive after it was registered: a frame
-	// emitted for a finished step (e.g. its late `session_settled`) must not settle
-	// the next step's wait, or the runner skips that step under load.
 	const waiters: { from: number; match: (frame: Frame) => boolean; resolve: (frame: Frame) => void }[] = [];
 	const pending = new Map<string, (frame: Frame) => void>();
 	const send = (command: Frame): void => {
@@ -292,8 +289,6 @@ async function runStep(
 	enqueue(step.turns);
 	switch (step.kind) {
 		case "prompt": {
-			// The waiter registers before the send: a local-command
-			// prompt can report `prompt_result` before its response frame arrives.
 			const id = crypto.randomUUID();
 			let ownPromptResult = false;
 			const done = session.next((frame: Frame): boolean => {
@@ -365,9 +360,6 @@ async function runScenario(variant: Variant, extension: string, scenario: Scenar
 		try {
 			await session.next((frame) => frame.type === "ready", "ready");
 			for (const step of scenario.steps) await runStep(step, session, (turns) => provider.enqueue(turns ?? []), cwd, env);
-			// Let trailing asynchronous work (a custom message a slash prompt spawned,
-			// a late settlement frame) land before the final state request: get_state
-			// queues behind it, and a tight request can otherwise never answer.
 			await Bun.sleep(500);
 			const state = await session.request({ type: "get_state" });
 			const data = isFrame(state.data) ? state.data : {};

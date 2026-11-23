@@ -122,8 +122,6 @@ describe("planning gate", () => {
 		expect(await call("edit", { input: "x" })).toBeUndefined();
 	});
 
-	// The host persists a `todo` result after the call returns: between the call's end and that persistence the branch
-	// still holds the previous list, the host list already holds the new one.
 	test("reads the host list, not the branch, once a todo call has executed but its result is not yet persisted", async () => {
 		const { call, afterTool, session } = gate();
 		expect(await call("todo", valid)).toBeUndefined();
@@ -149,13 +147,11 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		expect(initial?.message.content).toContain("Todo is empty");
 		persistPromptMessage(initial);
 
-		// Same turn: todo INIT followed by edit before persistence
 		await call("todo", multi);
 		await runTodo(session, multi);
 		expect(await afterTool("todo")).toBeUndefined();
 		expect(await afterTool("edit")).toBeUndefined();
 
-		// Persist the todo result and start next turn; non-todo tools still get no redundant planning injection
 		await emit("turn_start", { type: "turn_start" });
 		await runPersisted(session, { explain: [{ id: "t2", note: "Refined active criteria" }] });
 		expect(await afterTool("todo")).toBeUndefined();
@@ -186,7 +182,6 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		expect(text).not.toContain("Estimate:");
 		persistPromptMessage(first);
 
-		// Advance clock by 5 minutes with no todo state change: must emit nothing (prompt-cache safe)
 		setSystemTime(t0 + 5 * 60_000);
 		expect(await prompt()).toBeUndefined();
 	});
@@ -198,12 +193,10 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		const before = await prompt();
 		persistPromptMessage(before);
 
-		// Simulate compaction keeping only a later user message
 		setSystemTime(t0 + 10 * 60_000);
 		const keptUserId = manager.appendMessage({ role: "user", content: "keep going", timestamp: t0 + 10 * 60_000 });
 		manager.appendCompaction("Compacted earlier work", "Compacted", keptUserId, 50_000);
 
-		// Mid-run tool_result after auto-compaction delivers FULL recovery once
 		const recovery = await afterTool("read");
 		expect(recovery?.additionalContext).toBeDefined();
 		const body = recovery?.additionalContext ?? "";
@@ -218,10 +211,8 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		expect(body).not.toContain("Estimate:");
 		expect(body).not.toContain("budgetId");
 
-		// Second parallel tool in the same batch must not duplicate full recovery
 		expect(await afterTool("bash")).toBeUndefined();
 
-		// Persist recovery and advance to next turn + prompt: must stay silent when state is unchanged
 		persistAdditionalContext(recovery);
 		await emit("turn_start", { type: "turn_start" });
 		setSystemTime(t0 + 12 * 60_000);
@@ -236,11 +227,10 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		const first = await prompt();
 		persistPromptMessage(first);
 
-		// Human edits a pending item's explanation via /todo-more without any todo tool call
 		setSystemTime(t0 + 3 * 60_000);
 		const edited = saveTodoEdit(session, {
 			kind: "explain",
-			title: "Pending task",
+			id: "t3",
 			explanation: "Human-updated acceptance criteria for pending task",
 		});
 		expect(edited.kind).toBe("saved");
@@ -257,7 +247,6 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		await runPersisted(session, multi);
 		persistPromptMessage(await prompt());
 
-		// Compaction before next user prompt triggers full recovery at before_agent_start
 		setSystemTime(t0 + 15 * 60_000);
 		const keptId = manager.appendMessage({ role: "user", content: "next turn", timestamp: t0 + 15 * 60_000 });
 		manager.appendCompaction("Compacted history", "Compacted", keptId, 40_000);
@@ -269,7 +258,6 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		persistPromptMessage(recovered);
 		expect(await prompt()).toBeUndefined();
 
-		// Branch summary also triggers full recovery once
 		setSystemTime(t0 + 20 * 60_000);
 		manager.branchWithSummary(keptId, "Switched branch summary");
 		const branchRecovered = await prompt();
@@ -321,7 +309,6 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		expect(handoff?.claim).toContain("FULL_PREAMBLE");
 		expect(prepared?.compactingResult.context?.join("\n")).toContain("harness-provided [omp-todo-more]");
 
-		// Fallback path without extensionCtx uses foldBranch(branchEntries)
 		const branchOnly = coordinator.prepareSnapshot(
 			{ cwd: "/tmp/todo-more-planning-tests", branchEntries: manager.getBranch(), messagesToSummarize: [] },
 			emptyPruneReport,

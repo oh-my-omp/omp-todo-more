@@ -3,9 +3,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { z } from "@oh-my-pi/omptype/zod";
 
-// Real omp in RPC mode with this plugin loaded. The host decides when the stop reminder appears (`todo_reminder`
-// event); the plugin only supplies its text. After the first host reminder the driver lets that reminder turn
-// finish, asks omp for the last LLM request (`/dump`) and checks the reminder message in it.
 const MODELS = ["futureppo-pool/ernie-5.5-flash-preview", "futureppo-pool/nemotron-3-ultra-550b-a55b", "anthropic/claude-haiku-5-5"];
 const SILENCE_MS = 30_000;
 const EXTENSION = path.resolve(import.meta.dir, "../../index.ts");

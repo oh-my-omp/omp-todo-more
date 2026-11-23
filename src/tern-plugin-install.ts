@@ -43,7 +43,7 @@ async function isCurrent(plugins: readonly TernPluginEntry[], root: string, bund
 
 async function initialize(): Promise<void> {
 	const tern = findTern();
-	if (tern.kind === "not_installed") return; // ANSI-only hosts have no Tern owner to ask.
+	if (tern.kind === "not_installed") return;
 	const cli = tern.cli;
 	try {
 		const bundle = await readBundle();
