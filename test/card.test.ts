@@ -4,13 +4,13 @@ import { ExtensionToolWrapper, RegisteredToolAdapter } from "@oh-my-pi/pi-coding
 import type { DescribeContext, TUI } from "@oh-my-pi/pi-tui";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TODO_TOOL_DEFINITION } from "../index.ts";
-import type { TodoMoreSnapshot } from "../src/state.ts";
-import type { TodoMoreDetails } from "../src/tool.ts";
+import type { TodoNgSnapshot } from "../src/state.ts";
+import type { TodoNgDetails } from "../src/tool.ts";
 
 const PREVIEW_MARKER = "Preview only — not committed.";
-const PREVIEW_ROLE = "todo-more.preview";
-const PANEL_ROLE = "todo-more.panel";
-const CHECKLIST_ROLE = "todo-more.list";
+const PREVIEW_ROLE = "todo-ng.preview";
+const PANEL_ROLE = "todo-ng.panel";
+const CHECKLIST_ROLE = "todo-ng.list";
 const CARD_TOP = "╭";
 
 const initArgs = {
@@ -25,7 +25,7 @@ const initArgs = {
 	],
 };
 
-const snapshot: TodoMoreSnapshot = {
+const snapshot: TodoNgSnapshot = {
 	goal: { objective: "Stop the double render", measure: "One card per call", doneWhen: "Native and ANSI verified" },
 	phases: [
 		{
@@ -52,7 +52,7 @@ const snapshot: TodoMoreSnapshot = {
 	],
 };
 
-const result: { content: { type: "text"; text: string }[]; details: TodoMoreDetails } = {
+const result: { content: { type: "text"; text: string }[]; details: TodoNgDetails } = {
 	content: [{ type: "text", text: "Todo list initialized." }],
 	details: {
 		op: "init",
@@ -160,7 +160,7 @@ describe("one card per todo call", () => {
 
 	test("an incremental update renders only the delta in ANSI and native cards until expanded", () => {
 		const deltaArgs = { done_id: "t1" };
-		const deltaSnapshot: TodoMoreSnapshot = {
+		const deltaSnapshot: TodoNgSnapshot = {
 			goal: snapshot.goal,
 			phases: [
 				{

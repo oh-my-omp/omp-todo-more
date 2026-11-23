@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { ensureThemeSync, type NativeChild, type NativeNode, theme } from "@oh-my-pi/pi-tui";
 import { describeSnapshot, describeTodoHud, describeTodoResult } from "../src/native.ts";
 import { renderReminder } from "../src/reminders.ts";
-import type { TodoMoreSnapshot, TodoStatus } from "../src/state.ts";
-import type { TodoMoreDetails } from "../src/tool.ts";
+import type { TodoNgSnapshot, TodoStatus } from "../src/state.ts";
+import type { TodoNgDetails } from "../src/tool.ts";
 
-const snapshot: TodoMoreSnapshot = {
+const snapshot: TodoNgSnapshot = {
 	goal: {
 		objective: "Ship the native todo replacement",
 		measure: "Every task and explanation is visible",
@@ -97,7 +97,7 @@ function goalItems(children: readonly NativeChild[]) {
 	return goal.p.items;
 }
 
-function resultFor(more: TodoMoreSnapshot): Parameters<typeof describeTodoResult>[0] & { details: TodoMoreDetails } {
+function resultFor(more: TodoNgSnapshot): Parameters<typeof describeTodoResult>[0] & { details: TodoNgDetails } {
 	return {
 		content: [{ type: "text", text: "This summary is not the native snapshot." }],
 		details: {
@@ -191,7 +191,7 @@ describe("native todo presentation", () => {
 	});
 
 	test("a committed completion shows its commit in the row and its expanded note", () => {
-		const committed: TodoMoreSnapshot = {
+		const committed: TodoNgSnapshot = {
 			goal: snapshot.goal,
 			phases: [
 				{
@@ -237,7 +237,7 @@ describe("native todo HUD", () => {
 
 			expect(nodes.filter((entry) => entry.k === "kv")).toHaveLength(expanded ? 1 : 0);
 			expect(nodes.filter((entry) => entry.k === "checklist" && entry.p?.mode === "full")).toHaveLength(expanded ? 1 : 0);
-			const editControls = nodes.filter((entry) => entry.k === "row" && entry.p?.actions?.click === "todo-more.open");
+			const editControls = nodes.filter((entry) => entry.k === "row" && entry.p?.actions?.click === "todo-ng.open");
 			expect(editControls).toHaveLength(expanded ? 1 : 0);
 		}
 	});

@@ -42,7 +42,7 @@ function gate() {
 		logger: { warn: () => {} },
 	} as unknown as ExtensionAPI;
 	registerPlanning(pi);
-	const manager = SessionManager.inMemory("/tmp/todo-more-planning-tests");
+	const manager = SessionManager.inMemory("/tmp/todo-ng-planning-tests");
 	const session = hostSession(manager);
 	const agentId = `planning-gate-${crypto.randomUUID()}`;
 	const ref = AgentRegistry.global().register({
@@ -53,7 +53,7 @@ function gate() {
 	});
 	registered.push({ id: agentId, ref });
 	const ctx = {
-		cwd: "/tmp/todo-more-planning-tests",
+		cwd: "/tmp/todo-ng-planning-tests",
 		sessionManager: manager,
 		agent: { id: agentId, kind: "main" },
 	} as unknown as ExtensionContext;
@@ -250,7 +250,7 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		expect(await prompt()).toBeUndefined();
 	});
 
-	test("detects out-of-band /todo-more edit on a pending item and surfaces its updated explanation immediately", async () => {
+	test("detects out-of-band /todo-ng edit on a pending item and surfaces its updated explanation immediately", async () => {
 		setSystemTime(t0);
 		const { afterTool, prompt, persistPromptMessage, session } = gate();
 		await runPersisted(session, multi);
@@ -293,10 +293,10 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		expect(await prompt()).toBeUndefined();
 	});
 
-	test("registers omp-todo-more compact handoff with empty-list gating and active-list claim", async () => {
+	test("registers omp-todo-ng compact handoff with empty-list gating and active-list claim", async () => {
 		const { emit, session, manager } = gate();
 		const coordinator = getSharedCompactCoordinator();
-		expect(coordinator.listPluginIds()).toContain("omp-todo-more");
+		expect(coordinator.listPluginIds()).toContain("omp-todo-ng");
 
 		const emptyPruneReport = {
 			totalInputPaths: 0,
@@ -308,11 +308,11 @@ describe("planning injection granularity, deduplication and recovery", () => {
 			selectedPaths: [],
 		};
 		const emptySnapshot = coordinator.prepareSnapshot(
-			{ cwd: "/tmp/todo-more-planning-tests", branchEntries: manager.getBranch(), messagesToSummarize: [] },
+			{ cwd: "/tmp/todo-ng-planning-tests", branchEntries: manager.getBranch(), messagesToSummarize: [] },
 			emptyPruneReport,
 		);
-		expect(emptySnapshot.inactiveStatefulPluginIds).toContain("omp-todo-more");
-		expect(emptySnapshot.compactingResult.context?.join("\n")).not.toContain("[omp-todo-more]");
+		expect(emptySnapshot.inactiveStatefulPluginIds).toContain("omp-todo-ng");
+		expect(emptySnapshot.compactingResult.context?.join("\n")).not.toContain("[omp-todo-ng]");
 
 		await runPersisted(session, multi);
 		await emit("session_before_compact", {
@@ -325,17 +325,17 @@ describe("planning injection granularity, deduplication and recovery", () => {
 			},
 		});
 		const prepared = coordinator.getLastPrepared(manager);
-		const handoff = prepared?.activeHandoffs.find((h) => h.pluginId === "omp-todo-more");
+		const handoff = prepared?.activeHandoffs.find((h) => h.pluginId === "omp-todo-ng");
 		expect(handoff).toBeDefined();
 		expect(handoff?.injection).toEqual({ source: PLANNING_SOURCE, delivery: "plugin-managed" });
 		expect(handoff?.claim).toContain("2 phases, 3 items");
 		expect(handoff?.claim).toContain(`source="${PLANNING_SOURCE}"`);
-		expect(prepared?.compactingResult.context?.join("\n")).toContain("[omp-todo-more]");
+		expect(prepared?.compactingResult.context?.join("\n")).toContain("[omp-todo-ng]");
 
 		const branchOnly = coordinator.prepareSnapshot(
-			{ cwd: "/tmp/todo-more-planning-tests", branchEntries: manager.getBranch(), messagesToSummarize: [] },
+			{ cwd: "/tmp/todo-ng-planning-tests", branchEntries: manager.getBranch(), messagesToSummarize: [] },
 			emptyPruneReport,
 		);
-		expect(branchOnly.activeHandoffs.find((h) => h.pluginId === "omp-todo-more")?.claim).toContain("2 phases, 3 items");
+		expect(branchOnly.activeHandoffs.find((h) => h.pluginId === "omp-todo-ng")?.claim).toContain("2 phases, 3 items");
 	});
 });

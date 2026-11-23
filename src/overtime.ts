@@ -29,7 +29,7 @@ Do not lower the expected outcome, acceptance criteria or quality, and do not re
 }
 
 export function registerOvertime(pi: ExtensionAPI): void {
-	const deltas = createDeltaStream("omp-todo-more/overtime");
+	const deltas = createDeltaStream("omp-todo-ng/overtime");
 	let active: DeadlineBinding | undefined;
 	const pending = new Set<string>();
 	const cancelTimer = (binding: DeadlineBinding): void => {
@@ -47,7 +47,7 @@ export function registerOvertime(pi: ExtensionAPI): void {
 	const reschedule = (binding: DeadlineBinding): void => {
 		if (active !== binding) return;
 		if (isCompacting(binding.session.sessionManager)) {
-			deferDuringCompaction(binding.session.sessionManager, "omp-todo-more:overtime", () => changed());
+			deferDuringCompaction(binding.session.sessionManager, "omp-todo-ng:overtime", () => changed());
 			return;
 		}
 		try {
@@ -106,7 +106,7 @@ export function registerOvertime(pi: ExtensionAPI): void {
 			);
 			binding.timer = { handle, deadline: nextDeadline };
 		} catch (error) {
-			pi.logger.warn("todo-more overtime warning failed", { error: errorText(error) });
+			pi.logger.warn("todo-ng overtime warning failed", { error: errorText(error) });
 		}
 	};
 	let queued = false;

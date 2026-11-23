@@ -3,17 +3,17 @@ import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 
-export const TODO_MORE_ENTRY_TYPE = "mouriya.omp.todo-more";
+export const TODO_NG_ENTRY_TYPE = "mouriya.omp.todo-more";
 
-export const TODO_MORE_NOTES_TYPE = `${TODO_MORE_ENTRY_TYPE}.notes`;
+export const TODO_NG_NOTES_TYPE = `${TODO_NG_ENTRY_TYPE}.notes`;
 
-export const PLANNING_DELIVERY_TYPE = `${TODO_MORE_ENTRY_TYPE}.planning`;
+export const PLANNING_DELIVERY_TYPE = `${TODO_NG_ENTRY_TYPE}.planning`;
 
-export const TODO_MORE_RESULT_MARK = "todoMore";
+export const TODO_NG_RESULT_MARK = "todoMore";
 
-export const REMINDER_TYPE = `${TODO_MORE_ENTRY_TYPE}.reminder`;
+export const REMINDER_TYPE = `${TODO_NG_ENTRY_TYPE}.reminder`;
 
-export const OVERTIME_TYPE = `${TODO_MORE_ENTRY_TYPE}.overtime`;
+export const OVERTIME_TYPE = `${TODO_NG_ENTRY_TYPE}.overtime`;
 export const overtimeDetailsSchema = z.object({
 	budgetId: z.string(),
 	title: z.string(),
@@ -162,11 +162,11 @@ export function dueAt(item: TodoItem, now: number, waits: readonly AskWait[] = [
 
 export type TodoPhase = { readonly name: string; readonly items: readonly TodoItem[] };
 
-export type TodoMoreState =
+export type TodoNgState =
 	| { readonly kind: "empty" }
 	| { readonly kind: "list"; readonly goal: GoalState; readonly phases: readonly TodoPhase[] };
 
-export const EMPTY: TodoMoreState = { kind: "empty" };
+export const EMPTY: TodoNgState = { kind: "empty" };
 
 export const todoGoalSchema = z.object({ objective: nonEmptyText, measure: nonEmptyText, doneWhen: nonEmptyText });
 
@@ -174,7 +174,7 @@ export const persistedStatusSchema = z
 	.enum([...TODO_STATUSES, "blocked"])
 	.transform((status): TodoStatus => (status === "blocked" ? "pending" : status));
 
-export const todoMoreSnapshotSchema = z.object({
+export const todoNgSnapshotSchema = z.object({
 	goal: todoGoalSchema.nullable(),
 	phases: z.array(
 		z.object({
@@ -192,8 +192,8 @@ export const todoMoreSnapshotSchema = z.object({
 		}),
 	),
 });
-export type TodoMoreSnapshot = z.infer<typeof todoMoreSnapshotSchema>;
-export type SnapshotItem = TodoMoreSnapshot["phases"][number]["items"][number];
+export type TodoNgSnapshot = z.infer<typeof todoNgSnapshotSchema>;
+export type SnapshotItem = TodoNgSnapshot["phases"][number]["items"][number];
 
 const itemNoteSchema = z
 	.object({
@@ -294,14 +294,14 @@ const hostResultSchema = z.object({
 	details: z.object({ op: z.string().optional(), phases: hostPhasesSchema }),
 });
 
-export function stateOf(goal: GoalState, phases: readonly TodoPhase[]): TodoMoreState {
+export function stateOf(goal: GoalState, phases: readonly TodoPhase[]): TodoNgState {
 	return phases.every((phase) => phase.items.length === 0) ? EMPTY : { kind: "list", goal, phases };
 }
 
 const goalValue = (goal: GoalState): TodoGoal | null => (goal.kind === "set" ? goal.goal : null);
 export const explanationValue = (explanation: Explanation): string | null => (explanation.kind === "explained" ? explanation.text : null);
 
-export function toSnapshot(state: TodoMoreState): TodoMoreSnapshot {
+export function toSnapshot(state: TodoNgState): TodoNgSnapshot {
 	if (state.kind === "empty") return { goal: null, phases: [] };
 	return {
 		goal: goalValue(state.goal),
@@ -330,7 +330,7 @@ export function recordOf(entry: SessionEntry): BranchRecord | undefined {
 			const parsed = hostEditSchema.safeParse(entry.data);
 			return parsed.success ? { kind: "phases", phases: parsed.data.phases } : undefined;
 		}
-		if (entry.customType !== TODO_MORE_NOTES_TYPE) return undefined;
+		if (entry.customType !== TODO_NG_NOTES_TYPE) return undefined;
 		const parsed = todoNotesSchema.safeParse(entry.data);
 		return parsed.success ? { kind: "notes", notes: parsed.data } : undefined;
 	}
@@ -340,7 +340,7 @@ export function recordOf(entry: SessionEntry): BranchRecord | undefined {
 	return parsed.data.details.op === "view" ? { kind: "view" } : { kind: "phases", phases: parsed.data.details.phases };
 }
 
-export function joinHost(phases: readonly HostTodoPhase[], notes: TodoNotes): TodoMoreState {
+export function joinHost(phases: readonly HostTodoPhase[], notes: TodoNotes): TodoNgState {
 	const known = new Map<string, ItemNote>();
 	for (const note of notes.items) known.set(`${note.phase}\u0000${note.title}`, note);
 	const allocate = idAllocator(notes.items.map((note) => note.id));
@@ -365,7 +365,7 @@ export function joinHost(phases: readonly HostTodoPhase[], notes: TodoNotes): To
 	return stateOf(notes.goal === null ? { kind: "missing" } : { kind: "set", goal: notes.goal }, joined);
 }
 
-export function toNotes(state: TodoMoreState): TodoNotes {
+export function toNotes(state: TodoNgState): TodoNotes {
 	if (state.kind === "empty") return NO_NOTES;
 	return {
 		goal: goalValue(state.goal),
@@ -383,7 +383,7 @@ export function toNotes(state: TodoMoreState): TodoNotes {
 	};
 }
 
-export function hostPhases(state: TodoMoreState): HostTodoPhase[] {
+export function hostPhases(state: TodoNgState): HostTodoPhase[] {
 	if (state.kind === "empty") return [];
 	return state.phases.map((phase) => ({
 		name: phase.name,
@@ -397,19 +397,19 @@ export function isOpen(status: TodoStatus): boolean {
 
 export type TodoRound = "empty" | "closed" | "open";
 
-export function roundOf(state: TodoMoreState): TodoRound {
+export function roundOf(state: TodoNgState): TodoRound {
 	if (state.kind === "empty") return "empty";
 	return state.phases.some((phase) => phase.items.some((item) => isOpen(item.progress.status))) ? "open" : "closed";
 }
 
-export function actionableItems(state: TodoMoreState): { readonly phase: string; readonly item: TodoItem }[] {
+export function actionableItems(state: TodoNgState): { readonly phase: string; readonly item: TodoItem }[] {
 	if (state.kind === "empty") return [];
 	return state.phases.flatMap((phase) =>
 		phase.items.filter((item) => isOpen(item.progress.status)).map((item) => ({ phase: phase.name, item })),
 	);
 }
 
-export function unexplainedItems(state: TodoMoreState): TodoItem[] {
+export function unexplainedItems(state: TodoNgState): TodoItem[] {
 	if (state.kind === "empty") return [];
 	return state.phases.flatMap((phase) => phase.items.filter((item) => item.explanation.kind === "missing"));
 }
@@ -460,7 +460,7 @@ function progressMark(item: TodoItem, now: number, waits: readonly AskWait[]): n
 	}
 }
 
-export function semanticStateKey(state: TodoMoreState, now: number, waits: readonly AskWait[]): string {
+export function semanticStateKey(state: TodoNgState, now: number, waits: readonly AskWait[]): string {
 	if (state.kind === "empty") return "empty";
 	return JSON.stringify({
 		goal: goalValue(state.goal),

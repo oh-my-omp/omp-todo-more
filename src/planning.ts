@@ -6,10 +6,10 @@ import { errorText } from "./errors.ts";
 import { currentTimeLine, formatCompactView, formatFullView } from "./format.ts";
 import { sessionOf } from "./session.ts";
 import { readSettings } from "./settings.ts";
-import { explanationValue, PLANNING_DELIVERY_TYPE, roundOf, semanticStateKey, type TodoMoreState } from "./state.ts";
+import { explanationValue, PLANNING_DELIVERY_TYPE, roundOf, semanticStateKey, type TodoNgState } from "./state.ts";
 import { previewTodo } from "./tool.ts";
 
-export const PLANNING_SOURCE = "omp-todo-more/planning";
+export const PLANNING_SOURCE = "omp-todo-ng/planning";
 
 const SUPERSEDE_LINE = `This reminder supersedes every earlier reminder from ${PLANNING_SOURCE}; only this one applies.`;
 
@@ -19,7 +19,7 @@ const INIT_REMINDER =
 const CLOSED_REMINDER =
 	"Every item of this todo round is completed or abandoned, so the round is over. Work phase (this request changes files, config, git or external state): before the next change, start a new todo with goal ({ title, summary, acceptance }) and add ([{ phase, title, detail, minutes }]) for every step; it replaces the finished round, whose goal and items are not carried over. edit is blocked until the new round has open items. Non-work phase (discussion, investigation, explanation, answering questions): no todo.";
 
-function noOpenItems(state: TodoMoreState): string | undefined {
+function noOpenItems(state: TodoNgState): string | undefined {
 	const round = roundOf(state);
 	switch (round) {
 		case "empty":
@@ -45,7 +45,7 @@ const FULL_PREAMBLE = `${FULL_SNAPSHOT_LINE} ${COMPACT_PREAMBLE}`;
 
 type Reminder = { readonly key: string; readonly body: string };
 
-function changedPendingExplanations(seen: TodoMoreState | undefined, current: TodoMoreState): Set<string> {
+function changedPendingExplanations(seen: TodoNgState | undefined, current: TodoNgState): Set<string> {
 	const changed = new Set<string>();
 	if (seen === undefined || seen.kind === "empty" || current.kind === "empty") return changed;
 	const previous = new Map<string, string | null>();
@@ -73,7 +73,7 @@ function deliver(session: AgentSession, delivered: string | null, reminder: Remi
 	return `<system-reminder source="${PLANNING_SOURCE}">\n${supersede}${reminder.body}\n</system-reminder>`;
 }
 
-type Moment = { readonly now: number; readonly facts: BranchFacts; readonly state: TodoMoreState; readonly key: string };
+type Moment = { readonly now: number; readonly facts: BranchFacts; readonly state: TodoNgState; readonly key: string };
 
 function momentOf(session: AgentSession): Moment {
 	const now = Date.now();
@@ -112,7 +112,7 @@ function listReminder({ now, facts, state, key }: Moment): Reminder | undefined 
 
 export function registerPlanning(pi: ExtensionAPI): void {
 	let batch: string | undefined;
-	const pending = new WeakMap<SessionManager, TodoMoreState>();
+	const pending = new WeakMap<SessionManager, TodoNgState>();
 	const settled = (ctx: ExtensionContext): void => {
 		const session = sessionOf(ctx.agent.id);
 		if (session !== undefined) pending.delete(session.sessionManager);
@@ -135,7 +135,7 @@ export function registerPlanning(pi: ExtensionAPI): void {
 				},
 			};
 		} catch (error) {
-			pi.logger.warn("todo-more user-message reminder failed", { error: errorText(error) });
+			pi.logger.warn("todo-ng user-message reminder failed", { error: errorText(error) });
 		}
 	});
 	pi.on("tool_call", async (event, ctx) => {
@@ -163,7 +163,7 @@ export function registerPlanning(pi: ExtensionAPI): void {
 					return undefined;
 			}
 		} catch (error) {
-			pi.logger.warn("todo-more planning gate failed", { tool: event.toolName, error: errorText(error) });
+			pi.logger.warn("todo-ng planning gate failed", { tool: event.toolName, error: errorText(error) });
 			if (event.toolName !== "edit") return undefined;
 			return {
 				block: true,
@@ -185,7 +185,7 @@ export function registerPlanning(pi: ExtensionAPI): void {
 			batch = reminder.key;
 			return { additionalContext: deliver(session, planning.delivered, reminder) };
 		} catch (error) {
-			pi.logger.warn("todo-more todo snapshot reminder failed", { error: errorText(error) });
+			pi.logger.warn("todo-ng todo snapshot reminder failed", { error: errorText(error) });
 		}
 	});
 	pi.on("turn_start", (_event, ctx) => {
@@ -197,7 +197,7 @@ export function registerPlanning(pi: ExtensionAPI): void {
 	registerCompactHandoff(
 		pi,
 		defineStatefulHarnessHandoff({
-			pluginId: "omp-todo-more",
+			pluginId: "omp-todo-ng",
 			captureState(compactCtx) {
 				const agentId = compactCtx.extensionCtx?.agent?.id;
 				const session = agentId !== undefined ? sessionOf(agentId) : undefined;
@@ -209,7 +209,7 @@ export function registerPlanning(pi: ExtensionAPI): void {
 				};
 			},
 			renderCompactPromptClaim(s) {
-				return `\`omp-todo-more\` (\`source="${PLANNING_SOURCE}"\`) owns the active todo list (${s.phases} phases, ${s.items} items) and automatically restores the full todo snapshot (\`FULL_PREAMBLE\`, including completed, abandoned, in-progress and pending items plus todo rules) on the first turn after compaction — NEVER summarize todo items, time budgets, or todo rules.`;
+				return `\`omp-todo-ng\` (\`source="${PLANNING_SOURCE}"\`) owns the active todo list (${s.phases} phases, ${s.items} items) and automatically restores the full todo snapshot (\`FULL_PREAMBLE\`, including completed, abandoned, in-progress and pending items plus todo rules) on the first turn after compaction — NEVER summarize todo items, time budgets, or todo rules.`;
 			},
 			renderPostCompactInjection() {
 				return { source: PLANNING_SOURCE, delivery: "plugin-managed" };

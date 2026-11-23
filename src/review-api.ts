@@ -3,9 +3,9 @@ import { isTodoReadRequest, TODO_READ_EVENT, type TodoReadCounts, type TodoReadR
 import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { sessionOf } from "./session.ts";
-import { actionableItems, type TodoMoreState, type TodoStatus } from "./state.ts";
+import { actionableItems, type TodoNgState, type TodoStatus } from "./state.ts";
 
-function statusCounts(state: TodoMoreState): TodoReadCounts {
+function statusCounts(state: TodoNgState): TodoReadCounts {
 	const counts: Record<TodoStatus, number> = { pending: 0, in_progress: 0, completed: 0, abandoned: 0 };
 	if (state.kind === "list") for (const phase of state.phases) for (const item of phase.items) counts[item.progress.status]++;
 	return counts;
@@ -32,7 +32,7 @@ export function registerReviewApi(pi: ExtensionAPI): void {
 				};
 			}
 		} catch (error) {
-			pi.logger.warn("todo-more review read failed", { error: errorText(error) });
+			pi.logger.warn("todo-ng review read failed", { error: errorText(error) });
 			response = { kind: "unavailable" };
 		}
 		request.reply(response);

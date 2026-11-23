@@ -11,13 +11,13 @@ import {
 	type Progress,
 	stateOf,
 	type TodoItem,
-	type TodoMoreState,
+	type TodoNgState,
 	toSnapshot,
 	transition,
 } from "../src/state.ts";
 import { stateEntries, todoResultMessage } from "./host.ts";
 
-const stateOfBranch = (branch: readonly SessionEntry[]): TodoMoreState => foldBranch(branch).state;
+const stateOfBranch = (branch: readonly SessionEntry[]): TodoNgState => foldBranch(branch).state;
 
 const hasOvertimeWarning = (branch: readonly SessionEntry[], budgetId: string): boolean => foldBranch(branch).overtimeWarned.has(budgetId);
 
@@ -56,11 +56,11 @@ function itemOf(progress: Progress, value: Estimate = estimate): TodoItem {
 	return { id: "t1", title, explanation: { kind: "missing" }, estimate: value, progress, commit: null };
 }
 
-function currentState(progress: Progress = running, value: Estimate = estimate): TodoMoreState {
+function currentState(progress: Progress = running, value: Estimate = estimate): TodoNgState {
 	return stateOf({ kind: "set", goal }, [{ name: "Delivery", items: [itemOf(progress, value)] }]);
 }
 
-function requireItem(state: TodoMoreState, itemTitle: string = title): TodoItem {
+function requireItem(state: TodoNgState, itemTitle: string = title): TodoItem {
 	if (state.kind === "empty") throw new Error("Expected a nonempty list");
 	const item = state.phases.flatMap((phase) => phase.items).find((candidate) => candidate.title === itemTitle);
 	if (item === undefined) throw new Error(`Expected item ${itemTitle}`);

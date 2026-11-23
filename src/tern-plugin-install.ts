@@ -5,7 +5,7 @@ import { tr } from "../omomp-shared/i18n.ts";
 import { findTern, pluginCopyMatches, readPluginManifest, type TernPluginEntry, type TernResult } from "../omomp-shared/tern-plugin.ts";
 import { errorText } from "./errors.ts";
 
-const ID = "omp-todo-more";
+const ID = "omp-todo-ng";
 const BUNDLE_DIR = fileURLToPath(new URL("../tern/", import.meta.url));
 
 type Bundle = { version: string; css: string };
@@ -29,7 +29,7 @@ async function readBundle(): Promise<Bundle> {
 	if (manifest.version === undefined) {
 		throw new Error(tr("Bundled Tern manifest declares no version.", "内置 Tern 清单没有声明版本。"));
 	}
-	const cssPath = join(BUNDLE_DIR, "todo-more.css");
+	const cssPath = join(BUNDLE_DIR, "todo-ng.css");
 	return { version: manifest.version, css: await Bun.file(cssPath).text() };
 }
 
@@ -66,9 +66,7 @@ async function initialize(): Promise<void> {
 			);
 		}
 	} catch (error) {
-		throw new Error(
-			tr(`omp-todo-more Tern initialization failed: ${errorText(error)}`, `omp-todo-more Tern 初始化失败：${errorText(error)}`),
-		);
+		throw new Error(tr(`omp-todo-ng Tern initialization failed: ${errorText(error)}`, `omp-todo-ng Tern 初始化失败：${errorText(error)}`));
 	}
 }
 

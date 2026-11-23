@@ -24,11 +24,11 @@ import {
 	phaseSlug,
 	roundOf,
 	stateOf,
-	TODO_MORE_RESULT_MARK,
+	TODO_NG_RESULT_MARK,
 	type TodoGoal,
 	type TodoItem,
-	type TodoMoreSnapshot,
-	type TodoMoreState,
+	type TodoNgSnapshot,
+	type TodoNgState,
 	type TodoStatus,
 	toSnapshot,
 	transition,
@@ -53,22 +53,22 @@ export type TodoChange =
 	| { readonly op: "done"; readonly id: string; readonly title: string; readonly commit: TodoCommitClause | null }
 	| { readonly op: "drop"; readonly id: string; readonly title: string };
 
-export type TodoMoreDetails = {
+export type TodoNgDetails = {
 	op?: (typeof RESULT_OPS)[number];
 	operations?: Op[];
 	changes?: TodoChange[];
 	phases: HostTodoPhase[];
 	storage: "session" | "memory";
 	completedTasks?: TodoCompletionTransition[];
-	[TODO_MORE_RESULT_MARK]: true;
-	more: TodoMoreSnapshot;
+	[TODO_NG_RESULT_MARK]: true;
+	more: TodoNgSnapshot;
 };
 
 type Rules = { readonly leafMaxMinutes: number; readonly overtimeWarned: ReadonlySet<string> };
 
 type Located = { readonly item: TodoItem; readonly phase: string };
 
-function locate(state: TodoMoreState): Map<string, Located> {
+function locate(state: TodoNgState): Map<string, Located> {
 	const byId = new Map<string, Located>();
 	if (state.kind === "list")
 		for (const phase of state.phases) for (const item of phase.items) byId.set(item.id, { item, phase: phase.name });
@@ -77,7 +77,7 @@ function locate(state: TodoMoreState): Map<string, Located> {
 
 type Staged = Located & { readonly added: AddedItem };
 
-function stageAdds(params: TodoParams, previous: TodoMoreState): Staged[] {
+function stageAdds(params: TodoParams, previous: TodoNgState): Staged[] {
 	const allocate = idAllocator(previous.kind === "list" ? previous.phases.flatMap((phase) => phase.items.map((item) => item.id)) : []);
 	return (params.add ?? []).map((param) => {
 		const id = allocate();
@@ -99,7 +99,7 @@ function stageAdds(params: TodoParams, previous: TodoMoreState): Staged[] {
 const overCap = (title: string, minutes: number, cap: number): string =>
 	`Task "${title}" estimate ${minutes} min exceeds the ${cap}-minute limit for one item: split the work into several items of at most ${cap} min each`;
 
-function validate(params: TodoParams, previous: TodoMoreState, staged: readonly Staged[], rules: Rules): string[] {
+function validate(params: TodoParams, previous: TodoNgState, staged: readonly Staged[], rules: Rules): string[] {
 	const errors: string[] = [];
 	const byId = locate(previous);
 	const resolve = (id: string): Located | undefined => {
@@ -171,7 +171,7 @@ type Draft = {
 type Completion = { readonly id: string; readonly title: string };
 
 type Planned = {
-	readonly next: TodoMoreState;
+	readonly next: TodoNgState;
 	readonly operations: Op[];
 	readonly changes: TodoChange[];
 	readonly explained: ReadonlySet<string>;
@@ -199,7 +199,7 @@ function toDraft(item: TodoItem): Draft {
 	};
 }
 
-function apply(params: TodoParams, previous: TodoMoreState, staged: readonly Staged[], now: number, waits: readonly AskWait[]): Planned {
+function apply(params: TodoParams, previous: TodoNgState, staged: readonly Staged[], now: number, waits: readonly AskWait[]): Planned {
 	const phases: { readonly name: string; readonly drafts: Draft[] }[] =
 		previous.kind === "empty" ? [] : previous.phases.map((phase) => ({ name: phase.name, drafts: phase.items.map(toDraft) }));
 	const byId = new Map(phases.flatMap((phase) => phase.drafts.map((draft) => [draft.id, draft] as const)));
@@ -321,7 +321,7 @@ type Plan = { readonly kind: "rejected"; readonly errors: string[] } | ({ readon
 const CLOSED_ROUND_NEEDS_GOAL =
 	"Every item of this list is completed or abandoned, so add starts a new round that does not carry over the finished goal and items: provide goal together with add";
 
-function planTodo(params: TodoParams, previous: TodoMoreState, rules: Rules, now: number, waits: readonly AskWait[]): Plan {
+function planTodo(params: TodoParams, previous: TodoNgState, rules: Rules, now: number, waits: readonly AskWait[]): Plan {
 	const startsRound = params.add !== undefined && roundOf(previous) === "closed";
 	if (startsRound && params.goal === undefined) return { kind: "rejected", errors: [CLOSED_ROUND_NEEDS_GOAL] };
 	const base = startsRound ? EMPTY : previous;
@@ -330,11 +330,11 @@ function planTodo(params: TodoParams, previous: TodoMoreState, rules: Rules, now
 	return errors.length > 0 ? { kind: "rejected", errors } : { kind: "planned", ...apply(params, base, staged, now, waits) };
 }
 
-export type PreviewOutcome = { readonly kind: "state"; readonly state: TodoMoreState } | { readonly kind: "rejected" };
+export type PreviewOutcome = { readonly kind: "state"; readonly state: TodoNgState } | { readonly kind: "rejected" };
 
 export function previewTodo(
 	facts: Pick<BranchFacts, "waits" | "overtimeWarned">,
-	previous: TodoMoreState,
+	previous: TodoNgState,
 	raw: unknown,
 	leafMaxMinutes: number,
 ): PreviewOutcome {
@@ -348,28 +348,28 @@ export function previewTodo(
 const storageOf = (session: TodoSession): "session" | "memory" => (session.sessionManager.getSessionFile() ? "session" : "memory");
 
 type ResultExtra = {
-	readonly op?: TodoMoreDetails["op"];
+	readonly op?: TodoNgDetails["op"];
 	readonly operations?: Op[];
 	readonly changes?: TodoChange[];
 	readonly completedTasks?: TodoCompletionTransition[];
 	readonly isError?: true;
 };
 
-function result(session: TodoSession, state: TodoMoreState, text: string, extra: ResultExtra): AgentToolResult<TodoMoreDetails> {
-	const details: TodoMoreDetails = {
+function result(session: TodoSession, state: TodoNgState, text: string, extra: ResultExtra): AgentToolResult<TodoNgDetails> {
+	const details: TodoNgDetails = {
 		op: extra.op,
 		operations: extra.operations,
 		changes: extra.changes,
 		phases: hostPhases(state),
 		storage: storageOf(session),
 		completedTasks: extra.completedTasks?.length ? extra.completedTasks : undefined,
-		[TODO_MORE_RESULT_MARK]: true,
+		[TODO_NG_RESULT_MARK]: true,
 		more: toSnapshot(state),
 	};
 	return { content: [{ type: "text", text }], details, isError: extra.isError };
 }
 
-function viewTodo(session: TodoSession, state: TodoMoreState, waits: readonly AskWait[], rawView: string | undefined, now: number) {
+function viewTodo(session: TodoSession, state: TodoNgState, waits: readonly AskWait[], rawView: string | undefined, now: number) {
 	const view = rawView?.trim();
 	if (view === undefined || view.toLowerCase() === "all") {
 		return result(session, state, formatFullView(state, now, waits), { op: "view" });
@@ -478,7 +478,7 @@ async function completeWithCommit(
 	}
 }
 
-function withCommit(state: TodoMoreState, id: string, commit: CommitRecord): TodoMoreState {
+function withCommit(state: TodoNgState, id: string, commit: CommitRecord): TodoNgState {
 	if (state.kind === "empty") return state;
 	return {
 		...state,
@@ -495,7 +495,7 @@ export async function runTodo(
 	leafMaxMinutes: number = DEFAULT_SETTINGS.leafMaxMinutes,
 	parentCwd: ParentCwd = TOP_LEVEL,
 	agent: AgentRef = MAIN_AGENT,
-): Promise<AgentToolResult<TodoMoreDetails>> {
+): Promise<AgentToolResult<TodoNgDetails>> {
 	const facts = branchFacts(session.sessionManager);
 	const previous = liveState(session);
 	const now = Date.now();
@@ -513,7 +513,7 @@ export async function runTodo(
 			isError: true,
 		});
 	}
-	const op: TodoMoreDetails["op"] = plan.operations.length === 1 ? plan.operations[0] : "batch";
+	const op: TodoNgDetails["op"] = plan.operations.length === 1 ? plan.operations[0] : "batch";
 	const notes: string[] = [];
 	let next = plan.next;
 	if (plan.completion !== null) {

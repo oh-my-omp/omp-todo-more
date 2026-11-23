@@ -7,7 +7,7 @@ import {
 	goalLines,
 	isOpen,
 	type TodoItem,
-	type TodoMoreState,
+	type TodoNgState,
 	type TodoPhase,
 	unexplainedItems,
 } from "./state.ts";
@@ -75,11 +75,11 @@ export function itemTimeSummary(
 	return parts.length > 0 ? parts.join(", ") : undefined;
 }
 
-function unestimatedItems(state: Extract<TodoMoreState, { kind: "list" }>): TodoItem[] {
+function unestimatedItems(state: Extract<TodoNgState, { kind: "list" }>): TodoItem[] {
 	return state.phases.flatMap((phase) => phase.items.filter((item) => !isClosed(item) && item.estimate.kind === "missing"));
 }
 
-function goalSection(state: Extract<TodoMoreState, { kind: "list" }>): string[] {
+function goalSection(state: Extract<TodoNgState, { kind: "list" }>): string[] {
 	if (state.goal.kind === "set") return ["Goal:", ...goalLines(state.goal.goal).map((line) => `  ${line}`)];
 	return ["Goal: none yet — pass goal ({ title, summary, acceptance }) on the next todo call."];
 }
@@ -100,7 +100,7 @@ function closedPhasesLine(phases: readonly TodoPhase[]): string | undefined {
 	return `Closed phases: ${closedPhases.map((phase) => `${JSON.stringify(phase.name)} (${phase.items.length}/${phase.items.length})`).join(", ")}`;
 }
 
-function defectLines(state: Extract<TodoMoreState, { kind: "list" }>): string[] {
+function defectLines(state: Extract<TodoNgState, { kind: "list" }>): string[] {
 	const lines: string[] = [];
 	const unexplained = unexplainedItems(state);
 	if (unexplained.length > 0) {
@@ -142,7 +142,7 @@ export type CompactViewOptions = {
 };
 
 export function formatCompactView(
-	state: TodoMoreState,
+	state: TodoNgState,
 	now: number,
 	waits: readonly AskWait[] = [],
 	options: CompactViewOptions = {},
@@ -208,7 +208,7 @@ export function formatCompactView(
 	return lines.join("\n");
 }
 
-export function formatOpenView(state: TodoMoreState, now: number, waits: readonly AskWait[] = []): string {
+export function formatOpenView(state: TodoNgState, now: number, waits: readonly AskWait[] = []): string {
 	const lines: string[] = [currentTimeLine(now)];
 	if (state.kind === "empty") {
 		lines.push("Todo list is empty.");
@@ -238,7 +238,7 @@ export function formatOpenView(state: TodoMoreState, now: number, waits: readonl
 }
 
 export function formatFullView(
-	state: TodoMoreState,
+	state: TodoNgState,
 	now: number,
 	waits: readonly AskWait[] = [],
 	options: { readonly preamble?: string } = {},

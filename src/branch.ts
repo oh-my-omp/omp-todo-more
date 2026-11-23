@@ -15,11 +15,11 @@ import {
 	REMINDER_TYPE,
 	recordOf,
 	semanticStateKey,
-	type TodoMoreState,
+	type TodoNgState,
 	type TodoNotes,
 } from "./state.ts";
 
-export type SeenList = { readonly key: string; readonly state: TodoMoreState };
+export type SeenList = { readonly key: string; readonly state: TodoNgState };
 
 export type PlanningFacts = {
 	readonly delivered: string | null;
@@ -28,7 +28,7 @@ export type PlanningFacts = {
 };
 
 export type BranchFacts = {
-	readonly state: TodoMoreState;
+	readonly state: TodoNgState;
 	readonly notes: TodoNotes;
 	readonly waits: readonly AskWait[];
 	readonly overtimeWarned: ReadonlySet<string>;
@@ -42,7 +42,7 @@ type Accumulator = {
 	lastId: string | undefined;
 	phases: HostTodoPhase[];
 	notes: TodoNotes;
-	state: TodoMoreState;
+	state: TodoNgState;
 	readonly openAsks: Map<string, number>;
 	readonly closedWaits: AskWait[];
 	readonly overtimeWarned: Set<string>;

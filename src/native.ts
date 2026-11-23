@@ -12,8 +12,8 @@ import {
 	type ReadTodoDetails,
 	resultView,
 } from "./render.ts";
-import { commitRecordText, type SnapshotItem, type TodoMoreSnapshot, type TodoStatus } from "./state.ts";
-import type { TodoMoreDetails } from "./tool.ts";
+import { commitRecordText, type SnapshotItem, type TodoNgSnapshot, type TodoStatus } from "./state.ts";
+import type { TodoNgDetails } from "./tool.ts";
 
 export function uiTimeEstimate(item: Pick<SnapshotItem, "estimate">): string {
 	return item.estimate.kind === "estimated"
@@ -38,7 +38,7 @@ function checklistStatus(status: TodoStatus): "pending" | "active" | "done" | "d
 	}
 }
 
-function checklistPhases(snapshot: TodoMoreSnapshot) {
+function checklistPhases(snapshot: TodoNgSnapshot) {
 	return snapshot.phases.map((phase) => ({
 		id: phase.name,
 		title: phase.name,
@@ -52,13 +52,13 @@ function checklistPhases(snapshot: TodoMoreSnapshot) {
 	}));
 }
 
-export function describeSnapshot(snapshot: TodoMoreSnapshot, editable = false, selectedId?: string): NativeChild[] {
+export function describeSnapshot(snapshot: TodoNgSnapshot, editable = false, selectedId?: string): NativeChild[] {
 	const missingGoal = tr("[goal missing]", "[缺少目标]");
 	const body: NativeChild[] = [
 		node(
 			"kv",
 			{
-				role: "todo-more.goal",
+				role: "todo-ng.goal",
 				items: [
 					{ k: tr("Objective", "目标"), v: snapshot.goal?.objective ?? missingGoal },
 					{ k: tr("Measure", "衡量方式"), v: snapshot.goal?.measure ?? missingGoal },
@@ -71,7 +71,7 @@ export function describeSnapshot(snapshot: TodoMoreSnapshot, editable = false, s
 		node(
 			"checklist",
 			{
-				role: "todo-more.list",
+				role: "todo-ng.list",
 				mode: "full",
 				phases: checklistPhases(snapshot),
 			},
@@ -90,7 +90,7 @@ export function describeSnapshot(snapshot: TodoMoreSnapshot, editable = false, s
 						"row",
 						{
 							role: "omp.btn",
-							actions: { click: `todo-more.explain:${item.id}` },
+							actions: { click: `todo-ng.explain:${item.id}` },
 							title: editExplanation,
 							tone: selectedId === item.id ? "accent" : undefined,
 						},
@@ -104,7 +104,7 @@ export function describeSnapshot(snapshot: TodoMoreSnapshot, editable = false, s
 	return body;
 }
 
-export function describeTodoHud(snapshot: TodoMoreSnapshot, expanded = false): NativeNode | null {
+export function describeTodoHud(snapshot: TodoNgSnapshot, expanded = false): NativeNode | null {
 	let total = 0;
 	let closed = 0;
 	let active: string | undefined;
@@ -134,38 +134,38 @@ export function describeTodoHud(snapshot: TodoMoreSnapshot, expanded = false): N
 	const label = active ?? pending ?? (closed === total ? tr("All done", "全部完成") : tr("Todos", "待办"));
 	return node(
 		"row",
-		{ role: "omp.hud.activity", aria: tr("Todo More progress", "Todo More 进度"), align: "center", gap: "sm" },
+		{ role: "omp.hud.activity", aria: tr("Todo NG progress", "Todo NG 进度"), align: "center", gap: "sm" },
 		[
 			node(
 				"col",
-				{ role: "omp.hud.todo", aria: tr("Todo More pill", "Todo More 待办条"), gap: "none" },
+				{ role: "omp.hud.todo", aria: tr("Todo NG pill", "Todo NG 待办条"), gap: "none" },
 				[
 					node(
 						"card",
 						{
-							aria: tr("Todo More disclosure", "Todo More 展开项"),
+							aria: tr("Todo NG disclosure", "Todo NG 展开项"),
 							head: `${label} ${closed}/${total}`,
 							variant: "bare",
 							collapsible: true,
 							collapsed: !expanded,
 						},
-						[node("checklist", { role: "todo-more.visual", mode: "hud", phases: checklistPhases(snapshot) }, undefined, "visual")],
+						[node("checklist", { role: "todo-ng.visual", mode: "hud", phases: checklistPhases(snapshot) }, undefined, "visual")],
 						"control",
 					),
 					...(expanded
 						? [
 								node(
 									"col",
-									{ role: "todo-more.popover", aria: tr("Todo More popover", "Todo More 弹出面板") },
+									{ role: "todo-ng.popover", aria: tr("Todo NG popover", "Todo NG 弹出面板") },
 									[
 										node(
 											"col",
-											{ role: "todo-more.details", gap: "sm" },
+											{ role: "todo-ng.details", gap: "sm" },
 											[
 												...describeSnapshot(snapshot),
 												node(
 													"row",
-													{ role: "omp.btn", actions: { click: "todo-more.open" } },
+													{ role: "omp.btn", actions: { click: "todo-ng.open" } },
 													[node("text", { text: tr("Edit goal / explanations", "编辑目标/说明") })],
 													"edit",
 												),
@@ -181,16 +181,16 @@ export function describeTodoHud(snapshot: TodoMoreSnapshot, expanded = false): N
 				"pill",
 			),
 		],
-		"todo-more.hud",
+		"todo-ng.hud",
 	);
 }
 
-export const describeTodoCall: NonNullable<ToolDefinition<typeof parametersSchema, TodoMoreDetails>["describeCall"]> = (args) => {
+export const describeTodoCall: NonNullable<ToolDefinition<typeof parametersSchema, TodoNgDetails>["describeCall"]> = (args) => {
 	const call = previewTodoArgs(args);
 	const count = previewOperationCount(call);
 	return {
 		tool: {
-			title: tr("Todo More", "Todo More"),
+			title: tr("Todo NG", "Todo NG"),
 			target: tr("preview — not committed", "预览 — 未提交"),
 			meta: [tr(`${count} operation${count === 1 ? "" : "s"}`, `${count} 项操作`)],
 		},
@@ -199,14 +199,14 @@ export const describeTodoCall: NonNullable<ToolDefinition<typeof parametersSchem
 		body: [
 			node(
 				"col",
-				{ role: "todo-more.preview", gap: "sm" },
+				{ role: "todo-ng.preview", gap: "sm" },
 				callPreviewLines(call).map((text, index) => node("text", { text, wrap: "word" }, undefined, `line-${index}`)),
 			),
 		],
 	};
 };
 
-export const describeTodoResult: NonNullable<ToolDefinition<typeof parametersSchema, TodoMoreDetails>["describeResult"]> = (
+export const describeTodoResult: NonNullable<ToolDefinition<typeof parametersSchema, TodoNgDetails>["describeResult"]> = (
 	result,
 	options,
 ) => {
@@ -216,7 +216,7 @@ export const describeTodoResult: NonNullable<ToolDefinition<typeof parametersSch
 		return {
 			tool: { title: tr("Todo", "待办") },
 			tone: "error",
-			body: [node("text", { text: text || tr("Invalid todo-more result details", "Todo More 结果详情无效"), wrap: "word" })],
+			body: [node("text", { text: text || tr("Invalid todo-ng result details", "Todo NG 结果详情无效"), wrap: "word" })],
 		};
 	}
 	const { closed, total } = progressCounts(parsed.data.more);
@@ -224,7 +224,7 @@ export const describeTodoResult: NonNullable<ToolDefinition<typeof parametersSch
 		tool: total === 0 ? { title: tr("Todo", "待办") } : { title: tr("Todo", "待办"), target: `${closed}/${total}`, targetKind: "text" },
 		open: true,
 		preview: "none",
-		body: [node("col", { role: "todo-more.panel", gap: "sm" }, resultPanel(parsed.data, options.expanded))],
+		body: [node("col", { role: "todo-ng.panel", gap: "sm" }, resultPanel(parsed.data, options.expanded))],
 	};
 };
 
@@ -241,7 +241,7 @@ function resultPanel(details: ReadTodoDetails, expanded: boolean): NativeChild[]
 				node(
 					"kv",
 					{
-						role: "todo-more.goal",
+						role: "todo-ng.goal",
 						items: [
 							{ k: tr("Objective", "目标"), v: more.goal?.objective ?? missingGoal },
 							{ k: tr("Measure", "衡量方式"), v: more.goal?.measure ?? missingGoal },
@@ -267,7 +267,7 @@ function resultPanel(details: ReadTodoDetails, expanded: boolean): NativeChild[]
 						: undefined,
 				})),
 			}));
-			children.push(node("checklist", { role: "todo-more.list", mode: "full", phases: checklistPhases }, undefined, "list"));
+			children.push(node("checklist", { role: "todo-ng.list", mode: "full", phases: checklistPhases }, undefined, "list"));
 		}
 		return children;
 	}
@@ -275,7 +275,7 @@ function resultPanel(details: ReadTodoDetails, expanded: boolean): NativeChild[]
 		? node(
 				"kv",
 				{
-					role: "todo-more.goal",
+					role: "todo-ng.goal",
 					items: [
 						{ k: tr("Objective", "目标"), v: more.goal?.objective ?? missingGoal },
 						{ k: tr("Measure", "衡量方式"), v: more.goal?.measure ?? missingGoal },
@@ -299,5 +299,5 @@ function resultPanel(details: ReadTodoDetails, expanded: boolean): NativeChild[]
 				: undefined,
 		})),
 	}));
-	return [goal, node("checklist", { role: "todo-more.list", mode: "full", phases: checklistPhases }, undefined, "list")];
+	return [goal, node("checklist", { role: "todo-ng.list", mode: "full", phases: checklistPhases }, undefined, "list")];
 }

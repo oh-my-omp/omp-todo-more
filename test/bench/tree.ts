@@ -6,7 +6,7 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { foldBranch } from "../../src/branch.ts";
-import { hostPhases, TODO_MORE_NOTES_TYPE } from "../../src/state.ts";
+import { hostPhases, TODO_NG_NOTES_TYPE } from "../../src/state.ts";
 import { todoResultMessage } from "../host.ts";
 import { appendTodoChange, fillBranch, messageEntry } from "../ui-fixture.ts";
 
@@ -56,7 +56,7 @@ function sessionOver(manager: SessionManager): AgentSession {
 }
 
 function freshBranch(n: number): SessionManager {
-	const manager = SessionManager.inMemory("/tmp/todo-more-tree-bench");
+	const manager = SessionManager.inMemory("/tmp/todo-ng-tree-bench");
 	fillBranch(manager, n);
 	return manager;
 }
@@ -109,7 +109,7 @@ async function planningPath(n: number): Promise<Sample> {
 	let k = 0;
 	const editAndDeliver = (): unknown => {
 		const edit = k++;
-		manager.appendCustomEntry(TODO_MORE_NOTES_TYPE, {
+		manager.appendCustomEntry(TODO_NG_NOTES_TYPE, {
 			...notes,
 			items: notes.items.map((item) => ({ ...item, explanation: `Edited ${edit}` })),
 		});
@@ -173,7 +173,7 @@ async function overtimePath(n: number): Promise<Sample> {
 	let k = 0;
 	const write = (): void => {
 		const runningSince = Date.now();
-		manager.appendCustomEntry(TODO_MORE_NOTES_TYPE, {
+		manager.appendCustomEntry(TODO_NG_NOTES_TYPE, {
 			goal: { objective: "Ship it", measure: "Done", doneWhen: "Merged" },
 			items: [
 				{
@@ -221,7 +221,7 @@ const stopReminder = (index: number): Parameters<SessionManager["appendMessage"]
 const reminderDigests: string[] = [];
 
 async function remindersPath(n: number, reminders: number): Promise<Sample> {
-	const manager = SessionManager.inMemory("/tmp/todo-more-tree-bench");
+	const manager = SessionManager.inMemory("/tmp/todo-ng-tree-bench");
 	const chunks = Math.max(1, reminders);
 	for (let chunk = 0; chunk < chunks; chunk++) {
 		fillBranch(manager, Math.floor(n / chunks));

@@ -15,7 +15,7 @@ import { registerReviewApi } from "./src/review-api.ts";
 import { sessionOf } from "./src/session.ts";
 import { readSettings } from "./src/settings.ts";
 import { initializeTernPlugin } from "./src/tern-plugin-install.ts";
-import { DESCRIPTION, type ParentCwd, parametersSchema, runTodo, type TodoMoreDetails } from "./src/tool.ts";
+import { DESCRIPTION, type ParentCwd, parametersSchema, runTodo, type TodoNgDetails } from "./src/tool.ts";
 import { registerUi } from "./src/ui.ts";
 
 const TOOL_NAME = "todo";
@@ -56,7 +56,7 @@ async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promis
 		await session.setActiveToolsByName(canonicalToolOrder(session.getAllToolInfos(), [...enabled, TOOL_NAME]));
 		return;
 	}
-	const hostTool: AgentTool<typeof parametersSchema, TodoMoreDetails> = {
+	const hostTool: AgentTool<typeof parametersSchema, TodoNgDetails> = {
 		...TOOL_FIELDS,
 		get label(): string {
 			return tr("Todo", "待办");
@@ -83,7 +83,7 @@ function guardSubagent(ctx: ExtensionContext): void {
 		try {
 			await restoreTodo(session, ctx);
 		} catch (error) {
-			logger.warn("todo-more could not install todo", { error: errorText(error) });
+			logger.warn("todo-ng could not install todo", { error: errorText(error) });
 		}
 	});
 }
@@ -97,23 +97,23 @@ export const TODO_TOOL_DEFINITION = {
 		_toolCallId: string,
 		params: unknown,
 		_signal: AbortSignal | undefined,
-		_onUpdate: AgentToolUpdateCallback<TodoMoreDetails> | undefined,
+		_onUpdate: AgentToolUpdateCallback<TodoNgDetails> | undefined,
 		ctx: ExtensionContext,
 	) => {
 		const session = ownSession(ctx);
 		if (session === undefined) throw new Error(`todo: no session registered for agent ${ctx.agent.id}`);
 		return executeTodo(session, params, ctx);
 	},
-} satisfies ToolDefinition<typeof parametersSchema, TodoMoreDetails>;
+} satisfies ToolDefinition<typeof parametersSchema, TodoNgDetails>;
 
-export default async function todoMore(pi: ExtensionAPI): Promise<void> {
+export default async function todoNg(pi: ExtensionAPI): Promise<void> {
 	pi.registerTool(TODO_TOOL_DEFINITION);
 
 	pi.on("before_agent_start", (_event, ctx) => {
 		try {
 			guardSubagent(ctx);
 		} catch (error) {
-			pi.logger.warn("todo-more could not guard todo", { error: errorText(error) });
+			pi.logger.warn("todo-ng could not guard todo", { error: errorText(error) });
 		}
 	});
 

@@ -23,7 +23,7 @@ import {
 	goalLines,
 	REMINDER_TYPE,
 	type TodoItem,
-	type TodoMoreState,
+	type TodoNgState,
 	unexplainedItems,
 } from "./state.ts";
 
@@ -33,17 +33,17 @@ const TODO_TOOL = "todo";
 const CUT_OFF_GRACE_MS = 10_000;
 const MAX_TIMER_SEGMENT_MS = 60 * 60_000;
 const DRAFT_RECHECK_MS = 10_000;
-const QUOTA_NOTICE_WIDGET_KEY = "todo-more.quota-reminder";
+const QUOTA_NOTICE_WIDGET_KEY = "todo-ng.quota-reminder";
 const CANCEL_SHORTCUT = "ctrl+n";
 const CANCEL_SHORTCUT_LABEL = "Ctrl+N";
-const CANCEL_COMMAND = "todo-more-cancel";
+const CANCEL_COMMAND = "todo-ng-cancel";
 
 const HOST_STOP_REMINDER_RE =
 	/^<system-reminder>\nYou stopped with \d+ incomplete todo item\(s\):\n[\s\S]*\n\nPlease continue working on these tasks or mark them complete if finished\.\n\(Reminder (\d+)\/(\d+)\)\n<\/system-reminder>$/;
 const HOST_GOAL_TODO_CONTEXT = "\n<todo_context>\nPersisted todos:";
 const HOST_FORCED_EAGER_MARKER = "You MUST call";
 
-type ListState = Extract<TodoMoreState, { kind: "list" }>;
+type ListState = Extract<TodoNgState, { kind: "list" }>;
 type OpenItem = { readonly phase: string; readonly item: TodoItem };
 
 const reminderDetailsSchema = z.object({
@@ -196,7 +196,7 @@ function sanitizeGoalTodoText(text: string): string {
 	);
 }
 
-function goalTodoContext(session: AgentSession, state: TodoMoreState, now: number, waits: readonly AskWait[]): string | undefined {
+function goalTodoContext(session: AgentSession, state: TodoNgState, now: number, waits: readonly AskWait[]): string | undefined {
 	const canCallTodoTool = session.getActiveToolNames().includes(TODO_TOOL);
 	if (!canCallTodoTool) return undefined;
 	if (state.kind === "empty") return undefined;
@@ -307,7 +307,7 @@ function pluginContent(
 	reminder: HostReminder,
 	message: AgentMessage,
 	session: AgentSession,
-	state: TodoMoreState,
+	state: TodoNgState,
 	waits: readonly AskWait[],
 	now: number,
 ): string | undefined {
@@ -385,7 +385,7 @@ class NativeReminderText extends Text {
 	}
 
 	override describe(): NativeNode {
-		return node("card", { role: "todo-more.reminder", tone: "warning", head: [span(this.header, "strong")] });
+		return node("card", { role: "todo-ng.reminder", tone: "warning", head: [span(this.header, "strong")] });
 	}
 }
 
@@ -470,7 +470,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 	const fire = (pending: PendingCutOff): void => {
 		if (cutOff !== pending) return;
 		if (isCompacting(pending.session.sessionManager)) {
-			deferDuringCompaction(pending.session.sessionManager, "omp-todo-more:cut-off-reminder", () => {
+			deferDuringCompaction(pending.session.sessionManager, "omp-todo-ng:cut-off-reminder", () => {
 				if (cutOff === pending) fire(pending);
 			});
 			return;
@@ -501,7 +501,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 				}
 			}
 		} catch (error) {
-			pi.logger.warn("todo-more cut-off reminder failed", { error: errorText(error) });
+			pi.logger.warn("todo-ng cut-off reminder failed", { error: errorText(error) });
 		} finally {
 			if (!waiting && cutOff === pending) clearCutOff();
 		}
@@ -570,7 +570,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 			if (message === undefined || latch.kind !== "open") return;
 			if (continuation(session).kind === "remind") armCutOff(ctx, session, message);
 		} catch (error) {
-			pi.logger.warn("todo-more cut-off check failed", { error: errorText(error) });
+			pi.logger.warn("todo-ng cut-off check failed", { error: errorText(error) });
 		}
 	});
 
@@ -588,7 +588,7 @@ export function registerReminders(pi: ExtensionAPI): void {
 			const messages = contextMessages(event.messages, ownSession(ctx));
 			return messages === undefined ? undefined : { messages };
 		} catch (error) {
-			pi.logger.warn("todo-more context failed", { error: errorText(error) });
+			pi.logger.warn("todo-ng context failed", { error: errorText(error) });
 			return undefined;
 		}
 	});

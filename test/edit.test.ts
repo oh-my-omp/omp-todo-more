@@ -6,10 +6,10 @@ import {
 	EMPTY,
 	hostPhases,
 	stateOf,
-	TODO_MORE_NOTES_TYPE,
+	TODO_NG_NOTES_TYPE,
 	type TodoGoal,
 	type TodoItem,
-	type TodoMoreState,
+	type TodoNgState,
 	type TodoPhase,
 	toNotes,
 	toSnapshot,
@@ -77,14 +77,14 @@ function currentPhases(): readonly TodoPhase[] {
 	];
 }
 
-function applySuccessfully(state: TodoMoreState, edit: TodoEdit): TodoMoreState {
+function applySuccessfully(state: TodoNgState, edit: TodoEdit): TodoNgState {
 	const result = applyTodoEdit(state, edit);
 	expect(result.kind).toBe("ok");
 	if (result.kind !== "ok") throw new Error(result.message);
 	return result.state;
 }
 
-function expectRejected(state: TodoMoreState, edit: TodoEdit): void {
+function expectRejected(state: TodoNgState, edit: TodoEdit): void {
 	const before = toSnapshot(state);
 	expect(applyTodoEdit(state, edit).kind).toBe("rejected");
 	expect(toSnapshot(state)).toEqual(before);
@@ -212,11 +212,11 @@ describe("applyTodoEdit", () => {
 
 describe("saveTodoEdit", () => {
 	function seeded() {
-		const manager = SessionManager.inMemory("/tmp/todo-more-edit-tests");
+		const manager = SessionManager.inMemory("/tmp/todo-ng-edit-tests");
 		const session = hostSession(manager);
 		const state = stateOf({ kind: "set", goal }, currentPhases());
 		session.setTodoPhases(hostPhases(state));
-		manager.appendCustomEntry(TODO_MORE_NOTES_TYPE, toNotes(state));
+		manager.appendCustomEntry(TODO_NG_NOTES_TYPE, toNotes(state));
 		appendStateResult(manager, state, 1_800_000_000_000);
 		return { manager, session, state };
 	}
@@ -246,7 +246,7 @@ describe("saveTodoEdit", () => {
 	});
 
 	test("an edit on an empty list is rejected without any write", () => {
-		const manager = SessionManager.inMemory("/tmp/todo-more-edit-tests-empty");
+		const manager = SessionManager.inMemory("/tmp/todo-ng-edit-tests-empty");
 		const session = hostSession(manager);
 		expect(saveTodoEdit(session, { kind: "set_goal", goal }).kind).toBe("rejected");
 		expect(manager.getBranch()).toHaveLength(0);

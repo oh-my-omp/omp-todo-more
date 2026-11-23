@@ -4,6 +4,7 @@
 
 ### Breaking Changes
 
+- The plugin is renamed from `omp-todo-more` to `omp-todo-ng`: install it as `omp-todo-ng` from https://github.com/oh-my-omp/omp-todo-ng, configure it with `omp plugin config omp-todo-ng`, open the editor with `/todo-ng` and cancel a pending reminder with `/todo-ng-cancel`; the Tern plugin id is `omp-todo-ng`, its stylesheet is `todo-ng.css`, the `<system-reminder>` sources are `omp-todo-ng/planning` and `omp-todo-ng/overtime`. Session data written by earlier versions still loads.
 - `todo` takes `done_id` (one task ID) instead of `done_ids`: one completion owes at most one commit, and a commit cannot be split across several completions. Close several items with several calls.
 
 ### Added
@@ -15,9 +16,9 @@
 
 - Updated the shared copy of `compact-handoff.ts` to oh-my-omp/shared@db9dde4.
 - Each item's progress is recorded in a shape fixed by its status (pending: first start and pause time; in progress: first start and running clock; completed or abandoned: first start and close time). The clock now runs for items without an estimate too, so an estimate added later counts the time already spent. The notes entry stores item IDs, estimates and progress; notes written by earlier versions still load.
-- Items are identified by ID everywhere after the host list is joined with the notes: the `/todo-more` editor edits explanations by ID, and planning highlights and card deltas follow IDs.
+- Items are identified by ID everywhere after the host list is joined with the notes: the `/todo-ng` editor edits explanations by ID, and planning highlights and card deltas follow IDs.
 - The planning reminder records each delivery as a `mouriya.omp.todo-more.planning` session entry and decides what the model last saw from the branch fold, instead of scanning its own reminder text and rebuilding the session context on every tool result.
-- The `/todo-more` panel and the HUD read the live host list, as the `todo` tool does.
+- The `/todo-ng` panel and the HUD read the live host list, as the `todo` tool does.
 - The `todo` description and parameter hints name the `leafMaxMinutes` setting instead of a fixed 60 minutes.
 
 ### Removed
@@ -26,7 +27,7 @@
 
 ### Fixed
 
-- A todo list written by calling `todo` from eval (`await tool.todo(…)`) now shows in the `/todo-more` panel, the Tern HUD pill and the reminders, and survives resume: omp records such a call as a `user_todo_edit` entry instead of a `todo` result, and the plugin now reads that entry as the host list; before, the panel showed "Todo list is empty." while omp's own Todo HUD listed the items.
+- A todo list written by calling `todo` from eval (`await tool.todo(…)`) now shows in the `/todo-ng` panel, the Tern HUD pill and the reminders, and survives resume: omp records such a call as a `user_todo_edit` entry instead of a `todo` result, and the plugin now reads that entry as the host list; before, the panel showed "Todo list is empty." while omp's own Todo HUD listed the items.
 - A todo list whose items are all completed or abandoned no longer lets `edit` through: the `edit` gate blocks it with a reminder that the round is over, the planning reminder says the same instead of asking to check the finished list, and the next `todo` call with `add` starts a new round from its own `goal` without the finished goal and items; `add` without `goal` on such a list is rejected. Before, the finished list stayed open to edits and `add` reopened it under the old goal.
 - Rewriting the host's todo reminders in the context hook folds the branch once per model call instead of once per reminder: on a 32000-entry branch with 704 stop reminders the first call after a resume or branch switch drops from about 515 ms to about 3 ms, and later calls from about 41 ms to about 3 ms. The rewritten text is unchanged.
 

@@ -4,8 +4,8 @@ import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-m
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { TodoSession } from "../src/commit.ts";
 import type { ModelRef } from "../src/models.ts";
-import { hostPhases, TODO_MORE_NOTES_TYPE, type TodoMoreState, toNotes } from "../src/state.ts";
-import { type ParentCwd, runTodo, type TodoMoreDetails } from "../src/tool.ts";
+import { hostPhases, TODO_NG_NOTES_TYPE, type TodoNgState, toNotes } from "../src/state.ts";
+import { type ParentCwd, runTodo, type TodoNgDetails } from "../src/tool.ts";
 
 type Message = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -21,22 +21,22 @@ export function todoResultMessage(details: unknown, timestamp: number, isError =
 	};
 }
 
-export function stateResultMessage(state: TodoMoreState, timestamp: number): Message {
+export function stateResultMessage(state: TodoNgState, timestamp: number): Message {
 	return todoResultMessage({ op: "batch", phases: hostPhases(state) }, timestamp);
 }
 
-export function appendStateResult(manager: SessionManager, state: TodoMoreState, timestamp: number): string {
+export function appendStateResult(manager: SessionManager, state: TodoNgState, timestamp: number): string {
 	return manager.appendMessage(stateResultMessage(state, timestamp));
 }
 
-export function stateEntries(id: string, at: number, state: TodoMoreState): SessionEntry[] {
+export function stateEntries(id: string, at: number, state: TodoNgState): SessionEntry[] {
 	return [
 		{
 			type: "custom",
 			id: `${id}-notes`,
 			parentId: null,
 			timestamp: new Date(at).toISOString(),
-			customType: TODO_MORE_NOTES_TYPE,
+			customType: TODO_NG_NOTES_TYPE,
 			data: toNotes(state),
 		},
 		{ type: "message", id: `${id}-result`, parentId: null, timestamp: new Date(at).toISOString(), message: stateResultMessage(state, at) },
@@ -60,7 +60,7 @@ export async function runPersisted(
 	raw: unknown,
 	leafMaxMinutes?: number,
 	parentCwd?: ParentCwd,
-): Promise<AgentToolResult<TodoMoreDetails>> {
+): Promise<AgentToolResult<TodoNgDetails>> {
 	const result = await runTodo(session, raw, leafMaxMinutes, parentCwd);
 	session.sessionManager.appendMessage(todoResultMessage(result.details, Date.now(), result.isError === true));
 	return result;

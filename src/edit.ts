@@ -1,17 +1,17 @@
 import { z } from "@oh-my-pi/omptype/zod";
 import { tr } from "../omomp-shared/i18n.ts";
 import { commitTodoState, type HostListSession, liveState } from "./commit.ts";
-import { nonEmptyText, stateOf, type TodoGoal, type TodoMoreState, todoGoalSchema } from "./state.ts";
+import { nonEmptyText, stateOf, type TodoGoal, type TodoNgState, todoGoalSchema } from "./state.ts";
 
 export type TodoEdit = { kind: "set_goal"; goal: TodoGoal } | { kind: "explain"; id: string; explanation: string };
-export type TodoEditResult = { kind: "saved"; state: TodoMoreState } | { kind: "rejected"; message: string };
-type AppliedEdit = { kind: "ok"; state: TodoMoreState } | { kind: "rejected"; message: string };
+export type TodoEditResult = { kind: "saved"; state: TodoNgState } | { kind: "rejected"; message: string };
+type AppliedEdit = { kind: "ok"; state: TodoNgState } | { kind: "rejected"; message: string };
 const editSchema = z.union([
 	z.object({ kind: z.literal("set_goal"), goal: todoGoalSchema }),
 	z.object({ kind: z.literal("explain"), id: nonEmptyText, explanation: nonEmptyText }),
 ]);
 
-export function applyTodoEdit(state: TodoMoreState, edit: TodoEdit): AppliedEdit {
+export function applyTodoEdit(state: TodoNgState, edit: TodoEdit): AppliedEdit {
 	if (state.kind === "empty") return { kind: "rejected", message: tr("Todo list is empty.", "待办列表为空。") };
 	const parsed = editSchema.safeParse(edit);
 	if (!parsed.success)

@@ -13,7 +13,7 @@ if (variant !== "baseline" && variant !== "candidate") throw new Error("--varian
 const entries = Number(args.get("--entries") ?? "5000");
 const runs = Number(args.get("--runs") ?? "5");
 
-const root = mkdtempSync(path.join(tmpdir(), "todo-more-rss-"));
+const root = mkdtempSync(path.join(tmpdir(), "todo-ng-rss-"));
 const home = path.join(root, "home");
 const agentDir = path.join(home, ".omp", "agent");
 const sessionDir = path.join(root, "sessions");

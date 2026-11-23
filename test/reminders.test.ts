@@ -31,7 +31,7 @@ function session(manager: SessionManager) {
 
 describe("host reminders carry the plugin's content", () => {
 	test("an unpersisted nudge takes the host list, not a branch that lags the last todo call", async () => {
-		const manager = SessionManager.inMemory("/tmp/todo-more-reminders-tests");
+		const manager = SessionManager.inMemory("/tmp/todo-ng-reminders-tests");
 		const { host, session: own } = session(manager);
 		await runTodo(host, valid);
 		const rewritten = contextMessages([nudge()], own);
@@ -54,7 +54,7 @@ describe("the continuation reminder reads the live host list", () => {
 	}
 
 	test("a todo call whose result is not on the branch yet still gets its open items reminded", async () => {
-		const manager = SessionManager.inMemory("/tmp/todo-more-continuation-tests");
+		const manager = SessionManager.inMemory("/tmp/todo-ng-continuation-tests");
 		const { host, own } = stopped(manager);
 		await runTodo(host, valid);
 		const completion = continuation(own);
@@ -64,7 +64,7 @@ describe("the continuation reminder reads the live host list", () => {
 	});
 
 	test("an empty host list stays silent", () => {
-		const manager = SessionManager.inMemory("/tmp/todo-more-continuation-tests-empty");
+		const manager = SessionManager.inMemory("/tmp/todo-ng-continuation-tests-empty");
 		const { own } = stopped(manager);
 		expect(continuation(own)).toEqual({ kind: "silent" });
 	});
@@ -81,7 +81,7 @@ describe("cut-off reminder compaction barrier", () => {
 	test("defers cut-off reminder sendMessage while compaction is active and flushes after release", async () => {
 		const now = Date.parse("2026-11-22T01:00:00.000Z");
 		setSystemTime(now);
-		const manager = SessionManager.inMemory("/tmp/todo-more-cutoff-barrier");
+		const manager = SessionManager.inMemory("/tmp/todo-ng-cutoff-barrier");
 		const host = hostSession(manager);
 		const own = Object.setPrototypeOf(
 			{

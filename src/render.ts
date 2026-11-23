@@ -8,7 +8,7 @@ import { isClosedTodo, phaseRomanNumeral, selectCollapsedTodos } from "@oh-my-pi
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { tr } from "../omomp-shared/i18n.ts";
 import { previewTodoArgs, type TodoCallPreview } from "./protocol.ts";
-import { type SnapshotItem, TODO_STATUSES, type TodoMoreSnapshot, todoMoreSnapshotSchema } from "./state.ts";
+import { type SnapshotItem, TODO_STATUSES, type TodoNgSnapshot, todoNgSnapshotSchema } from "./state.ts";
 import { OPS, RESULT_OPS } from "./tool.ts";
 
 const changeSchema = z.union([
@@ -24,12 +24,12 @@ export const detailsSchema = z.object({
 	phases: z.array(z.object({ name: z.string(), tasks: z.array(z.object({ content: z.string(), status: z.enum(TODO_STATUSES) })) })),
 	storage: z.enum(["session", "memory"]),
 	todoMore: z.literal(true),
-	more: todoMoreSnapshotSchema,
+	more: todoNgSnapshotSchema,
 });
 
 export type ReadTodoDetails = Omit<z.infer<typeof detailsSchema>, "phases">;
 
-function goalUiLines(goal: TodoMoreSnapshot["goal"]): string[] {
+function goalUiLines(goal: TodoNgSnapshot["goal"]): string[] {
 	const missing = tr("[goal missing]", "[缺少目标]");
 	if (goal === null) {
 		return [
@@ -106,7 +106,7 @@ function forDisplay(text: string): string {
 	return replaceTabs(sanitizeText(text));
 }
 
-export function progressCounts(more: TodoMoreSnapshot): { closed: number; total: number } {
+export function progressCounts(more: TodoNgSnapshot): { closed: number; total: number } {
 	const phases = more.phases.filter((phase) => phase.items.length > 0);
 	return {
 		closed: phases.reduce((sum, phase) => sum + phase.items.filter(isClosedTodo).length, 0),
@@ -251,8 +251,7 @@ export function renderTodoResult(result: AgentToolResult<unknown>, options: Tool
 	const parsed = detailsSchema.safeParse(result.details);
 	if (result.isError || !parsed.success) {
 		const detail = forDisplay(
-			text ||
-				(result.isError ? tr("Todo operation failed", "待办操作失败") : tr("Invalid todo-more result details", "Todo More 结果详情无效")),
+			text || (result.isError ? tr("Todo operation failed", "待办操作失败") : tr("Invalid todo-ng result details", "Todo NG 结果详情无效")),
 		)
 			.replace(/^Error:\s*/, "")
 			.trim();

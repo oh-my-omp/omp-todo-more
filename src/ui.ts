@@ -23,7 +23,7 @@ import { saveTodoEdit, type TodoEdit } from "./edit.ts";
 import { errorText } from "./errors.ts";
 import { describeSnapshot, describeTodoHud, uiTimeEstimate } from "./native.ts";
 import { sessionOf } from "./session.ts";
-import { type TodoGoal, type TodoMoreState, type TodoStatus, toSnapshot } from "./state.ts";
+import { type TodoGoal, type TodoNgState, type TodoStatus, toSnapshot } from "./state.ts";
 
 const FIELDS = ["objective", "measure", "doneWhen"] as const;
 type GoalField = (typeof FIELDS)[number];
@@ -77,10 +77,10 @@ export class TodoPanel implements Component {
 	private mode: Mode = { kind: "panel", selected: 0 };
 	private error: string | undefined;
 	private described: NativeNode | undefined;
-	private last: TodoMoreState | undefined;
+	private last: TodoNgState | undefined;
 	private disposed = false;
 	focused = true;
-	readonly nativeOverlay = { role: "todo-more.panel", size: "lg" as const, anchor: "center" as const };
+	readonly nativeOverlay = { role: "todo-ng.panel", size: "lg" as const, anchor: "center" as const };
 
 	constructor(
 		private readonly session: AgentSession,
@@ -96,7 +96,7 @@ export class TodoPanel implements Component {
 		this.requestRender();
 	}
 
-	private readState(): TodoMoreState {
+	private readState(): TodoNgState {
 		const state = liveState(this.session);
 		if (this.last === undefined || !Bun.deepEquals(this.last, state)) {
 			this.last = state;
@@ -254,22 +254,22 @@ export class TodoPanel implements Component {
 		let actions: NativeNode[];
 		switch (this.mode.kind) {
 			case "panel": {
-				role = "todo-more.panel";
-				head = tr("Todo More", "Todo More");
+				role = "todo-ng.panel";
+				head = tr("Todo NG", "Todo NG");
 				const snapshot = toSnapshot(state);
 				const ids = snapshot.phases.flatMap((phase) => phase.items.map((item) => item.id));
 				const selected = Math.min(this.mode.selected, ids.length + 1);
 				body.push(
-					this.button(tr("Edit goal", "编辑目标"), "todo-more.goal", selected === 0),
+					this.button(tr("Edit goal", "编辑目标"), "todo-ng.goal", selected === 0),
 					...describeSnapshot(snapshot, true, ids[selected - 1]),
 				);
 				actions = [this.button(tr("Close", "关闭"), "close", selected === ids.length + 1)];
 				break;
 			}
 			case "goal": {
-				role = "todo-more.goal-editor";
+				role = "todo-ng.goal-editor";
 				head = tr("Edit goal", "编辑目标");
-				actions = [this.button(tr("Save", "保存"), "todo-more.save"), this.button(tr("Cancel", "取消"), "close")];
+				actions = [this.button(tr("Save", "保存"), "todo-ng.save"), this.button(tr("Cancel", "取消"), "close")];
 				for (const name of FIELDS) {
 					const draft = this.mode.fields[name];
 					draft.field.focused = this.focused && name === this.mode.active;
@@ -278,7 +278,7 @@ export class TodoPanel implements Component {
 							? draft.field
 							: node(
 									"col",
-									{ gap: "xs", actions: { click: `todo-more.field.${name}` } },
+									{ gap: "xs", actions: { click: `todo-ng.field.${name}` } },
 									[
 										node("text", { spans: [span(goalFieldLabel(name), "strong")] }),
 										node("text", { text: draft.editor.getExpandedText() || tr("[empty]", "[空]"), wrap: "word" }),
@@ -290,11 +290,11 @@ export class TodoPanel implements Component {
 				break;
 			}
 			case "explanation":
-				role = "todo-more.explanation-editor";
+				role = "todo-ng.explanation-editor";
 				head = `${tr("Edit explanation", "编辑说明")}: ${this.mode.title}`;
 				this.mode.draft.field.focused = this.focused;
 				body.push(this.mode.draft.field);
-				actions = [this.button(tr("Save", "保存"), "todo-more.save"), this.button(tr("Cancel", "取消"), "close")];
+				actions = [this.button(tr("Save", "保存"), "todo-ng.save"), this.button(tr("Cancel", "取消"), "close")];
 				break;
 			default: {
 				const unreachable: never = this.mode;
@@ -330,12 +330,12 @@ export class TodoPanel implements Component {
 
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (this.disposed || this.signal.aborted || event.type !== "action") return;
-		if (event.act === "todo-more.save") this.save();
+		if (event.act === "todo-ng.save") this.save();
 		else if (event.act === "close") this.close();
-		else if (event.act === "todo-more.goal") this.openGoal();
-		else if (event.act.startsWith("todo-more.explain:")) this.openExplanation(event.act.slice("todo-more.explain:".length));
+		else if (event.act === "todo-ng.goal") this.openGoal();
+		else if (event.act.startsWith("todo-ng.explain:")) this.openExplanation(event.act.slice("todo-ng.explain:".length));
 		else if (this.mode.kind === "goal") {
-			const name = FIELDS.find((field) => event.act === `todo-more.field.${field}`);
+			const name = FIELDS.find((field) => event.act === `todo-ng.field.${field}`);
 			if (name) {
 				this.mode.active = name;
 				this.changed();
@@ -383,7 +383,7 @@ export class TodoPanel implements Component {
 		const lines = [
 			this.theme.bold(
 				this.mode.kind === "panel"
-					? tr("Todo More", "Todo More")
+					? tr("Todo NG", "Todo NG")
 					: this.mode.kind === "goal"
 						? tr("Edit goal", "编辑目标")
 						: `${tr("Edit explanation", "编辑说明")}: ${this.mode.title}`,
@@ -446,7 +446,7 @@ export class TodoPanel implements Component {
 	}
 }
 
-const HUD_WIDGET_KEY = "todo-more.hud";
+const HUD_WIDGET_KEY = "todo-ng.hud";
 const NO_ANSI_HUD_ROWS: readonly string[] = [];
 
 function findPromptEditor(component: Component): CustomEditor | undefined {
@@ -469,7 +469,7 @@ function viewedSession(tui: TUI, mainAgentId: string): AgentSession | undefined 
 }
 type HudDisclosure = { kind: "closed" } | { kind: "open"; session: AgentSession; stopInput: () => void };
 
-type HudRead = { sessionId: string; state: TodoMoreState; node: NativeNode };
+type HudRead = { sessionId: string; state: TodoNgState; node: NativeNode };
 
 export class TodoHud implements Component {
 	private disclosure: HudDisclosure = { kind: "closed" };
@@ -497,16 +497,16 @@ export class TodoHud implements Component {
 				const sessionId = session.sessionManager.getSessionId();
 				if (previous !== undefined && previous.sessionId === sessionId && Bun.deepEquals(previous.state, state)) return previous.node;
 				const hud = describeTodoHud(toSnapshot(state), expanded);
-				const derived = hud ?? node("row", { role: "omp.hud.activity", aria: tr("Todo More progress", "Todo More 进度"), hidden: true });
+				const derived = hud ?? node("row", { role: "omp.hud.activity", aria: tr("Todo NG progress", "Todo NG 进度"), hidden: true });
 				this.last = { sessionId, state, node: derived };
 				if (hud === null) this.closeDisclosure();
 				return derived;
 			}
 			if (this.disclosure.kind === "open") this.closeDisclosure();
-			return node("row", { role: "omp.hud.activity", aria: tr("Todo More progress", "Todo More 进度"), hidden: true });
+			return node("row", { role: "omp.hud.activity", aria: tr("Todo NG progress", "Todo NG 进度"), hidden: true });
 		} catch (error) {
 			this.closeDisclosure();
-			this.pi.logger.warn("todo-more HUD could not read the current branch", { error: errorText(error) });
+			this.pi.logger.warn("todo-ng HUD could not read the current branch", { error: errorText(error) });
 			return null;
 		}
 	}
@@ -544,7 +544,7 @@ export class TodoHud implements Component {
 				this.last = undefined;
 			}
 			this.tui.requestRender();
-		} else if (event.type === "action" && event.act === "todo-more.open") {
+		} else if (event.type === "action" && event.act === "todo-ng.open") {
 			void this.open();
 		}
 	}
@@ -571,8 +571,8 @@ export function registerUi(pi: ExtensionAPI): void {
 	const open = async (ctx: ExtensionContext): Promise<void> => {
 		if (!ctx.hasUI) {
 			pi.sendMessage({
-				customType: "todo-more.ui-unavailable",
-				content: "Todo More editor requires an interactive UI.",
+				customType: "todo-ng.ui-unavailable",
+				content: "Todo NG editor requires an interactive UI.",
 				display: true,
 				attribution: "agent",
 			});
@@ -599,8 +599,8 @@ export function registerUi(pi: ExtensionAPI): void {
 			);
 		} catch (error) {
 			if (!opened.controller.signal.aborted) {
-				pi.logger.warn("todo-more UI failed", { error: errorText(error) });
-				ctx.ui.notify(`${tr("Todo More UI failed", "Todo More 界面失败")}: ${errorText(error)}`, "error");
+				pi.logger.warn("todo-ng UI failed", { error: errorText(error) });
+				ctx.ui.notify(`${tr("Todo NG UI failed", "Todo NG 界面失败")}: ${errorText(error)}`, "error");
 			}
 		} finally {
 			if (active === opened) active = undefined;
@@ -657,9 +657,9 @@ export function registerUi(pi: ExtensionAPI): void {
 		const command = /^\/todo(?:[\s:]+(.*))?$/s.exec(event.text.trim());
 		if (command === null) return;
 		const args = (command[1] ?? "").trim().toLowerCase();
-		if (args === "" || args === "edit") return { text: "/todo-more" };
+		if (args === "" || args === "edit") return { text: "/todo-ng" };
 	});
-	pi.registerCommand("todo-more", {
+	pi.registerCommand("todo-ng", {
 		description: tr("Show rich todos and edit the current session's goal and explanations", "显示丰富待办并编辑当前会话的目标和说明"),
 		handler: async (_args: string, ctx: ExtensionContext) => open(ctx),
 	});

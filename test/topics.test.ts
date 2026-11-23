@@ -5,7 +5,7 @@ import { hostSession, runPersisted } from "./host.ts";
 
 describe("todo views", () => {
 	test("todo({}) and todo({ view }) resolve full, current, and single-phase views without mutating state", async () => {
-		const manager = SessionManager.inMemory("/tmp/todo-more-view-tests");
+		const manager = SessionManager.inMemory("/tmp/todo-ng-view-tests");
 		const session = hostSession(manager);
 
 		const emptyView = await runTodo(session, {});

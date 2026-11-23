@@ -10,8 +10,8 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { foldBranch } from "../src/branch.ts";
 import type { TodoSession } from "../src/commit.ts";
 import type { ModelRef } from "../src/models.ts";
-import { type CommitRecord, type TodoMoreSnapshot, toSnapshot } from "../src/state.ts";
-import type { ParentCwd, TodoMoreDetails } from "../src/tool.ts";
+import { type CommitRecord, type TodoNgSnapshot, toSnapshot } from "../src/state.ts";
+import type { ParentCwd, TodoNgDetails } from "../src/tool.ts";
 import { hostSession, runPersisted } from "./host.ts";
 
 const goal = {
@@ -32,11 +32,11 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 }
 
 async function repository(files: Record<string, string>): Promise<string> {
-	const cwd = await mkdtemp(join(tmpdir(), "todo-more-git-"));
+	const cwd = await mkdtemp(join(tmpdir(), "todo-ng-git-"));
 	created.push(cwd);
 	await git(cwd, "init", "-q", "-b", "main");
-	await git(cwd, "config", "user.email", "todo-more@example.invalid");
-	await git(cwd, "config", "user.name", "Todo More Tests");
+	await git(cwd, "config", "user.email", "todo-ng@example.invalid");
+	await git(cwd, "config", "user.name", "Todo NG Tests");
 	await git(cwd, "config", "commit.gpgsign", "false");
 	for (const [name, body] of Object.entries(files)) await Bun.write(join(cwd, name), body);
 	await git(cwd, "add", "-A");
@@ -49,10 +49,10 @@ type Commit = { readonly message: string; readonly paths?: string[] };
 type Harness = {
 	cwd: string;
 	session: TodoSession;
-	call: (raw: unknown) => Promise<AgentToolResult<TodoMoreDetails>>;
+	call: (raw: unknown) => Promise<AgentToolResult<TodoNgDetails>>;
 	plan: (...titles: string[]) => Promise<void>;
-	done: (id: string, commit?: Commit) => Promise<AgentToolResult<TodoMoreDetails>>;
-	snapshot: () => TodoMoreSnapshot;
+	done: (id: string, commit?: Commit) => Promise<AgentToolResult<TodoNgDetails>>;
+	snapshot: () => TodoNgSnapshot;
 	edit: (file: string, content: string) => Promise<void>;
 };
 
@@ -60,7 +60,7 @@ type FixtureOptions = { readonly model?: ModelRef; readonly parentCwd?: ParentCw
 
 async function sessionManagerFor(cwd: string, journaled: boolean): Promise<SessionManager> {
 	if (!journaled) return SessionManager.inMemory(cwd);
-	const dir = await mkdtemp(join(tmpdir(), "todo-more-sessions-"));
+	const dir = await mkdtemp(join(tmpdir(), "todo-ng-sessions-"));
 	created.push(dir);
 	return SessionManager.create(cwd, dir);
 }
@@ -78,7 +78,7 @@ async function fixture(cwd: string, options: FixtureOptions = {}): Promise<Harne
 			if (result.isError === true) throw new Error(`plan failed: ${textOf(result)}`);
 		},
 		done: (id, commit) => call({ done_id: id, ...(commit === undefined ? {} : { commit }) }),
-		snapshot: (): TodoMoreSnapshot => toSnapshot(foldBranch(sessionManager.getBranch()).state),
+		snapshot: (): TodoNgSnapshot => toSnapshot(foldBranch(sessionManager.getBranch()).state),
 		edit: async (file, content) => {
 			const path = join(cwd, file);
 			const before = (await Bun.file(path).exists()) ? await Bun.file(path).text() : null;
@@ -90,7 +90,7 @@ async function fixture(cwd: string, options: FixtureOptions = {}): Promise<Harne
 	};
 }
 
-function itemOf(snapshot: TodoMoreSnapshot, title: string) {
+function itemOf(snapshot: TodoNgSnapshot, title: string) {
 	const item = snapshot.phases.flatMap((phase) => phase.items).find((candidate) => candidate.title === title);
 	if (item === undefined) throw new Error(`Expected task ${title}`);
 	return item;
@@ -373,7 +373,7 @@ describe("the git association of a completion", () => {
 		expect(itemOf(clean.snapshot(), "Verify").commit).toBeNull();
 		expect(await git(clean.cwd, "rev-parse", "HEAD")).toBe(cleanHead);
 
-		const outside = await mkdtemp(join(tmpdir(), "todo-more-plain-"));
+		const outside = await mkdtemp(join(tmpdir(), "todo-ng-plain-"));
 		created.push(outside);
 		const plain = await fixture(outside);
 		await plain.plan("Verify");
@@ -388,7 +388,7 @@ describe("the git association of a completion", () => {
 		await harness.edit("a.txt", "two\n");
 		const result = await harness.done("t1", { message: "Implement the change" });
 
-		const details = result.details as TodoMoreDetails;
+		const details = result.details as TodoNgDetails;
 		expect(details.more).toEqual(harness.snapshot());
 		expect(itemOf(harness.snapshot(), "Implement").commit?.sha).toMatch(/^[0-9a-f]{40}$/);
 	});
@@ -521,7 +521,7 @@ describe("a subagent's completion in its parent's worktree", () => {
 
 	test("a parent in another linked worktree of the same repository keeps the refusal and the commit", async () => {
 		const parent = await repository({ "a.txt": "one\n" });
-		const isolated = await mkdtemp(join(tmpdir(), "todo-more-linked-"));
+		const isolated = await mkdtemp(join(tmpdir(), "todo-ng-linked-"));
 		created.push(isolated);
 		await rm(isolated, { recursive: true, force: true });
 		await git(parent, "worktree", "add", "-q", "-b", "child", isolated);

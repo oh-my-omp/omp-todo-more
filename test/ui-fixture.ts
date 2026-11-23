@@ -3,7 +3,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import type { Theme, TUI } from "@oh-my-pi/pi-tui";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { foldBranch } from "../src/branch.ts";
-import { FRESH, hostPhases, TODO_MORE_NOTES_TYPE } from "../src/state.ts";
+import { FRESH, hostPhases, TODO_NG_NOTES_TYPE } from "../src/state.ts";
 import { todoResultMessage } from "./host.ts";
 
 export type UiFixture = {
@@ -126,7 +126,7 @@ export function fillBranch(manager: SessionManager, count: number): void {
 	const richUntil = count - Math.max(500, Math.floor(count * 0.08));
 	for (let i = 0; i < count; i++) {
 		if (i % 300 === 0 && i < richUntil) {
-			manager.appendCustomEntry(TODO_MORE_NOTES_TYPE, {
+			manager.appendCustomEntry(TODO_NG_NOTES_TYPE, {
 				goal: { objective: "Ship it", measure: "Done", doneWhen: "Merged" },
 				items: [
 					{

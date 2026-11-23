@@ -51,7 +51,7 @@ function textOf(content: unknown): string {
 }
 
 async function runWith(model: string): Promise<Outcome> {
-	const cwd = mkdtempSync(path.join(tmpdir(), "todo-more-e2e-"));
+	const cwd = mkdtempSync(path.join(tmpdir(), "todo-ng-e2e-"));
 	const proc = Bun.spawn(
 		["omp", "--mode", "rpc", "--no-extensions", "-e", EXTENSION, "--model", model, "--no-rules", "--no-title", "--no-session"],
 		{ cwd, env: { ...process.env, OMOMP_LANG: "en" }, stdin: "pipe", stdout: "pipe", stderr: "ignore" },

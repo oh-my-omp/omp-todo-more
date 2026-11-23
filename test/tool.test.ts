@@ -15,13 +15,13 @@ import {
 	joinHost,
 	OVERTIME_TYPE,
 	type Progress,
-	TODO_MORE_NOTES_TYPE,
+	TODO_NG_NOTES_TYPE,
 	type TodoGoal,
-	type TodoMoreSnapshot,
+	type TodoNgSnapshot,
 	type TodoNotes,
 	toSnapshot,
 } from "../src/state.ts";
-import { runTodo, type TodoMoreDetails } from "../src/tool.ts";
+import { runTodo, type TodoNgDetails } from "../src/tool.ts";
 import { todoResultMessage } from "./host.ts";
 
 const epoch = Date.parse("2026-10-15T12:00:00.000Z");
@@ -75,12 +75,12 @@ async function at<T>(now: number, invoke: () => Promise<T>, tick = 0): Promise<T
 type Fixture = {
 	session: TodoSession;
 	projections: HostTodoPhase[][];
-	snapshot: () => TodoMoreSnapshot;
+	snapshot: () => TodoNgSnapshot;
 	notes: () => TodoNotes;
 	notesEntries: () => SessionEntry[];
-	run: (raw: unknown, leafMaxMinutes?: number) => Promise<AgentToolResult<TodoMoreDetails>>;
-	call: (args: unknown) => Promise<AgentToolResult<TodoMoreDetails>>;
-	callAt: (now: number, args: unknown) => Promise<AgentToolResult<TodoMoreDetails>>;
+	run: (raw: unknown, leafMaxMinutes?: number) => Promise<AgentToolResult<TodoNgDetails>>;
+	call: (args: unknown) => Promise<AgentToolResult<TodoNgDetails>>;
+	callAt: (now: number, args: unknown) => Promise<AgentToolResult<TodoNgDetails>>;
 };
 
 function phasesOf(notes: TodoNotes): HostTodoPhase[] {
@@ -93,7 +93,7 @@ function phasesOf(notes: TodoNotes): HostTodoPhase[] {
 	return phases;
 }
 
-function snapshotOf(notes: TodoNotes): TodoMoreSnapshot {
+function snapshotOf(notes: TodoNotes): TodoNgSnapshot {
 	return toSnapshot(joinHost(phasesOf(notes), notes));
 }
 
@@ -102,7 +102,7 @@ function withItem(notes: TodoNotes, id: string, patch: Partial<ItemNote>): TodoN
 }
 
 function fixture(initial?: TodoNotes): Fixture {
-	const sessionManager = SessionManager.inMemory("/tmp/todo-more-tool-tests");
+	const sessionManager = SessionManager.inMemory("/tmp/todo-ng-tool-tests");
 	const projections: HostTodoPhase[][] = [];
 	let list: HostTodoPhase[] = [];
 	const session: TodoSession = {
@@ -116,7 +116,7 @@ function fixture(initial?: TodoNotes): Fixture {
 	};
 	if (initial !== undefined) {
 		list = phasesOf(initial);
-		sessionManager.appendCustomEntry(TODO_MORE_NOTES_TYPE, initial);
+		sessionManager.appendCustomEntry(TODO_NG_NOTES_TYPE, initial);
 		sessionManager.appendMessage(todoResultMessage({ op: "batch", phases: phasesOf(initial) }, epoch));
 	}
 	const run: Fixture["run"] = async (raw, leafMaxMinutes) => {
@@ -124,20 +124,20 @@ function fixture(initial?: TodoNotes): Fixture {
 		sessionManager.appendMessage(todoResultMessage(result.details, Date.now(), result.isError === true));
 		return result;
 	};
-	const callAt = (now: number, args: unknown): Promise<AgentToolResult<TodoMoreDetails>> => at(now, () => run(args));
+	const callAt = (now: number, args: unknown): Promise<AgentToolResult<TodoNgDetails>> => at(now, () => run(args));
 	return {
 		session,
 		projections,
 		snapshot: () => toSnapshot(foldBranch(sessionManager.getBranch()).state),
 		notes: () => branchFacts(sessionManager).notes,
-		notesEntries: () => sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === TODO_MORE_NOTES_TYPE),
+		notesEntries: () => sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === TODO_NG_NOTES_TYPE),
 		run,
 		call: (args) => callAt(epoch, args),
 		callAt,
 	};
 }
 
-function expectSaved(harness: Fixture, result: AgentToolResult<TodoMoreDetails>, expected: TodoNotes, previousProjections: number): void {
+function expectSaved(harness: Fixture, result: AgentToolResult<TodoNgDetails>, expected: TodoNotes, previousProjections: number): void {
 	const snapshot = snapshotOf(expected);
 	expect(result.isError).not.toBe(true);
 	expect(harness.snapshot()).toEqual(snapshot);
@@ -151,8 +151,8 @@ function expectSaved(harness: Fixture, result: AgentToolResult<TodoMoreDetails>,
 
 async function expectRejected(
 	harness: Fixture,
-	invoke: () => Promise<AgentToolResult<TodoMoreDetails>>,
-): Promise<AgentToolResult<TodoMoreDetails>> {
+	invoke: () => Promise<AgentToolResult<TodoNgDetails>>,
+): Promise<AgentToolResult<TodoNgDetails>> {
 	const before = harness.snapshot();
 	const notes = structuredClone(harness.notesEntries());
 	const list = harness.session.getTodoPhases();
@@ -168,17 +168,17 @@ async function expectRejected(
 	return result;
 }
 
-function itemOf(snapshot: TodoMoreSnapshot, title: string) {
+function itemOf(snapshot: TodoNgSnapshot, title: string) {
 	const item = snapshot.phases.flatMap((phase) => phase.items).find((candidate) => candidate.title === title);
 	if (item === undefined) throw new Error(`Expected task ${title}`);
 	return item;
 }
 
-function resultText(result: AgentToolResult<TodoMoreDetails>): string {
+function resultText(result: AgentToolResult<TodoNgDetails>): string {
 	return result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 }
 
-function estimateOf(snapshot: TodoMoreSnapshot, title: string): Extract<Estimate, { kind: "estimated" }> {
+function estimateOf(snapshot: TodoNgSnapshot, title: string): Extract<Estimate, { kind: "estimated" }> {
 	const estimate = itemOf(snapshot, title).estimate;
 	if (estimate.kind !== "estimated") throw new Error(`Expected estimate for ${title}`);
 	return estimate;

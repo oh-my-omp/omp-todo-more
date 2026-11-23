@@ -14,7 +14,7 @@ import {
 	type Progress,
 	stateOf,
 	type TodoItem,
-	type TodoMoreState,
+	type TodoNgState,
 	type TodoStatus,
 	transition,
 } from "../src/state.ts";
@@ -25,9 +25,9 @@ const title = "Deliver the full task";
 type Warning = Extract<SessionEntry, { type: "custom_message" }>;
 type Handler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
 
-const stateOfManager = (manager: SessionManager): TodoMoreState => foldBranch(manager.getBranch()).state;
+const stateOfManager = (manager: SessionManager): TodoNgState => foldBranch(manager.getBranch()).state;
 
-function estimatedState(minutes = 1, budgetId = "original-budget", runningSince = epoch, elapsedMs = 0): TodoMoreState {
+function estimatedState(minutes = 1, budgetId = "original-budget", runningSince = epoch, elapsedMs = 0): TodoNgState {
 	return stateOf({ kind: "set", goal: { objective: "Deliver the task", measure: "Observable behavior", doneWhen: "All criteria hold" } }, [
 		{
 			name: "Delivery",
@@ -189,7 +189,7 @@ class SchedulerFixture {
 		await Promise.resolve();
 	}
 
-	async append(state: TodoMoreState): Promise<void> {
+	async append(state: TodoNgState): Promise<void> {
 		commitTodoState(this.session, state);
 		appendStateResult(this.manager, state, this.clock.now);
 		await this.toolEnd("todo");
