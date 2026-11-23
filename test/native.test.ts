@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { ensureThemeSync, type NativeChild, type NativeNode, theme } from "@oh-my-pi/pi-tui";
 import { describeSnapshot, describeTodoHud, describeTodoResult } from "../src/native.ts";
 import { renderReminder } from "../src/reminders.ts";
-import { detailsSchema } from "../src/render.ts";
 import type { TodoMoreSnapshot, TodoStatus } from "../src/state.ts";
 import type { TodoMoreDetails } from "../src/tool.ts";
 
@@ -17,16 +16,20 @@ const snapshot: TodoMoreSnapshot = {
 			name: "Delivery",
 			items: [
 				{
+					id: "t1",
 					title: "Plan the replacement",
 					explanation: "Keep the host projection",
 					status: "pending",
-					time: { kind: "missing" },
+					estimate: { kind: "missing" },
+					commit: null,
 				},
 				{
+					id: "t2",
 					title: "Implement the card",
 					explanation: "Use the native checklist",
 					status: "in_progress",
-					time: { kind: "estimated", budgetId: "implement-budget", minutes: 25, elapsedMs: 60_000, runningSince: 120_000 },
+					estimate: { kind: "estimated", budgetId: "implement-budget", minutes: 25 },
+					commit: null,
 				},
 			],
 		},
@@ -34,22 +37,28 @@ const snapshot: TodoMoreSnapshot = {
 			name: "Verification",
 			items: [
 				{
+					id: "t3",
 					title: "Inspect saved fields",
 					explanation: "Read the historical result",
 					status: "completed",
-					time: { kind: "estimated", budgetId: "inspect-budget", minutes: 10, elapsedMs: 180_000, runningSince: null },
+					estimate: { kind: "estimated", budgetId: "inspect-budget", minutes: 10 },
+					commit: null,
 				},
 				{
+					id: "t4",
 					title: "Old approach",
 					explanation: "No longer needed",
 					status: "abandoned",
-					time: { kind: "missing" },
+					estimate: { kind: "missing" },
+					commit: null,
 				},
 				{
+					id: "t5",
 					title: "Check runtime",
 					explanation: "Exercise the real native consumer",
 					status: "pending",
-					time: { kind: "estimated", budgetId: "runtime-budget", minutes: 12, elapsedMs: 120_000, runningSince: null },
+					estimate: { kind: "estimated", budgetId: "runtime-budget", minutes: 12 },
+					commit: null,
 				},
 			],
 		},
@@ -171,7 +180,16 @@ describe("native todo presentation", () => {
 			phases: [
 				{
 					name: "Imported",
-					items: [{ title: "Imported task", status: "pending", explanation: null, time: { kind: "missing" } }],
+					items: [
+						{
+							id: "t1",
+							title: "Imported task",
+							status: "pending",
+							explanation: null,
+							estimate: { kind: "missing" },
+							commit: null,
+						},
+					],
 				},
 			],
 		});
@@ -201,10 +219,11 @@ describe("native todo presentation", () => {
 					name: "Delivery",
 					items: [
 						{
+							id: "t1",
 							title: "Implement the card",
 							explanation: "Use the native checklist",
 							status: "completed",
-							time: { kind: "estimated", budgetId: "implement-budget", minutes: 25, elapsedMs: 60_000, runningSince: null },
+							estimate: { kind: "estimated", budgetId: "implement-budget", minutes: 25 },
 							commit: {
 								sha: "0123456789abcdef0123456789abcdef01234567",
 								message: "Implement the card",
@@ -267,10 +286,12 @@ describe("native todo HUD", () => {
 					{
 						name: "Progress",
 						items: statuses.map((status, index) => ({
+							id: `t${index + 1}`,
 							title: `Task ${index + 1}`,
 							status,
 							explanation: null,
-							time: { kind: "missing" },
+							estimate: { kind: "missing" } as const,
+							commit: null,
 						})),
 					},
 				],
@@ -292,15 +313,29 @@ describe("native result card", () => {
 			resultFor({
 				goal: { objective: "Ship", measure: "Measured", doneWhen: "Done" },
 				phases: [
-					{ name: "Closed", items: [{ title: "Old", explanation: "Done already", status: "completed", time: { kind: "missing" } }] },
+					{
+						name: "Closed",
+						items: [
+							{
+								id: "t1",
+								title: "Old",
+								explanation: "Done already",
+								status: "completed",
+								estimate: { kind: "missing" },
+								commit: null,
+							},
+						],
+					},
 					{
 						name: "Open",
 						items: [
 							{
+								id: "t2",
 								title: "Waiting task",
 								explanation: "Waits",
 								status: "pending",
-								time: { kind: "estimated", budgetId: "open-budget", minutes: 12, elapsedMs: 0, runningSince: null },
+								estimate: { kind: "estimated", budgetId: "open-budget", minutes: 12 },
+								commit: null,
 							},
 						],
 					},
@@ -338,8 +373,22 @@ describe("native result card", () => {
 					{
 						name: "Open",
 						items: [
-							{ title: "Done", explanation: "Shipped", status: "completed", time: { kind: "missing" } },
-							{ title: "Next", explanation: "Pending", status: "pending", time: { kind: "missing" } },
+							{
+								id: "t1",
+								title: "Done",
+								explanation: "Shipped",
+								status: "completed",
+								estimate: { kind: "missing" },
+								commit: null,
+							},
+							{
+								id: "t2",
+								title: "Next",
+								explanation: "Pending",
+								status: "pending",
+								estimate: { kind: "missing" },
+								commit: null,
+							},
 						],
 					},
 				],
@@ -354,12 +403,13 @@ describe("native result card", () => {
 
 	test("incremental CRUD shows only changed items while collapsed, and expanding restores the full snapshot", () => {
 		const updated = structuredClone(snapshot);
-		updated.phases[0]!.items[0]!.status = "completed";
+		if (updated.phases[0] === undefined) throw new Error("Expected the Delivery phase");
+		updated.phases[0].items = updated.phases[0].items.map((item) => (item.id === "t1" ? { ...item, status: "completed" } : item));
 		const crudResult = resultFor(updated);
 		crudResult.details.op = "batch";
 		crudResult.details.operations = ["done", "explain"];
 		crudResult.details.changes = [
-			{ op: "done", id: "t1", title: "Plan the replacement" },
+			{ op: "done", id: "t1", title: "Plan the replacement", commit: null },
 			{ op: "explain", id: "t2", title: "Implement the card", explanation: "Use the native checklist" },
 		];
 
@@ -386,21 +436,20 @@ describe("native result card", () => {
 		expect(rows(expandedBody)).toHaveLength(5);
 	});
 
-	test("RM delta shows only the removed task without listing surviving tasks", () => {
-		const remaining = structuredClone(snapshot);
-		remaining.phases[0]!.items = remaining.phases[0]!.items.slice(1);
-		const rmResult = resultFor(remaining) as Parameters<typeof describeTodoResult>[0];
-		rmResult.details = {
-			...(rmResult.details as Record<string, unknown>),
-			op: "rm",
-			operations: ["rm"],
-			changes: [{ op: "rm", task: "Plan the replacement" }],
-		} as unknown as TodoMoreDetails;
+	test("a drop delta shows only the dropped task without listing surviving tasks", () => {
+		const dropped = structuredClone(snapshot);
+		const delivery = dropped.phases[0];
+		if (delivery === undefined) throw new Error("Expected the Delivery phase");
+		delivery.items = delivery.items.map((item) => (item.id === "t1" ? { ...item, status: "abandoned" } : item));
+		const dropResult = resultFor(dropped);
+		dropResult.details.op = "drop";
+		dropResult.details.operations = ["drop"];
+		dropResult.details.changes = [{ op: "drop", id: "t1", title: "Plan the replacement" }];
 
-		const body = resultBody(rmResult, false);
-		expect(checklist(body).phases.map((phase) => phase.title)).toEqual(["Removed"]);
+		const body = resultBody(dropResult, false);
+		expect(checklist(body).phases.map((phase) => phase.title)).toEqual(["Delivery"]);
 		expect(rows(body).map((item) => ({ text: item.text, status: item.status }))).toEqual([
-			{ text: "Plan the replacement · removed", status: "dropped" },
+			{ text: "Plan the replacement · no estimate", status: "dropped" },
 		]);
 	});
 
@@ -444,23 +493,34 @@ describe("native result card", () => {
 });
 
 describe("native historical todo results", () => {
-	test("renders each result's own details.more and timing after a different, newer snapshot was rendered", () => {
+	test("renders each result's own details.more after a different, newer snapshot was rendered", () => {
 		const historical = resultFor(snapshot);
 		const newer = resultFor({
 			goal: { objective: "A new objective", measure: "A new measure", doneWhen: "A new completion boundary" },
 			phases: [
 				{
 					name: "New phase",
-					items: [{ title: "A new task", explanation: "Only in the new result", status: "completed", time: { kind: "missing" } }],
+					items: [
+						{
+							id: "t1",
+							title: "A new task",
+							explanation: "Only in the new result",
+							status: "completed",
+							estimate: { kind: "missing" },
+							commit: null,
+						},
+					],
 				},
 				{
 					name: "Verification",
 					items: [
 						{
+							id: "t2",
 							title: "Check runtime",
 							explanation: "A newer runtime check",
 							status: "completed",
-							time: { kind: "estimated", budgetId: "runtime-budget", minutes: 45, elapsedMs: 300_000, runningSince: null },
+							estimate: { kind: "estimated", budgetId: "runtime-budget", minutes: 45 },
+							commit: null,
 						},
 					],
 				},
@@ -490,52 +550,5 @@ describe("native historical todo results", () => {
 			"Check runtime · 12m",
 		]);
 		expect(rows(historicalBody)[4]?.note).toBe("Explanation: Exercise the real native consumer");
-	});
-});
-
-describe("legacy persisted todo results", () => {
-	test("detailsSchema reads results written before block and unblock were removed", () => {
-		const raw = {
-			op: "batch",
-			operations: ["done", "block", "unblock", "explain"],
-			changes: [
-				{ op: "done", task: "Keep" },
-				{ op: "block", task: "Keep", reason: "Waiting for service" },
-				{ op: "unblock", task: "Keep" },
-				{ op: "explain", task: "Keep", explanation: "Updated" },
-			],
-			phases: [{ name: "Delivery", tasks: [{ content: "Keep", status: "blocked" }] }],
-			storage: "session",
-			todoMore: true,
-			more: {
-				goal: null,
-				phases: [
-					{
-						name: "Delivery",
-						items: [
-							{
-								title: "Keep",
-								explanation: "Persisted",
-								status: "blocked",
-								blocker: "Waiting for service",
-								time: { kind: "missing" },
-							},
-						],
-					},
-				],
-			},
-		};
-		const parsed = detailsSchema.safeParse(raw);
-		expect(parsed.success).toBe(true);
-		if (!parsed.success) throw new Error("Expected legacy result details to parse");
-		expect(parsed.data.operations).toEqual(["done", "explain"]);
-		expect(parsed.data.changes).toEqual([
-			{ op: "done", task: "Keep" },
-			{ op: "explain", task: "Keep", explanation: "Updated" },
-		]);
-		expect(parsed.data.phases[0]?.tasks[0]?.status).toBe("pending");
-		const item = parsed.data.more.phases[0]?.items[0];
-		expect(item?.status).toBe("pending");
-		expect(item !== undefined && "blocker" in item).toBe(false);
 	});
 });

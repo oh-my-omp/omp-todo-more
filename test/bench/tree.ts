@@ -5,7 +5,7 @@ import type { ExtensionAPI, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { readTodoMore } from "../../src/branch.ts";
+import { foldBranch } from "../../src/branch.ts";
 import { hostPhases, TODO_MORE_NOTES_TYPE } from "../../src/state.ts";
 import { todoResultMessage } from "../host.ts";
 import { fillBranch, messageEntry } from "../ui-fixture.ts";
@@ -45,7 +45,7 @@ function sessionOver(manager: SessionManager): AgentSession {
 	const session = {
 		sessionManager: manager,
 		model: undefined,
-		getTodoPhases: () => hostPhases(readTodoMore(manager.getBranchView())),
+		getTodoPhases: () => hostPhases(foldBranch(manager.getBranchView()).state),
 		setTodoPhases: () => {},
 	};
 	return Object.setPrototypeOf(session, AgentSession.prototype) as AgentSession;
@@ -159,16 +159,19 @@ async function overtimePath(n: number): Promise<Sample> {
 			goal: { objective: "Ship it", measure: "Done", doneWhen: "Merged" },
 			items: [
 				{
+					id: "t1",
 					phase: "Delivery",
 					title: "Running task",
 					explanation: `Work ${k++}`,
-					time: { kind: "estimated", budgetId: "bench-budget", minutes: 60, elapsedMs: 0, runningSince },
+					estimate: { kind: "estimated", budgetId: "bench-budget", minutes: 60 },
+					progress: { status: "in_progress", startedAt: runningSince, elapsedMs: 0, runningSince },
+					commit: null,
 				},
 			],
 		});
 		manager.appendMessage(
 			todoResultMessage(
-				{ op: "update", phases: [{ name: "Delivery", tasks: [{ content: "Running task", status: "in_progress" }] }] },
+				{ op: "batch", phases: [{ name: "Delivery", tasks: [{ content: "Running task", status: "in_progress" }] }] },
 				runningSince,
 			),
 		);

@@ -108,12 +108,14 @@ async function scenarioGrow(): Promise<void> {
 	if (hudReads.copies !== 0) fail(`grown HUD frame copied ${hudReads.copies}× (want 0 — §6 view)`);
 	if (hudReads.reads <= 1) fail(`grown HUD frame re-derived nothing — growth must re-derive`);
 	if (!JSON.stringify(hudNext).includes("Grown task")) fail(`grown HUD frame misses the appended task — growth must re-derive`);
+	appendTodoChange(fx.raw, "Panel grown task");
 	fx.resetCounters();
 	const panelNext = panel.describe();
 	const panelReads = { ...fx.counters };
 	if (panelReads.copies !== 0) fail(`grown panel describe copied ${panelReads.copies}× (want 0 — §6 view)`);
 	if (panelReads.reads <= 1) fail(`grown panel describe re-derived nothing — growth must re-derive`);
-	if (!JSON.stringify(panelNext).includes("Grown task")) fail(`grown panel describe misses the appended task — growth must re-derive`);
+	if (!JSON.stringify(panelNext).includes("Panel grown task"))
+		fail(`grown panel describe misses the appended task — growth must re-derive`);
 	if (!failed)
 		ok(`+${appends} entries + todo change: HUD ${JSON.stringify(hudReads)}, panel ${JSON.stringify(panelReads)}, growth re-derived`);
 }

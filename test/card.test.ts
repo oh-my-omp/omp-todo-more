@@ -36,14 +36,16 @@ const snapshot: TodoMoreSnapshot = {
 					title: "Read the merge path",
 					explanation: "Follow the host view merge",
 					status: "in_progress",
-					time: { kind: "estimated", budgetId: "b1", minutes: 25, elapsedMs: 0, runningSince: null },
+					estimate: { kind: "estimated", budgetId: "b1", minutes: 25 },
+					commit: null,
 				},
 				{
 					id: "t2",
 					title: "Set the flag",
 					explanation: "Declare mergeCallAndResult on the tool",
 					status: "pending",
-					time: { kind: "estimated", budgetId: "b2", minutes: 10, elapsedMs: 0, runningSince: null },
+					estimate: { kind: "estimated", budgetId: "b2", minutes: 10 },
+					commit: null,
 				},
 			],
 		},
@@ -180,7 +182,7 @@ describe("one card per todo call", () => {
 				details: {
 					op: "done",
 					operations: ["done"],
-					changes: [{ op: "done", id: "t1", title: "Read the merge path" }],
+					changes: [{ op: "done", id: "t1", title: "Read the merge path", commit: null }],
 					completedTasks: [{ phase: "Implementation", content: "Read the merge path" }],
 					phases: [
 						{

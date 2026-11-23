@@ -35,7 +35,7 @@ describe("host reminders carry the plugin's content", () => {
 		const manager = SessionManager.inMemory("/tmp/todo-more-reminders-tests");
 		const { host, session: own } = session(manager);
 		await runTodo(host, valid);
-		const rewritten = contextMessages([nudge()], own, manager);
+		const rewritten = contextMessages([nudge()], own);
 		const text = JSON.stringify(rewritten);
 		expect(text).toContain("1 todo item still open");
 		expect(text).toContain("Goal objective: Ship it");
@@ -48,7 +48,7 @@ describe("host reminders carry the plugin's content", () => {
 		const manager = SessionManager.inMemory("/tmp/todo-more-reminders-tests");
 		const { host, session: own } = session(manager);
 		await runPersisted(host, valid);
-		expect(JSON.stringify(contextMessages([nudge()], own, manager))).toContain("1 todo item still open");
+		expect(JSON.stringify(contextMessages([nudge()], own))).toContain("1 todo item still open");
 	});
 });
 
@@ -64,14 +64,14 @@ describe("the continuation reminder reads the live host list", () => {
 			settings: Settings.isolated(),
 			wakeSources: undefined,
 		};
-		return { host, own, ctx: { sessionManager: manager } };
+		return { host, own };
 	}
 
 	test("a todo call whose result is not on the branch yet still gets its open items reminded", async () => {
 		const manager = SessionManager.inMemory("/tmp/todo-more-continuation-tests");
-		const { host, own, ctx } = stopped(manager);
+		const { host, own } = stopped(manager);
 		await runTodo(host, valid);
-		const completion = continuation(own, ctx);
+		const completion = continuation(own);
 		expect(completion.kind).toBe("remind");
 		const text = completion.kind === "remind" ? completion.text : "";
 		expect(text).toContain("Current time:");
@@ -82,8 +82,8 @@ describe("the continuation reminder reads the live host list", () => {
 
 	test("an empty host list stays silent", () => {
 		const manager = SessionManager.inMemory("/tmp/todo-more-continuation-tests-empty");
-		const { own, ctx } = stopped(manager);
-		expect(continuation(own, ctx)).toEqual({ kind: "silent" });
+		const { own } = stopped(manager);
+		expect(continuation(own)).toEqual({ kind: "silent" });
 	});
 });
 

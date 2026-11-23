@@ -1,8 +1,9 @@
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { Theme, TUI } from "@oh-my-pi/pi-tui";
-import { readTodoMore } from "../src/branch.ts";
-import { hostPhases, TODO_MORE_NOTES_TYPE } from "../src/state.ts";
+import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { foldBranch } from "../src/branch.ts";
+import { FRESH, hostPhases, TODO_MORE_NOTES_TYPE } from "../src/state.ts";
 import { todoResultMessage } from "./host.ts";
 
 export type UiFixture = {
@@ -54,10 +55,25 @@ export function fixture(dir: string): UiFixture {
 		},
 	});
 
+	const hostPhasesOf = (() => {
+		let length = -1;
+		let leaf: string | null = null;
+		let phases: HostTodoPhase[] = [];
+		return () => {
+			const view = proxied.getBranchView();
+			const currentLeaf = proxied.getLeafId();
+			if (view.length === length && currentLeaf === leaf) return phases;
+			phases = hostPhases(foldBranch(view).state);
+			length = view.length;
+			leaf = currentLeaf;
+			return phases;
+		};
+	})();
+
 	return {
 		manager: proxied as unknown as SessionManager,
 		raw: manager,
-		session: { sessionManager: proxied } as unknown as AgentSession,
+		session: { sessionManager: proxied, getTodoPhases: hostPhasesOf } as unknown as AgentSession,
 		counters,
 		resetCounters: () => {
 			counters.copies = 0;
@@ -112,11 +128,21 @@ export function fillBranch(manager: SessionManager, count: number): void {
 		if (i % 300 === 0 && i < richUntil) {
 			manager.appendCustomEntry(TODO_MORE_NOTES_TYPE, {
 				goal: { objective: "Ship it", measure: "Done", doneWhen: "Merged" },
-				items: [{ phase: "Delivery", title: `Task ${i}`, explanation: `Work ${i}`, time: { kind: "missing" } }],
+				items: [
+					{
+						id: `t${i + 1}`,
+						phase: "Delivery",
+						title: `Task ${i}`,
+						explanation: `Work ${i}`,
+						estimate: { kind: "missing" },
+						progress: FRESH,
+						commit: null,
+					},
+				],
 			});
 			manager.appendMessage(
 				todoResultMessage(
-					{ op: "update", phases: [{ name: "Delivery", tasks: [{ content: `Task ${i}`, status: "in_progress" }] }] },
+					{ op: "batch", phases: [{ name: "Delivery", tasks: [{ content: `Task ${i}`, status: "in_progress" }] }] },
 					1_700_000_000_000 + i,
 				),
 			);
@@ -135,9 +161,9 @@ export function fillBranch(manager: SessionManager, count: number): void {
 }
 
 export function appendTodoChange(manager: SessionManager, title: string): void {
-	const phases = hostPhases(readTodoMore(manager.getBranchView()));
+	const phases = hostPhases(foldBranch(manager.getBranchView()).state);
 	const first = phases[0] ?? { name: "Delivery", tasks: [] };
 	const rest = phases.slice(1);
 	const changed = [{ name: first.name, tasks: [...first.tasks, { content: title, status: "pending" as const }] }, ...rest];
-	manager.appendMessage(todoResultMessage({ op: "update", phases: changed }, Date.now()));
+	manager.appendMessage(todoResultMessage({ op: "batch", phases: changed }, Date.now()));
 }

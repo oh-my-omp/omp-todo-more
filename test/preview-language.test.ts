@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { describeTodoCall } from "../src/native.ts";
-import { callPreviewLines, parseCall } from "../src/render.ts";
+import { previewTodoArgs } from "../src/protocol.ts";
+import { callPreviewLines } from "../src/render.ts";
 
 const cases: readonly { args: unknown; en: string; zh: string }[] = [
 	{
@@ -21,7 +22,7 @@ describe("human preview diagnostics", () => {
 			const previous = process.env.OMOMP_LANG;
 			try {
 				process.env.OMOMP_LANG = "en";
-				const call = parseCall(entry.args);
+				const call = previewTodoArgs(entry.args);
 				expect(callPreviewLines(call)).toContain(entry.en);
 				process.env.OMOMP_LANG = "zh";
 				expect(callPreviewLines(call)).toContain(entry.zh);
@@ -34,7 +35,7 @@ describe("human preview diagnostics", () => {
 	}
 
 	test("valid previews have no diagnostic", () => {
-		const call = parseCall({ done_id: "t1" });
+		const call = previewTodoArgs({ done_id: "t1" });
 		expect(call.complete).toBe(true);
 		expect(call.error).toBeUndefined();
 		expect(callPreviewLines(call)).toContain("Arguments complete; awaiting execution.");
