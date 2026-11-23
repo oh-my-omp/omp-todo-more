@@ -1,9 +1,11 @@
 /* Warning: relies on omp placing above-editor widgets directly before its
  * activity line (`omp.hud.activity`). Todo NG's row shares that role, so Tern
  * gives it the line's box; it is laid over the line and keeps the dock's own
- * flex layout. */
+ * flex layout. The line's status column stops where that row's pill begins, so
+ * no status text runs under it. */
 .sf-dock[data-surface="omp.session"] {
 	--todo-ng-dock-gap: 4px;
+	--todo-ng-pill-reserve: 120px;
 }
 .sf-chat-spine.sf-dock[data-surface="omp.session"] {
 	--todo-ng-dock-gap: 0px;
@@ -41,6 +43,30 @@
 	.sf-row[data-role="omp.hud.activity"]:not(:is([aria-label="Todo NG progress"], [aria-label="Todo NG 进度"])) > [data-role="omp.hud.todo"] {
 	visibility: hidden;
 	pointer-events: none;
+}
+.sf-dock[data-surface="omp.session"]:has(:is([aria-label="Todo NG progress"], [aria-label="Todo NG 进度"]):not(.sf-hidden))
+	> .sf-row[data-role="omp.hud.activity"] > [data-role="omp.hud.status"] {
+	min-width: 0;
+	margin-right: calc(42px + 12px + var(--todo-ng-pill-reserve));
+	overflow: hidden;
+}
+.sf-dock[data-surface="omp.session"]:has(:is([aria-label="Todo NG progress"], [aria-label="Todo NG 进度"]):not(.sf-hidden))
+	> .sf-row[data-role="omp.hud.activity"] > [data-role="omp.hud.status"]
+	> .sf-row:has(> :is(.sf-shimmer, [data-role="omp.working.label"])) {
+	min-width: 0;
+	max-width: 100%;
+	overflow: hidden;
+}
+.sf-dock[data-surface="omp.session"]:has(:is([aria-label="Todo NG progress"], [aria-label="Todo NG 进度"]):not(.sf-hidden))
+	> .sf-row[data-role="omp.hud.activity"] > [data-role="omp.hud.status"] :is(.sf-shimmer, [data-role="omp.working.label"]) {
+	flex: 0 1 auto;
+	min-width: 9ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.sf-dock[data-surface="omp.session"]:has(:is([aria-label="Todo NG progress"], [aria-label="Todo NG 进度"]):not(.sf-hidden))
+	:is([aria-label="Todo NG progress"], [aria-label="Todo NG 进度"]) [data-role="omp.hud.todo"] {
+	max-width: var(--todo-ng-pill-reserve);
 }
 
 	:is([aria-label="Todo NG pill"], [aria-label="Todo NG 待办条"]) {

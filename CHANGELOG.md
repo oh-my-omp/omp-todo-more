@@ -13,7 +13,16 @@
 ### Changed
 
 - Every `todo` change runs through one pipeline — structural planning, the tail-item transform, synchronous guards, acceptance guards, then the completion-commit guard — and the first refusal or exception rejects the whole call before the list, the notes or git change. The edit-gate preview runs the same planning, transform and synchronous guards.
+
+## [0.3.1] - 2026-11-24
+
+### Changed
+
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@e84938e.
+
+### Fixed
+
+- In Tern, a long working status on the activity line no longer runs under the Todo NG pill: while the pill is shown the status ends with an ellipsis before it, which on a phone with background agents used to print the status and the pill over each other.
 
 ## [0.3.0] - 2026-11-23
 
