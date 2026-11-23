@@ -28,6 +28,7 @@
 
 - A todo list written by calling `todo` from eval (`await tool.todo(…)`) now shows in the `/todo-more` panel, the Tern HUD pill and the reminders, and survives resume: omp records such a call as a `user_todo_edit` entry instead of a `todo` result, and the plugin now reads that entry as the host list; before, the panel showed "Todo list is empty." while omp's own Todo HUD listed the items.
 - A todo list whose items are all completed or abandoned no longer lets `edit` through: the `edit` gate blocks it with a reminder that the round is over, the planning reminder says the same instead of asking to check the finished list, and the next `todo` call with `add` starts a new round from its own `goal` without the finished goal and items; `add` without `goal` on such a list is rejected. Before, the finished list stayed open to edits and `add` reopened it under the old goal.
+- Rewriting the host's todo reminders in the context hook folds the branch once per model call instead of once per reminder: on a 32000-entry branch with 704 stop reminders the first call after a resume or branch switch drops from about 515 ms to about 3 ms, and later calls from about 41 ms to about 3 ms. The rewritten text is unchanged.
 
 ## [0.2.5] - 2026-11-23
 

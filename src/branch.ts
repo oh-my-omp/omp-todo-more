@@ -194,6 +194,19 @@ export function foldBranch(entries: readonly SessionEntry[]): BranchFacts {
 	return factsOf(acc);
 }
 
+export type FactsAtEntry = Pick<BranchFacts, "state" | "waits">;
+
+export function foldBranchAt(entries: readonly SessionEntry[], indices: ReadonlySet<number>): Map<number, FactsAtEntry> {
+	const acc = emptyAccumulator();
+	const facts = new Map<number, FactsAtEntry>();
+	for (let index = 0; facts.size < indices.size && index < entries.length; index++) {
+		const entry = entries[index];
+		if (entry === undefined) continue;
+		foldEntry(acc, entry);
+		if (indices.has(index)) facts.set(index, { state: acc.state, waits: waitsOf(acc) });
+	}
+	return facts;
+}
 export type BranchSource = Pick<SessionManager, "getBranchView" | "getLeafId">;
 
 const accumulators = new WeakMap<BranchSource, Accumulator>();
