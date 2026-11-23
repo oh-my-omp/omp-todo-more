@@ -6,6 +6,10 @@
 
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@e84938e.
 
+### Fixed
+
+- In Tern, a long working status on the activity line no longer runs under the Todo NG pill: while the pill is shown the status ends with an ellipsis before it, which on a phone with background agents used to print the status and the pill over each other.
+
 ## [0.3.0] - 2026-11-23
 
 ### Breaking Changes
