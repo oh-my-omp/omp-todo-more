@@ -395,6 +395,13 @@ export function isOpen(status: TodoStatus): boolean {
 	return status === "pending" || status === "in_progress";
 }
 
+export type TodoRound = "empty" | "closed" | "open";
+
+export function roundOf(state: TodoMoreState): TodoRound {
+	if (state.kind === "empty") return "empty";
+	return state.phases.some((phase) => phase.items.some((item) => isOpen(item.progress.status))) ? "open" : "closed";
+}
+
 export function actionableItems(state: TodoMoreState): { readonly phase: string; readonly item: TodoItem }[] {
 	if (state.kind === "empty") return [];
 	return state.phases.flatMap((phase) =>
