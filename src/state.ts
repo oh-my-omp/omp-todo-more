@@ -1,5 +1,6 @@
 import { z } from "@oh-my-pi/omptype/zod";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 
 export const TODO_MORE_ENTRY_TYPE = "mouriya.omp.todo-more";
@@ -284,6 +285,8 @@ const hostPhasesSchema = z.array(
 	}),
 );
 
+const hostEditSchema = z.object({ phases: hostPhasesSchema });
+
 const hostResultSchema = z.object({
 	role: z.literal("toolResult"),
 	toolName: z.literal("todo"),
@@ -323,6 +326,10 @@ export type BranchRecord =
 
 export function recordOf(entry: SessionEntry): BranchRecord | undefined {
 	if (entry.type === "custom") {
+		if (entry.customType === USER_TODO_EDIT_CUSTOM_TYPE) {
+			const parsed = hostEditSchema.safeParse(entry.data);
+			return parsed.success ? { kind: "phases", phases: parsed.data.phases } : undefined;
+		}
 		if (entry.customType !== TODO_MORE_NOTES_TYPE) return undefined;
 		const parsed = todoNotesSchema.safeParse(entry.data);
 		return parsed.success ? { kind: "notes", notes: parsed.data } : undefined;
