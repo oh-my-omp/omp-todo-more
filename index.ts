@@ -1,21 +1,22 @@
 import type { AgentTool, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession, ExtensionAPI, ExtensionContext, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import { logger } from "@oh-my-pi/pi-utils";
 import { canonicalToolOrder } from "./omomp-shared/active-tools.ts";
 import { tr } from "./omomp-shared/i18n.ts";
+import { acceptanceGuard } from "./src/acceptance.ts";
 import { errorText } from "./src/errors.ts";
 import { describeTodoCall, describeTodoResult } from "./src/native.ts";
 import { registerOvertime } from "./src/overtime.ts";
 import { registerPlanning } from "./src/planning.ts";
+import { readProjectConfig } from "./src/project-config.ts";
 import { registerReminders } from "./src/reminders.ts";
 import { renderTodoCall, renderTodoResult } from "./src/render.ts";
 import { registerReviewApi } from "./src/review-api.ts";
-import { sessionOf } from "./src/session.ts";
+import { parentCwdOf, sessionOf } from "./src/session.ts";
 import { readSettings } from "./src/settings.ts";
 import { initializeTernPlugin } from "./src/tern-plugin-install.ts";
-import { DESCRIPTION, type ParentCwd, parametersSchema, runTodo, type TodoNgDetails } from "./src/tool.ts";
+import { DESCRIPTION, parametersSchema, runTodo, type TodoNgDetails } from "./src/tool.ts";
 import { registerUi } from "./src/ui.ts";
 
 const TOOL_NAME = "todo";
@@ -37,16 +38,18 @@ const TOOL_FIELDS = {
 
 const ownSession = (ctx: ExtensionContext): AgentSession | undefined => sessionOf(ctx.agent.id);
 
-const parentCwdOf =
-	(ctx: ExtensionContext): ParentCwd =>
-	() => {
-		const parentId = ctx.agent.parentId;
-		return parentId === undefined ? undefined : AgentRegistry.global().get(parentId)?.session?.sessionManager.getCwd();
-	};
-
-async function executeTodo(session: AgentSession, params: unknown, ctx: ExtensionContext) {
+async function executeTodo(session: AgentSession, params: unknown, ctx: ExtensionContext, signal: AbortSignal | undefined) {
 	const settings = await readSettings({ logger }, ctx);
-	return runTodo(session, params, settings.leafMaxMinutes, parentCwdOf(ctx), ctx.agent);
+	const project = readProjectConfig(logger, ctx.cwd);
+	return runTodo(session, params, {
+		leafMaxMinutes: settings.leafMaxMinutes,
+		parentCwd: parentCwdOf(ctx),
+		agent: ctx.agent,
+		project,
+		signal,
+		host: ctx,
+		acceptance: [acceptanceGuard(session.settings)],
+	});
 }
 
 async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promise<void> {
@@ -61,7 +64,7 @@ async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promis
 		get label(): string {
 			return tr("Todo", "待办");
 		},
-		execute: async (_toolCallId: string, params: unknown) => executeTodo(session, params, ctx),
+		execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => executeTodo(session, params, ctx, signal),
 		renderCall: (args, options, theme) => (isTheme(theme) ? renderTodoCall(args, options, theme) : undefined),
 		renderResult: (result, options, theme) => (isTheme(theme) ? renderTodoResult(result, options, theme) : undefined),
 	};
@@ -81,6 +84,8 @@ function guardSubagent(ctx: ExtensionContext): void {
 	guardedSessions.add(session);
 	session.agent.addBeforeModelCallHook(async () => {
 		try {
+			const project = readProjectConfig(logger, ctx.cwd);
+			if (project.kind === "ok" && !project.config.effects.editGate) return;
 			await restoreTodo(session, ctx);
 		} catch (error) {
 			logger.warn("todo-ng could not install todo", { error: errorText(error) });
@@ -96,13 +101,13 @@ export const TODO_TOOL_DEFINITION = {
 	execute: async (
 		_toolCallId: string,
 		params: unknown,
-		_signal: AbortSignal | undefined,
+		signal: AbortSignal | undefined,
 		_onUpdate: AgentToolUpdateCallback<TodoNgDetails> | undefined,
 		ctx: ExtensionContext,
 	) => {
 		const session = ownSession(ctx);
 		if (session === undefined) throw new Error(`todo: no session registered for agent ${ctx.agent.id}`);
-		return executeTodo(session, params, ctx);
+		return executeTodo(session, params, ctx, signal);
 	},
 } satisfies ToolDefinition<typeof parametersSchema, TodoNgDetails>;
 

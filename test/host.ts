@@ -61,7 +61,7 @@ export async function runPersisted(
 	leafMaxMinutes?: number,
 	parentCwd?: ParentCwd,
 ): Promise<AgentToolResult<TodoNgDetails>> {
-	const result = await runTodo(session, raw, leafMaxMinutes, parentCwd);
+	const result = await runTodo(session, raw, { leafMaxMinutes, parentCwd });
 	session.sessionManager.appendMessage(todoResultMessage(result.details, Date.now(), result.isError === true));
 	return result;
 }

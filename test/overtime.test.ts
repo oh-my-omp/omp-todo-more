@@ -1,4 +1,7 @@
 import { describe, expect, setSystemTime, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AgentSession, type ExtensionAPI, type ExtensionContext, type ExtensionEvent, type SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -27,6 +30,13 @@ type Handler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
 
 const stateOfManager = (manager: SessionManager): TodoNgState => foldBranch(manager.getBranch()).state;
 
+function projectDir(config: string): string {
+	const dir = mkdtempSync(join(tmpdir(), "todo-ng-overtime-"));
+	mkdirSync(join(dir, ".omp"));
+	writeFileSync(join(dir, ".omp", "todo-ng.json"), config);
+	return dir;
+}
+
 function estimatedState(minutes = 1, budgetId = "original-budget", runningSince = epoch, elapsedMs = 0): TodoNgState {
 	return stateOf({ kind: "set", goal: { objective: "Deliver the task", measure: "Observable behavior", doneWhen: "All criteria hold" } }, [
 		{
@@ -39,6 +49,7 @@ function estimatedState(minutes = 1, budgetId = "original-budget", runningSince 
 					estimate: { kind: "estimated", budgetId, minutes },
 					progress: { status: "in_progress", startedAt: epoch, elapsedMs, runningSince },
 					commit: null,
+					tailRule: null,
 				},
 			],
 		},
@@ -115,8 +126,8 @@ class DeadlineClock {
 	}
 }
 
-async function withScheduler(run: (fixture: SchedulerFixture) => Promise<void>): Promise<void> {
-	const fixture = new SchedulerFixture();
+async function withScheduler(run: (fixture: SchedulerFixture) => Promise<void>, cwd = "/tmp/overtime-regression"): Promise<void> {
+	const fixture = new SchedulerFixture(cwd);
 	try {
 		await fixture.emit({ type: "session_start" });
 		await run(fixture);
@@ -173,12 +184,13 @@ class SchedulerFixture {
 		logger: { warn: (message: string) => this.errors.push(message) },
 	} as unknown as ExtensionAPI;
 
-	constructor() {
+	constructor(readonly cwd: string) {
 		registerOvertime(this.api);
 	}
 
 	async emit(event: ExtensionEvent): Promise<void> {
 		const ctx = {
+			cwd: this.cwd,
 			agent: { id: this.agentId },
 			sessionManager: this.manager,
 			isIdle: () => true,
@@ -414,5 +426,28 @@ describe("overtime deadline scheduling", () => {
 				elapsedMs: 60_000,
 			});
 		});
+	});
+
+	test("effects.overtime false in the project config schedules no deadline and sends no warning", async () => {
+		await withScheduler(
+			async (fixture) => {
+				await fixture.append(estimatedState());
+				expect(fixture.clock.deadlines).toEqual([]);
+				await fixture.clock.advanceTo(epoch + 180_000);
+				expect(warnings(fixture.manager)).toEqual([]);
+			},
+			projectDir(JSON.stringify({ effects: { overtime: false } })),
+		);
+	});
+
+	test("an invalid project config is logged and sends no overtime warning", async () => {
+		await withScheduler(async (fixture) => {
+			await fixture.append(estimatedState());
+			await fixture.clock.advanceTo(epoch + 180_000);
+			expect(warnings(fixture.manager)).toEqual([]);
+			expect(fixture.clock.deadlines).toEqual([]);
+			expect(fixture.errors).toContain("todo-ng project config is invalid");
+			fixture.errors.length = 0;
+		}, projectDir("{ not json"));
 	});
 });

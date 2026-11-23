@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- `todo` reads a project config file `.omp/todo-ng.json` at the git root (or the session directory outside git) on every call: `effects` switches and `tailItems` tail-item rules, strictly parsed with defaults for omitted fields. An unreadable, malformed or invalid file refuses every `todo` change with the file path and the reason; `todo({})` and `todo({ view })` still answer and append the same reason.
+- A call that starts a list or a new round appends the project's `tailItems` that reach the agent (`main`, `isolated`, `all`) after its own items, each estimated at its `minutes` or the smaller of 15 and `leafMaxMinutes`, and records the rule in the notes; an `add` repeating a tail title is refused. A protected tail item cannot be dropped, and a tail item whose rule has a `check` cannot be completed while other work is open; once its rule leaves the config it completes with a note. Views mark tail items `project rule "<id>"`.
+- `effects.commit: false` lets `done_id` complete without committing or the uncommitted-work refusal, ignoring a `commit` clause with a note; `effects.overtime: false` lets `estimate` change an item that already received an overtime warning.
+- `effects.editGate: false` lets `edit` run on an empty or finished list and stops putting `todo` back into editing subagents; `effects.overtime: false` stops the overtime deadline timer and its warnings; `effects.cutOff: false` stops the deferred cut-off nudge and the quota-429 wait. An invalid project config blocks every `edit` with the file path and the reason, and keeps overtime warnings and the cut-off nudge off, each logged as a warning.
+- Completing a tail item whose rule has a `check` runs it before the completion commit and keeps the item open unless it passes: a `shell` check runs through omp's native shell in the session directory and passes only on exit 0 (non-zero exit, timeout and cancel refuse with the output tail); a `judge` check asks the `@omp-todo-ng` model role, then `default`, and passes only when its answer holds a JSON `{"verdict":"pass"}` object, refusing on no model, an unparsable answer, model failures, the deadline or a cancel.
+
+### Changed
+
+- Every `todo` change runs through one pipeline — structural planning, the tail-item transform, synchronous guards, acceptance guards, then the completion-commit guard — and the first refusal or exception rejects the whole call before the list, the notes or git change. The edit-gate preview runs the same planning, transform and synchronous guards.
+
 ## [0.3.1] - 2026-11-24
 
 ### Changed

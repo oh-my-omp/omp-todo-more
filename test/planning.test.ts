@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolCallEventResult } from "@oh-my-pi/pi-coding-agent";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -35,7 +38,14 @@ afterEach(() => {
 	for (const { id, ref } of registered.splice(0)) AgentRegistry.global().unregister(id, ref);
 });
 
-function gate() {
+function projectDir(config: string): string {
+	const dir = mkdtempSync(join(tmpdir(), "todo-ng-planning-"));
+	mkdirSync(join(dir, ".omp"));
+	writeFileSync(join(dir, ".omp", "todo-ng.json"), config);
+	return dir;
+}
+
+function gate(cwd = "/tmp/todo-ng-planning-tests") {
 	const handlers = new Map<string, Handler[]>();
 	const pi = {
 		on: (name: string, handler: Handler) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
@@ -53,7 +63,7 @@ function gate() {
 	});
 	registered.push({ id: agentId, ref });
 	const ctx = {
-		cwd: "/tmp/todo-ng-planning-tests",
+		cwd,
 		sessionManager: manager,
 		agent: { id: agentId, kind: "main" },
 	} as unknown as ExtensionContext;
@@ -148,6 +158,20 @@ describe("planning gate", () => {
 		await runTodo(session, valid);
 		await afterTool("todo");
 		expect(await call("edit", { input: "x" })).toBeUndefined();
+	});
+
+	test("lets edit through on an empty list when the project config sets effects.editGate false", async () => {
+		const { call } = gate(projectDir(JSON.stringify({ effects: { editGate: false } })));
+		expect(await call("edit", { input: "x" })).toBeUndefined();
+	});
+
+	test("blocks edit with the file and the reason while the project config is invalid, even with open items", async () => {
+		const cwd = projectDir("{ not json");
+		const { call, session } = gate(cwd);
+		await runPersisted(session, valid);
+		const result = await call("edit", { input: "x" });
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain(`Project config ${join(cwd, ".omp", "todo-ng.json")} is invalid: is not valid JSON`);
 	});
 });
 

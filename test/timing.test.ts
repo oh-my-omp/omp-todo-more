@@ -53,7 +53,7 @@ function warningEntry(warnedBudget: string): Extract<SessionEntry, { type: "cust
 }
 
 function itemOf(progress: Progress, value: Estimate = estimate): TodoItem {
-	return { id: "t1", title, explanation: { kind: "missing" }, estimate: value, progress, commit: null };
+	return { id: "t1", title, explanation: { kind: "missing" }, estimate: value, progress, commit: null, tailRule: null };
 }
 
 function currentState(progress: Progress = running, value: Estimate = estimate): TodoNgState {
@@ -180,6 +180,7 @@ describe("branch timing replay", () => {
 						estimate: { kind: "estimated", budgetId: "waiting-budget", minutes: 6 },
 						progress,
 						commit: null,
+						tailRule: null,
 					},
 				],
 			},
@@ -216,6 +217,7 @@ describe("branch timing replay", () => {
 							estimate: { kind: "missing" },
 							progress: { status: "in_progress", startedAt: null, elapsedMs: 0, runningSince: null },
 							commit: null,
+							tailRule: null,
 						},
 					],
 				},
@@ -232,7 +234,15 @@ describe("branch timing replay", () => {
 	});
 
 	test("notes follow the item they are keyed to when the host list reorders and statuses change", () => {
-		const first: TodoItem = { id: "t1", title, explanation: { kind: "explained", text: "First" }, estimate, progress: idle, commit: null };
+		const first: TodoItem = {
+			id: "t1",
+			title,
+			explanation: { kind: "explained", text: "First" },
+			estimate,
+			progress: idle,
+			commit: null,
+			tailRule: null,
+		};
 		const second: TodoItem = {
 			id: "t2",
 			title: "Verify results",
@@ -240,6 +250,7 @@ describe("branch timing replay", () => {
 			estimate: { ...estimate, budgetId: "verification-budget" },
 			progress: { status: "completed", startedAt: epoch, elapsedMs: 0, closedAt: epoch },
 			commit: null,
+			tailRule: null,
 		};
 		const notes = stateEntries("two", epoch, stateOf({ kind: "set", goal }, [{ name: "Delivery", items: [first, second] }]))[0];
 		const reordered: SessionEntry = {
@@ -292,7 +303,17 @@ describe("branch timing replay", () => {
 		const rebuilt = stateOf({ kind: "missing" }, [
 			{
 				name: "Rebuilt",
-				items: [{ id: "t1", title, explanation: { kind: "missing" }, estimate: { kind: "missing" }, progress: FRESH, commit: null }],
+				items: [
+					{
+						id: "t1",
+						title,
+						explanation: { kind: "missing" },
+						estimate: { kind: "missing" },
+						progress: FRESH,
+						commit: null,
+						tailRule: null,
+					},
+				],
 			},
 		]);
 		for (const clearedResult of clearedResults) {
@@ -308,7 +329,15 @@ describe("branch timing replay", () => {
 			{
 				name: "Delivery",
 				items: [
-					{ id: "t1", title, explanation: { kind: "explained", text: "Implement the runtime" }, estimate, progress: running, commit: null },
+					{
+						id: "t1",
+						title,
+						explanation: { kind: "explained", text: "Implement the runtime" },
+						estimate,
+						progress: running,
+						commit: null,
+						tailRule: null,
+					},
 					{
 						id: "t2",
 						title: "Verify results",
@@ -316,6 +345,7 @@ describe("branch timing replay", () => {
 						estimate: { kind: "estimated", budgetId: "verification-budget", minutes: 4 },
 						progress: { status: "pending", startedAt: null, elapsedMs: 30_000, pausedAt: null },
 						commit: null,
+						tailRule: null,
 					},
 				],
 			},
