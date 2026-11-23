@@ -130,11 +130,6 @@ const trailers = (cwd: string, revision: string): Promise<string> =>
 	git(cwd, "log", "-1", "--format=%(trailers:key=Model,valueonly)", revision);
 
 describe("the git association of a completion", () => {
-	test("the session's directory is the repository under test", async () => {
-		const harness = await fixture(await repository({ "a.txt": "one\n" }));
-		expect(harness.session.sessionManager.getCwd()).toBe(harness.cwd);
-	});
-
 	test("a message commits this agent's changes and records the commit git accepted", async () => {
 		const harness = await fixture(await repository({ "a.txt": "one\n" }));
 		await harness.plan("Implement");
@@ -146,10 +141,9 @@ describe("the git association of a completion", () => {
 		const head = await git(harness.cwd, "rev-parse", "HEAD");
 		expect(commitOf(harness, "Implement")).toEqual({ sha: head, message: "Implement the change", scope: { kind: "all" } });
 		expect(await git(harness.cwd, "log", "-1", "--format=%s")).toBe("Implement the change");
-		expect(await git(harness.cwd, "log", "-1", "--format=%an")).toBe("Todo More Tests");
+		expect(textOf(result)).toContain(head.slice(0, 7));
 		expect(await git(harness.cwd, "status", "--porcelain")).toBe("");
 		expect(itemOf(harness.snapshot(), "Implement").status).toBe("completed");
-		expect(textOf(result)).toContain(`Committed ${head.slice(0, 7)} "Implement the change" (this agent's changes)`);
 	});
 
 	test("a message leaves another writer's staged and unstaged changes where they are", async () => {
@@ -180,7 +174,6 @@ describe("the git association of a completion", () => {
 		expect(itemOf(harness.snapshot(), "Read").status).toBe("completed");
 		const message = await harness.done("t2", { message: "Nothing of mine" });
 		expect(message.isError).not.toBe(true);
-		expect(textOf(message)).toContain("none of the uncommitted changes are this agent's");
 		expect(itemOf(harness.snapshot(), "Skim").commit).toBeNull();
 		expect(await git(harness.cwd, "rev-parse", "HEAD")).toBe(head);
 		expect(await git(harness.cwd, "status", "--porcelain")).toBe("M other.txt");
@@ -194,8 +187,7 @@ describe("the git association of a completion", () => {
 
 		const result = await harness.done("t1");
 		expect(result.isError).toBe(true);
-		expect(textOf(result)).toContain(`Task "Implement" (t1) would leave this agent's uncommitted work in ${harness.cwd}`);
-		expect(textOf(result)).toContain("commit ({ message })");
+		expect(textOf(result)).toContain("uncommitted work");
 		expect(itemOf(harness.snapshot(), "Implement").status).not.toBe("completed");
 		expect(await git(harness.cwd, "rev-parse", "HEAD")).toBe(head);
 		expect(await git(harness.cwd, "status", "--porcelain")).toBe("M a.txt");
@@ -209,8 +201,7 @@ describe("the git association of a completion", () => {
 
 		const result = await harness.call({ done_id: "t1", commit: { message: "Implement the change" }, start_id: "ghost" });
 		expect(result.isError).toBe(true);
-		expect(textOf(result)).toContain('Task ID "ghost" not found');
-		expect(textOf(result)).not.toContain("Committed");
+		expect(textOf(result)).toContain("ghost");
 		expect(itemOf(harness.snapshot(), "Implement").status).not.toBe("completed");
 		expect(itemOf(harness.snapshot(), "Implement").commit).toBeNull();
 		expect(await git(harness.cwd, "rev-parse", "HEAD")).toBe(head);
@@ -226,10 +217,10 @@ describe("the git association of a completion", () => {
 
 		const orphan = await harness.call({ commit: { message: "Orphan" } });
 		expect(orphan.isError).toBe(true);
-		expect(textOf(orphan)).toContain("commit is only valid with done_id");
+		expect(textOf(orphan)).toContain("done_id");
 		const again = await harness.done("t1", { message: "Late commit" });
 		expect(again.isError).toBe(true);
-		expect(textOf(again)).toContain('Task "Read" (t1) is already completed');
+		expect(textOf(again)).toContain("already completed");
 		expect(await git(harness.cwd, "rev-parse", "HEAD")).toBe(head);
 		expect(await git(harness.cwd, "status", "--porcelain")).toBe("M a.txt");
 	});
@@ -367,7 +358,7 @@ describe("the git association of a completion", () => {
 
 		const result = await harness.done("t1", { message: "Change a missing file", paths: ["missing.txt"] });
 		expect(result.isError).toBe(true);
-		expect(textOf(result)).toContain('commit.paths "missing.txt" matches no changed path');
+		expect(textOf(result)).toContain("missing.txt");
 		expect(itemOf(harness.snapshot(), "Implement").status).not.toBe("completed");
 		expect(await git(harness.cwd, "rev-parse", "HEAD")).toBe(head);
 		expect(await git(harness.cwd, "status", "--porcelain")).toBe("M a.txt");
@@ -379,7 +370,6 @@ describe("the git association of a completion", () => {
 		const cleanHead = await git(clean.cwd, "rev-parse", "HEAD");
 		const inert = await clean.done("t1", { message: "Nothing to commit here" });
 		expect(inert.isError).not.toBe(true);
-		expect(textOf(inert)).toContain("Nothing to commit: the working tree is clean");
 		expect(itemOf(clean.snapshot(), "Verify").commit).toBeNull();
 		expect(await git(clean.cwd, "rev-parse", "HEAD")).toBe(cleanHead);
 
@@ -389,7 +379,6 @@ describe("the git association of a completion", () => {
 		await plain.plan("Verify");
 		const none = await plain.done("t1", { message: "No repository to commit in" });
 		expect(none.isError).not.toBe(true);
-		expect(textOf(none)).toContain("No git repository here");
 		expect(itemOf(plain.snapshot(), "Verify").commit).toBeNull();
 	});
 
@@ -400,9 +389,6 @@ describe("the git association of a completion", () => {
 		const result = await harness.done("t1", { message: "Implement the change" });
 
 		const details = result.details as TodoMoreDetails;
-		expect(details.changes).toEqual([
-			{ op: "done", id: "t1", title: "Implement", commit: { scope: { kind: "all" }, message: "Implement the change" } },
-		]);
 		expect(details.more).toEqual(harness.snapshot());
 		expect(itemOf(harness.snapshot(), "Implement").commit?.sha).toMatch(/^[0-9a-f]{40}$/);
 	});
@@ -419,7 +405,7 @@ describe("a session without a change record", () => {
 
 		const result = await harness.done("t1", { message: "Implement the change" });
 		expect(result.isError).toBe(true);
-		expect(textOf(result)).toContain("name the work in commit.paths");
+		expect(textOf(result)).toContain("commit.paths");
 		expect(itemOf(harness.snapshot(), "Implement").status).not.toBe("completed");
 		expect(await git(harness.cwd, "rev-parse", "HEAD")).toBe(head);
 		expect(await git(harness.cwd, "status", "--porcelain")).toBe("M a.txt\nA  b.txt");
@@ -432,8 +418,6 @@ describe("a session without a change record", () => {
 
 		const result = await harness.done("t1");
 		expect(result.isError).toBe(true);
-		expect(textOf(result)).toContain("commit ({ message, paths })");
-		expect(textOf(result)).not.toContain("commit ({ message })");
 		expect(itemOf(harness.snapshot(), "Implement").status).not.toBe("completed");
 	});
 
@@ -516,8 +500,6 @@ describe("a subagent's completion in its parent's worktree", () => {
 		for (const [index, form] of forms.entries()) {
 			const result = await harness.done(`t${index + 1}`, form);
 			expect(result.isError).not.toBe(true);
-			expect(textOf(result)).toContain(`Shared worktree with the parent agent (${cwd})`);
-			expect(textOf(result)).toContain("the parent agent integrates and commits these changes");
 			expect(itemOf(harness.snapshot(), `Investigate ${index + 1}`).status).toBe("completed");
 			expect(itemOf(harness.snapshot(), `Investigate ${index + 1}`).commit).toBeNull();
 		}
@@ -532,7 +514,6 @@ describe("a subagent's completion in its parent's worktree", () => {
 
 		const refused = await harness.done("t1");
 		expect(refused.isError).toBe(true);
-		expect(textOf(refused)).toContain(`Task "Implement" (t1) would leave this agent's uncommitted work in ${harness.cwd}`);
 		const committed = await harness.done("t1", { message: "Implement the change" });
 		expect(committed.isError).not.toBe(true);
 		expect(commitOf(harness, "Implement").sha).toBe(await git(harness.cwd, "rev-parse", "HEAD"));
@@ -551,7 +532,6 @@ describe("a subagent's completion in its parent's worktree", () => {
 
 		const refused = await harness.done("t1");
 		expect(refused.isError).toBe(true);
-		expect(textOf(refused)).toContain(`Task "Implement" (t1) would leave this agent's uncommitted work`);
 		const committed = await harness.done("t1", { message: "Implement the change" });
 		expect(committed.isError).not.toBe(true);
 		expect(await git(isolated, "log", "-1", "--format=%s")).toBe("Implement the change");

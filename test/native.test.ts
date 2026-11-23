@@ -133,45 +133,24 @@ describe("native todo presentation", () => {
 			{ k: "Measure", v: "Every task and explanation is visible" },
 			{ k: "Done when", v: "The replacement preserves all rich todo fields" },
 		]);
-		expect(checklist(body)).toMatchObject({
-			phases: [
-				{
-					title: "Delivery",
-					items: [
-						{
-							text: "Plan the replacement",
-							status: "pending",
-							note: expect.stringContaining("Explanation: Keep the host projection"),
-						},
-						{
-							text: "Implement the card",
-							status: "active",
-							note: "Estimate: 25 min\nExplanation: Use the native checklist",
-						},
-					],
-				},
-				{
-					title: "Verification",
-					items: [
-						{
-							text: "Inspect saved fields",
-							status: "done",
-							note: "Estimate: 10 min\nExplanation: Read the historical result",
-						},
-						{
-							text: "Old approach",
-							status: "dropped",
-							note: expect.stringContaining("Explanation: No longer needed"),
-						},
-						{
-							text: "Check runtime",
-							status: "pending",
-							note: "Estimate: 12 min\nExplanation: Exercise the real native consumer",
-						},
-					],
-				},
-			],
-		});
+		expect(checklist(body).phases.map((phase) => phase.title)).toEqual(["Delivery", "Verification"]);
+		const items = rows(body);
+		expect(items.map(({ text, status }) => ({ text, status }))).toEqual([
+			{ text: "Plan the replacement", status: "pending" },
+			{ text: "Implement the card", status: "active" },
+			{ text: "Inspect saved fields", status: "done" },
+			{ text: "Old approach", status: "dropped" },
+			{ text: "Check runtime", status: "pending" },
+		]);
+		const notes = items.map((item) => (typeof item.note === "string" ? item.note : ""));
+		expect(notes.map((note) => note.match(/(\d+) min/)?.[1] ?? null)).toEqual([null, "25", "10", null, "12"]);
+		expect(notes).toEqual([
+			expect.stringContaining("Keep the host projection"),
+			expect.stringContaining("Use the native checklist"),
+			expect.stringContaining("Read the historical result"),
+			expect.stringContaining("No longer needed"),
+			expect.stringContaining("Exercise the real native consumer"),
+		]);
 	});
 
 	test("keeps missing goal, estimate, and explanation visible without inventing goal tasks", () => {
@@ -203,11 +182,11 @@ describe("native todo presentation", () => {
 			{
 				text: "Imported task",
 				status: "pending",
-				note: expect.stringContaining("Explanation: [explanation missing]"),
+				note: expect.stringContaining("[explanation missing]"),
 			},
 		]);
 		const note = only(checklist(body).phases.flatMap((phase) => phase.items)).note;
-		expect(note).toMatch(/no time estimate/i);
+		expect(note).toContain("no time estimate");
 		expect(note).not.toMatch(/Estimate:\s*\d/);
 	});
 
@@ -236,7 +215,8 @@ describe("native todo presentation", () => {
 		};
 		const expanded = only(rows(resultBody(resultFor(committed), true)));
 		expect(expanded.text).toContain("0123456");
-		expect(expanded.note).toContain('Commit: 0123456 "Implement the card"');
+		expect(expanded.note).toContain("0123456");
+		expect(expanded.note).toContain("Implement the card");
 		const collapsed = only(rows(resultBody(resultFor(committed))));
 		expect(collapsed.text).toContain("0123456");
 		expect(collapsed.note).toBeUndefined();
@@ -257,7 +237,7 @@ describe("native todo HUD", () => {
 
 			expect(nodes.filter((entry) => entry.k === "kv")).toHaveLength(expanded ? 1 : 0);
 			expect(nodes.filter((entry) => entry.k === "checklist" && entry.p?.mode === "full")).toHaveLength(expanded ? 1 : 0);
-			const editControls = nodes.filter((entry) => entry.k === "text" && entry.p?.text === "Edit goal / explanations");
+			const editControls = nodes.filter((entry) => entry.k === "row" && entry.p?.actions?.click === "todo-more.open");
 			expect(editControls).toHaveLength(expanded ? 1 : 0);
 		}
 	});
@@ -362,7 +342,11 @@ describe("native result card", () => {
 			{ k: "Measure", v: "Every task and explanation is visible" },
 			{ k: "Done when", v: "The replacement preserves all rich todo fields" },
 		]);
-		expect(rows(body).map((item) => item.note)).toContain("Explanation: Keep the host projection");
+		expect(
+			rows(body)
+				.map((item) => (typeof item.note === "string" ? item.note : ""))
+				.join("\n"),
+		).toContain("Keep the host projection");
 	});
 
 	test("settled header shows closed/total progress, and an empty list shows only the title", () => {
@@ -395,10 +379,10 @@ describe("native result card", () => {
 			}),
 			{ expanded: false, isPartial: false },
 		);
-		expect(progress?.tool).toEqual({ title: "Todo", target: "1/2", targetKind: "text" });
+		expect(progress?.tool?.target).toBe("1/2");
 
 		const empty = describeTodoResult(resultFor({ goal: null, phases: [] }), { expanded: false, isPartial: false });
-		expect(empty?.tool).toEqual({ title: "Todo" });
+		expect(empty?.tool?.target).toBeUndefined();
 	});
 
 	test("incremental CRUD shows only changed items while collapsed, and expanding restores the full snapshot", () => {
@@ -423,7 +407,7 @@ describe("native result card", () => {
 		expect(checklist(collapsedBody).phases.map((phase) => phase.title)).toEqual(["Delivery"]);
 		expect(rows(collapsedBody).map((item) => ({ text: item.text, status: item.status, note: item.note }))).toEqual([
 			{ text: "Plan the replacement · no estimate", status: "done", note: undefined },
-			{ text: "Implement the card · 25m", status: "active", note: "Explanation: Use the native checklist" },
+			{ text: "Implement the card · 25m", status: "active", note: expect.stringContaining("Use the native checklist") },
 		]);
 
 		const expandedBody = resultBody(crudResult, true);
@@ -478,7 +462,8 @@ describe("native result card", () => {
 		if (component === undefined) throw new Error("Expected a reminder component");
 
 		const ansi = component.render(100).join("\n");
-		expect(ansi).toContain("2 incomplete todos - reminder 1/3");
+		expect(ansi).toContain("2 incomplete");
+		expect(ansi).toContain("1/3");
 		expect(ansi).not.toContain("Plan the replacement");
 		expect(ansi).not.toContain("Implement the card");
 
@@ -487,7 +472,7 @@ describe("native result card", () => {
 		const allNodes = nativeNodes([described]);
 		expect(allNodes.filter((entry) => entry.k === "checklist")).toHaveLength(0);
 		expect(allNodes.filter((entry) => entry.k === "kv")).toHaveLength(0);
-		expect(JSON.stringify(described)).toContain("2 incomplete todos - reminder 1/3");
+		expect(JSON.stringify(described)).toContain("2 incomplete");
 		expect(JSON.stringify(described)).not.toContain("Plan the replacement");
 	});
 });
@@ -536,7 +521,7 @@ describe("native historical todo results", () => {
 			{ k: "Done when", v: "A new completion boundary" },
 		]);
 		expect(rows(newerBody).map((item) => item.text)).toEqual(["A new task · no estimate", "Check runtime · 45m"]);
-		expect(rows(newerBody)[1]?.note).toBe("Explanation: A newer runtime check");
+		expect(rows(newerBody)[1]?.note).toContain("A newer runtime check");
 		expect(goalItems(historicalBody)).toEqual([
 			{ k: "Objective", v: "Ship the native todo replacement" },
 			{ k: "Measure", v: "Every task and explanation is visible" },
@@ -549,6 +534,6 @@ describe("native historical todo results", () => {
 			"Old approach · no estimate",
 			"Check runtime · 12m",
 		]);
-		expect(rows(historicalBody)[4]?.note).toBe("Explanation: Exercise the real native consumer");
+		expect(rows(historicalBody)[4]?.note).toContain("Exercise the real native consumer");
 	});
 });

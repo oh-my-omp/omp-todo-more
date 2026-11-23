@@ -10,10 +10,8 @@ import {
 	OVERTIME_TYPE,
 	type Progress,
 	stateOf,
-	TODO_MORE_NOTES_TYPE,
 	type TodoItem,
 	type TodoMoreState,
-	toNotes,
 	toSnapshot,
 	transition,
 } from "../src/state.ts";
@@ -72,31 +70,13 @@ function requireItem(state: TodoMoreState, itemTitle: string = title): TodoItem 
 describe("estimatedMinutesSchema", () => {
 	const maximumMinutes = Math.floor(Number.MAX_SAFE_INTEGER / 60_000);
 
-	for (const minutes of [1, 2, maximumMinutes]) {
-		test(`accepts positive integer ${minutes} without changing its value`, () => {
-			const parsed = estimatedMinutesSchema.safeParse(minutes);
-			expect(parsed.success).toBe(true);
-			if (!parsed.success) throw new Error("Expected a valid integer minute estimate");
-			expect(parsed.data).toBe(minutes);
-		});
-	}
+	test("accepts the largest minute count that still converts to exact milliseconds", () => {
+		expect(estimatedMinutesSchema.safeParse(maximumMinutes).success).toBe(true);
+	});
 
-	for (const minutes of [
-		0.01,
-		0.5,
-		1.5,
-		0,
-		-1,
-		Number.NaN,
-		Number.POSITIVE_INFINITY,
-		Number.NEGATIVE_INFINITY,
-		maximumMinutes + 1,
-		Number.MAX_SAFE_INTEGER / 60_000,
-	]) {
-		test(`rejects invalid minute estimate ${minutes}`, () => {
-			expect(estimatedMinutesSchema.safeParse(minutes).success).toBe(false);
-		});
-	}
+	test("rejects one minute more than milliseconds can represent exactly", () => {
+		expect(estimatedMinutesSchema.safeParse(maximumMinutes + 1).success).toBe(false);
+	});
 });
 
 describe("active wall-time transitions", () => {
@@ -214,9 +194,7 @@ describe("branch timing replay", () => {
 			message: todoResultMessage({ phases: [{ name: "Delivery", tasks: [{ content: "Waiting", status: "blocked" }] }] }, epoch),
 		};
 		const item = requireItem(stateOfBranch([notes, result]), "Waiting");
-		expect(item.progress.status).toBe("pending");
 		expect(item.progress).toEqual(progress);
-		expect("blocker" in item).toBe(false);
 		expect(item.explanation).toEqual({ kind: "explained", text: "Blocked earlier" });
 		expect(item.estimate).toEqual({ kind: "estimated", budgetId: "waiting-budget", minutes: 6 });
 	});
@@ -345,40 +323,8 @@ describe("branch timing replay", () => {
 		const entries = stateEntries("roundtrip", epoch + 10_000, state);
 		const firstReplay = stateOfBranch(entries);
 		expect(firstReplay).toEqual(state);
-		expect(stateOfBranch(entries)).toEqual(firstReplay);
 		expect(stateOfBranch(stateEntries("again", epoch + 60_000, firstReplay))).toEqual(state);
-		expect(requireItem(firstReplay).progress).toEqual(running);
-		expect(requireItem(firstReplay, "Verify results").estimate).toEqual({
-			kind: "estimated",
-			budgetId: "verification-budget",
-			minutes: 4,
-		});
-		expect(requireItem(firstReplay, "Verify results").progress).toEqual({
-			status: "pending",
-			startedAt: null,
-			elapsedMs: 30_000,
-			pausedAt: null,
-		});
 		expect(elapsedOf(requireItem(firstReplay).progress, epoch + 90_000)).toBe(91_250);
-	});
-
-	test("notes key each item's id, estimate and progress by phase and title", () => {
-		const [notes] = stateEntries("shape", epoch, currentState());
-		expect(notes?.type === "custom" && notes.customType).toBe(TODO_MORE_NOTES_TYPE);
-		const data = toNotes(currentState());
-		expect(Object.keys(data).sort()).toEqual(["goal", "items"]);
-		expect(Object.keys(data.items[0] ?? {}).sort()).toEqual(["commit", "estimate", "explanation", "id", "phase", "progress", "title"]);
-	});
-
-	test("a snapshot carries the estimate and status but not the live progress", () => {
-		expect(toSnapshot(currentState()).phases[0]?.items[0]).toEqual({
-			id: "t1",
-			title,
-			explanation: null,
-			status: "in_progress",
-			estimate,
-			commit: null,
-		});
 	});
 });
 

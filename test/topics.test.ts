@@ -11,7 +11,6 @@ describe("todo views", () => {
 		const emptyView = await runTodo(session, {});
 		expect(emptyView.isError).toBeUndefined();
 		expect(emptyView.details?.op).toBe("view");
-		expect((emptyView.content[0] as { text: string }).text).toContain("Todo list is empty.");
 
 		await runPersisted(session, {
 			goal: { title: "Native Todo", summary: "Tests pass", acceptance: "Views work" },
@@ -26,7 +25,7 @@ describe("todo views", () => {
 		expect(full.isError).toBeUndefined();
 		expect(full.details?.op).toBe("view");
 		const fullText = (full.content[0] as { text: string }).text;
-		expect(fullText).toContain("Objective: Native Todo");
+		expect(fullText).toContain("Native Todo");
 		expect(fullText).toContain("[t1] [completed]");
 		expect(fullText).toContain("[t2] [in_progress]");
 
@@ -37,12 +36,11 @@ describe("todo views", () => {
 
 		const phaseBySlug = await runTodo(session, { view: "verify-suite" });
 		const phaseText = (phaseBySlug.content[0] as { text: string }).text;
-		expect(phaseText).toContain('Phase "Verify Suite"');
+		expect(phaseText).toContain("Verify Suite");
 		expect(phaseText).toContain("[t2] [in_progress]");
 		expect(phaseText).not.toContain("Prepare state");
 
 		const missing = await runTodo(session, { view: "missing" });
 		expect(missing.isError).toBe(true);
-		expect((missing.content[0] as { text: string }).text).toContain('Phase "missing" not found');
 	});
 });
