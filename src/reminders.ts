@@ -10,7 +10,7 @@ import { isSilentAbort, isUserInterruptAbort } from "@oh-my-pi/pi-tui/chat/messa
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 import { deferDuringCompaction, isCompacting } from "../omomp-shared/compact-handoff.ts";
 import { tr } from "../omomp-shared/i18n.ts";
-import { type BranchFacts, type BranchSource, branchFacts, foldBranch } from "./branch.ts";
+import { branchFacts, type FactsAtEntry, foldBranchAt } from "./branch.ts";
 import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { currentTimeLine, itemTimeSummary } from "./format.ts";
@@ -268,43 +268,39 @@ function hostReminderOf(message: AgentMessage): HostReminder | undefined {
 	}
 }
 
-function entryIndexOf(entries: readonly SessionEntry[], message: AgentMessage): number {
-	if (message.role === "developer") {
-		return entries.findIndex(
-			(entry) =>
-				entry.type === "message" &&
-				entry.message.role === "developer" &&
-				entry.message.timestamp === message.timestamp &&
-				Bun.deepEquals(entry.message.content, message.content),
-		);
-	}
-	if (message.role !== "custom") return -1;
-	return entries.findIndex(
-		(entry) =>
-			entry.type === "custom_message" &&
-			entry.customType === message.customType &&
-			Date.parse(entry.timestamp) >= message.timestamp &&
-			Bun.deepEquals(entry.content, message.content),
-	);
+type EntryLookup = { readonly developer: Map<number, number[]>; readonly custom: Map<string, number[]> };
+
+function appendIndex<K>(map: Map<K, number[]>, key: K, index: number): void {
+	const indices = map.get(key);
+	if (indices === undefined) map.set(key, [index]);
+	else indices.push(index);
 }
 
-const factsAtEntries = new WeakMap<BranchSource, Map<string, Pick<BranchFacts, "state" | "waits">>>();
+function lookupOf(entries: readonly SessionEntry[]): EntryLookup {
+	const lookup: EntryLookup = { developer: new Map(), custom: new Map() };
+	for (const [index, entry] of entries.entries()) {
+		if (entry.type === "message" && entry.message.role === "developer") appendIndex(lookup.developer, entry.message.timestamp, index);
+		else if (entry.type === "custom_message") appendIndex(lookup.custom, entry.customType, index);
+	}
+	return lookup;
+}
 
-function factsAtEntry(manager: BranchSource, entries: readonly SessionEntry[], index: number): Pick<BranchFacts, "state" | "waits"> {
-	const entry = entries[index];
-	if (entry === undefined) throw new Error(`No branch entry at ${index}`);
-	let byId = factsAtEntries.get(manager);
-	if (byId === undefined) {
-		byId = new Map();
-		factsAtEntries.set(manager, byId);
+function entryIndexOf(entries: readonly SessionEntry[], lookup: EntryLookup, message: AgentMessage): number {
+	if (message.role === "developer") {
+		const content = message.content;
+		const at = lookup.developer.get(message.timestamp)?.find((index) => {
+			const entry = entries[index];
+			return entry?.type === "message" && entry.message.role === "developer" && Bun.deepEquals(entry.message.content, content);
+		});
+		return at ?? -1;
 	}
-	let entryFacts = byId.get(entry.id);
-	if (entryFacts === undefined) {
-		const folded = foldBranch(entries.slice(0, index + 1));
-		entryFacts = { state: folded.state, waits: folded.waits };
-		byId.set(entry.id, entryFacts);
-	}
-	return entryFacts;
+	if (message.role !== "custom") return -1;
+	const { content, timestamp } = message;
+	const at = lookup.custom.get(message.customType)?.find((index) => {
+		const entry = entries[index];
+		return entry?.type === "custom_message" && Date.parse(entry.timestamp) >= timestamp && Bun.deepEquals(entry.content, content);
+	});
+	return at ?? -1;
 }
 
 function pluginContent(
@@ -350,30 +346,29 @@ function withContent(message: AgentMessage, text: string): AgentMessage {
 
 export function contextMessages(messages: AgentMessage[], session: AgentSession | undefined): AgentMessage[] | undefined {
 	if (session === undefined) return undefined;
-	const manager = session.sessionManager;
-	let entries: readonly SessionEntry[] | undefined;
-	let current: TodoMoreState | undefined;
-	let currentWaits: readonly AskWait[] | undefined;
-	let rewritten: AgentMessage[] | undefined;
+	const found: { readonly index: number; readonly message: AgentMessage; readonly reminder: HostReminder }[] = [];
 	for (const [index, message] of messages.entries()) {
 		const reminder = hostReminderOf(message);
-		if (reminder === undefined) continue;
-		entries ??= manager.getBranchView();
-		const at = entryIndexOf(entries, message);
-		let state: TodoMoreState;
-		let waits: readonly AskWait[];
-		if (at < 0) {
-			current ??= liveState(session);
-			currentWaits ??= branchFacts(manager).waits;
-			state = current;
-			waits = currentWaits;
-		} else {
-			const entryFacts = factsAtEntry(manager, entries, at);
-			state = entryFacts.state;
-			waits = entryFacts.waits;
-		}
+		if (reminder !== undefined) found.push({ index, message, reminder });
+	}
+	if (found.length === 0) return undefined;
+	const manager = session.sessionManager;
+	const entries = manager.getBranchView();
+	const lookup = lookupOf(entries);
+	const positions = found.map(({ message }) => entryIndexOf(entries, lookup, message));
+	const placed = foldBranchAt(entries, new Set(positions.filter((at) => at >= 0)));
+	let live: FactsAtEntry | undefined;
+	const liveFacts = (): FactsAtEntry => {
+		live ??= { state: liveState(session), waits: branchFacts(manager).waits };
+		return live;
+	};
+	let rewritten: AgentMessage[] | undefined;
+	for (const [k, { index, message, reminder }] of found.entries()) {
+		const at = positions[k] ?? -1;
+		const facts = at < 0 ? liveFacts() : placed.get(at);
+		if (facts === undefined) throw new Error(`No branch facts at entry ${at}`);
 		const now = "timestamp" in message && typeof message.timestamp === "number" && message.timestamp > 0 ? message.timestamp : Date.now();
-		const text = pluginContent(reminder, message, session, state, waits, now);
+		const text = pluginContent(reminder, message, session, facts.state, facts.waits, now);
 		if (text === undefined) continue;
 		rewritten ??= [...messages];
 		rewritten[index] = withContent(message, text);

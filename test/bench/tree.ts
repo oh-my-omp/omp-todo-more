@@ -8,13 +8,15 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { foldBranch } from "../../src/branch.ts";
 import { hostPhases, TODO_MORE_NOTES_TYPE } from "../../src/state.ts";
 import { todoResultMessage } from "../host.ts";
-import { fillBranch, messageEntry } from "../ui-fixture.ts";
+import { appendTodoChange, fillBranch, messageEntry } from "../ui-fixture.ts";
 
 const args = new Map<string, string>();
 for (let i = 2; i < Bun.argv.length; i += 2) args.set(Bun.argv[i] ?? "", Bun.argv[i + 1] ?? "");
 const src = path.resolve(args.get("--src") ?? path.join(import.meta.dir, "../.."));
 const sizes = (args.get("--n") ?? "5000,10000").split(",").map(Number);
 const rounds = Number(args.get("--rounds") ?? "200");
+const reminderCounts = (args.get("--reminders") ?? "0,119,704").split(",").map(Number);
+const selected = args.get("--paths")?.split(",");
 
 type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
 type Hud = { describe(): unknown };
@@ -23,6 +25,7 @@ type Modules = {
 	registerPlanning: (pi: ExtensionAPI) => void;
 	registerOvertime: (pi: ExtensionAPI) => void;
 	TodoHud: new (pi: ExtensionAPI, readSession: () => unknown, open: () => Promise<void>, tui: unknown, onDispose: () => void) => Hud;
+	contextMessages: (messages: AgentMessage[], session: AgentSession) => AgentMessage[] | undefined;
 };
 
 const modules: Modules = {
@@ -30,6 +33,7 @@ const modules: Modules = {
 	...((await import(`${src}/src/planning.ts`)) as Pick<Modules, "registerPlanning">),
 	...((await import(`${src}/src/overtime.ts`)) as Pick<Modules, "registerOvertime">),
 	...((await import(`${src}/src/ui.ts`)) as Pick<Modules, "TodoHud">),
+	...((await import(`${src}/src/reminders.ts`)) as Pick<Modules, "contextMessages">),
 };
 
 function stubPi(handlers: Map<string, Handler[]>, manager: SessionManager): ExtensionAPI {
@@ -189,11 +193,47 @@ async function overtimePath(n: number): Promise<Sample> {
 	}
 }
 
+const stopReminder = (index: number): Parameters<SessionManager["appendMessage"]>[0] => ({
+	role: "developer",
+	content: [
+		{
+			type: "text",
+			text: `<system-reminder>\nYou stopped with 1 incomplete todo item(s):\n- Open item\n\nPlease continue working on these tasks or mark them complete if finished.\n(Reminder ${(index % 3) + 1}/3)\n</system-reminder>`,
+		},
+	],
+	timestamp: 1_800_000_000_000 + index,
+});
+
+const reminderDigests: string[] = [];
+
+async function remindersPath(n: number, reminders: number): Promise<Sample> {
+	const manager = SessionManager.inMemory("/tmp/todo-more-tree-bench");
+	const chunks = Math.max(1, reminders);
+	for (let chunk = 0; chunk < chunks; chunk++) {
+		fillBranch(manager, Math.floor(n / chunks));
+		if (chunk === 0) appendTodoChange(manager, "Open item");
+		if (chunk < reminders) manager.appendMessage(stopReminder(chunk));
+	}
+	const messages = manager.getBranchView().flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+	const session = sessionOver(manager);
+	let first: AgentMessage[] | undefined;
+	let calls = 0;
+	const sample = await measure(manager, () => {
+		const rewritten = modules.contextMessages(messages, session);
+		if (calls++ === 0) first = rewritten;
+	});
+	const texts = (first ?? []).filter((message, index) => message !== messages[index]).map((message) => JSON.stringify(message));
+	const digest = new Bun.CryptoHasher("sha256").update(texts.join("\n")).digest("hex");
+	reminderDigests.push(`reminders/${reminders} n=${n} messages=${messages.length} rewritten=${texts.length} sha256=${digest}`);
+	return sample;
+}
+
 const paths: Record<string, (n: number) => Promise<Sample>> = {
 	planning: planningPath,
 	todo: todoPath,
 	hud: hudPath,
 	overtime: overtimePath,
+	...Object.fromEntries(reminderCounts.map((count) => [`reminders/${count}`, (n: number) => remindersPath(n, count)])),
 };
 
 const us = (ns: number): string => (ns / 1000).toFixed(1);
@@ -201,9 +241,10 @@ const kib = (bytes: number): string => (bytes / 1024).toFixed(1);
 console.log(`checkout ${src}, rounds ${rounds}`);
 console.log("| path | n | cold µs | cold KiB | steady µs | steady KiB/round |");
 console.log("|---|---|---|---|---|---|");
-for (const [name, run] of Object.entries(paths)) {
+for (const [name, run] of Object.entries(paths).filter(([name]) => selected?.some((prefix) => name.startsWith(prefix)) ?? true)) {
 	for (const n of sizes) {
 		const sample = await run(n);
 		console.log(`| ${name} | ${n} | ${us(sample.coldNs)} | ${kib(sample.coldHeap)} | ${us(sample.steadyNs)} | ${kib(sample.steadyHeap)} |`);
 	}
 }
+for (const line of reminderDigests) console.log(line);
