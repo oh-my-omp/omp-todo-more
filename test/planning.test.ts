@@ -284,24 +284,22 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		const coordinator = getSharedCompactCoordinator();
 		expect(coordinator.listPluginIds()).toContain("omp-todo-more");
 
+		const emptyPruneReport = {
+			totalInputPaths: 0,
+			strippedQueryCount: 0,
+			filteredNoiseCount: 0,
+			keptUniqueCandidateCount: 0,
+			selectedCount: 0,
+			repoSourcePathsSelected: [],
+			selectedPaths: [],
+		};
 		const emptySnapshot = coordinator.prepareSnapshot(
 			{ cwd: "/tmp/todo-more-planning-tests", branchEntries: manager.getBranch(), messagesToSummarize: [] },
-			{
-				isUpdate: false,
-				fileOpsPruneReport: {
-					totalInputPaths: 0,
-					strippedQueryCount: 0,
-					filteredNoiseCount: 0,
-					keptUniqueCandidateCount: 0,
-					selectedCount: 0,
-					repoSourcePathsSelected: [],
-					selectedPaths: [],
-				},
-			},
+			emptyPruneReport,
 		);
 		expect(emptySnapshot.inactiveStatefulPluginIds).toContain("omp-todo-more");
 		expect(emptySnapshot.activeHandoffs.some((h) => h.pluginId === "omp-todo-more")).toBe(false);
-		expect(emptySnapshot.harnessProvidedBlock).not.toContain("[omp-todo-more]");
+		expect(emptySnapshot.compactingResult.context?.join("\n")).not.toContain("[omp-todo-more]");
 
 		await runPersisted(session, multi);
 		await emit("session_before_compact", {
@@ -321,23 +319,12 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		expect(handoff?.claim).toContain("2 phases, 3 items");
 		expect(handoff?.claim).toContain(`source="${PLANNING_SOURCE}"`);
 		expect(handoff?.claim).toContain("FULL_PREAMBLE");
-		expect(prepared?.harnessProvidedBlock).toContain("[omp-todo-more]");
+		expect(prepared?.compactingResult.context?.join("\n")).toContain("harness-provided [omp-todo-more]");
 
 		// Fallback path without extensionCtx uses foldBranch(branchEntries)
 		const branchOnly = coordinator.prepareSnapshot(
 			{ cwd: "/tmp/todo-more-planning-tests", branchEntries: manager.getBranch(), messagesToSummarize: [] },
-			{
-				isUpdate: false,
-				fileOpsPruneReport: {
-					totalInputPaths: 0,
-					strippedQueryCount: 0,
-					filteredNoiseCount: 0,
-					keptUniqueCandidateCount: 0,
-					selectedCount: 0,
-					repoSourcePathsSelected: [],
-					selectedPaths: [],
-				},
-			},
+			emptyPruneReport,
 		);
 		expect(branchOnly.activeHandoffs.find((h) => h.pluginId === "omp-todo-more")?.claim).toContain("2 phases, 3 items");
 	});
