@@ -112,6 +112,22 @@ describe("planning gate", () => {
 		expect((await call("edit", { input: "x" }))?.block).toBe(true);
 	});
 
+	test("blocks edit once every item is closed, until a todo in the same message starts a new round", async () => {
+		const { call, session } = gate();
+		await runPersisted(session, valid);
+		await runPersisted(session, { drop_ids: ["t1"] });
+		expect((await call("edit", { input: "x" }))?.reason).toContain("Every item of this todo round is completed or abandoned");
+		await call("todo", { add: [{ phase: "Q", title: "u", detail: "e", minutes: 5 }] });
+		expect((await call("edit", { input: "x" }))?.block).toBe(true);
+		await call("todo", {
+			goal: { title: "g2", summary: "m", acceptance: "d" },
+			add: [{ phase: "Q", title: "u", detail: "e", minutes: 5 }],
+		});
+		expect(await call("edit", { input: "x" })).toBeUndefined();
+		await call("todo", { drop_ids: ["t1"] });
+		expect((await call("edit", { input: "x" }))?.block).toBe(true);
+	});
+
 	test("does not block other tools on an empty list", async () => {
 		const { call } = gate();
 		expect(await call("read", { path: "x" })).toBeUndefined();
@@ -157,6 +173,20 @@ describe("planning injection granularity, deduplication and recovery", () => {
 		await emit("turn_start", { type: "turn_start" });
 		expect(await afterTool("read")).toBeUndefined();
 		expect(await afterTool("bash")).toBeUndefined();
+	});
+
+	test("tells the model at the next prompt that a finished round needs a new todo, once", async () => {
+		setSystemTime(t0);
+		const { prompt, persistPromptMessage, session } = gate();
+		await runPersisted(session, multi);
+		persistPromptMessage(await prompt());
+		await runPersisted(session, { done_id: "t2" });
+		await runPersisted(session, { drop_ids: ["t3"] });
+		const finished = await prompt();
+		expect(finished?.message.content).toContain("Every item of this todo round is completed or abandoned");
+		expect(finished?.message.content).not.toContain("Check that this todo matches");
+		persistPromptMessage(finished);
+		expect(await prompt()).toBeUndefined();
 	});
 
 	test("atPrompt delivers compact active view when state changed and stays silent when only wall-clock time advances", async () => {

@@ -13,6 +13,7 @@ import {
 	type CommitRecord,
 	commitRecordText,
 	commitScopeText,
+	EMPTY,
 	type Estimate,
 	type Explanation,
 	FRESH,
@@ -21,6 +22,7 @@ import {
 	idAllocator,
 	type Progress,
 	phaseSlug,
+	roundOf,
 	stateOf,
 	TODO_MORE_RESULT_MARK,
 	type TodoGoal,
@@ -316,10 +318,16 @@ function apply(params: TodoParams, previous: TodoMoreState, staged: readonly Sta
 
 type Plan = { readonly kind: "rejected"; readonly errors: string[] } | ({ readonly kind: "planned" } & Planned);
 
+const CLOSED_ROUND_NEEDS_GOAL =
+	"Every item of this list is completed or abandoned, so add starts a new round that does not carry over the finished goal and items: provide goal together with add";
+
 function planTodo(params: TodoParams, previous: TodoMoreState, rules: Rules, now: number, waits: readonly AskWait[]): Plan {
-	const staged = stageAdds(params, previous);
-	const errors = validate(params, previous, staged, rules);
-	return errors.length > 0 ? { kind: "rejected", errors } : { kind: "planned", ...apply(params, previous, staged, now, waits) };
+	const startsRound = params.add !== undefined && roundOf(previous) === "closed";
+	if (startsRound && params.goal === undefined) return { kind: "rejected", errors: [CLOSED_ROUND_NEEDS_GOAL] };
+	const base = startsRound ? EMPTY : previous;
+	const staged = stageAdds(params, base);
+	const errors = validate(params, base, staged, rules);
+	return errors.length > 0 ? { kind: "rejected", errors } : { kind: "planned", ...apply(params, base, staged, now, waits) };
 }
 
 export type PreviewOutcome = { readonly kind: "state"; readonly state: TodoMoreState } | { readonly kind: "rejected" };

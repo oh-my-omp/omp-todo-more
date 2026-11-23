@@ -6,7 +6,7 @@ import { errorText } from "./errors.ts";
 import { currentTimeLine, formatCompactView, formatFullView } from "./format.ts";
 import { sessionOf } from "./session.ts";
 import { readSettings } from "./settings.ts";
-import { explanationValue, PLANNING_DELIVERY_TYPE, semanticStateKey, type TodoMoreState } from "./state.ts";
+import { explanationValue, PLANNING_DELIVERY_TYPE, roundOf, semanticStateKey, type TodoMoreState } from "./state.ts";
 import { previewTodo } from "./tool.ts";
 
 export const PLANNING_SOURCE = "omp-todo-more/planning";
@@ -15,6 +15,25 @@ const SUPERSEDE_LINE = `This reminder supersedes every earlier reminder from ${P
 
 const INIT_REMINDER =
 	"Todo is empty. Work phase (this request changes files, config, git or external state): before the first change, call todo with goal ({ title, summary, acceptance }) and add ([{ phase, title, detail, minutes }]) for every step. Estimate each item in positive integer minutes (<= leafMaxMinutes, default 60). edit is blocked until todo succeeds and the list has items. Non-work phase (discussion, investigation, explanation, answering questions): no todo.";
+
+const CLOSED_REMINDER =
+	"Every item of this todo round is completed or abandoned, so the round is over. Work phase (this request changes files, config, git or external state): before the next change, start a new todo with goal ({ title, summary, acceptance }) and add ([{ phase, title, detail, minutes }]) for every step; it replaces the finished round, whose goal and items are not carried over. edit is blocked until the new round has open items. Non-work phase (discussion, investigation, explanation, answering questions): no todo.";
+
+function noOpenItems(state: TodoMoreState): string | undefined {
+	const round = roundOf(state);
+	switch (round) {
+		case "empty":
+			return INIT_REMINDER;
+		case "closed":
+			return CLOSED_REMINDER;
+		case "open":
+			return undefined;
+		default: {
+			const unreachable: never = round;
+			throw new Error(`Unexpected todo round: ${String(unreachable)}`);
+		}
+	}
+}
 
 const COMPACT_PREAMBLE =
 	"Discussion, investigation, explanation and questions add no items. Check that this todo matches your current plan and latest user instructions. Batch updates (goal, add, explain, estimate, start_id, done_id, drop_ids) in one todo call wherever they disagree; do not omit or narrow work. Budgets are forecasts, not permission to reduce scope or quality.";
@@ -62,10 +81,9 @@ function momentOf(session: AgentSession): Moment {
 }
 
 function recovery({ now, facts, state, key }: Moment): Reminder {
+	const blocked = noOpenItems(state);
 	const body =
-		state.kind === "empty"
-			? `${currentTimeLine(now)}\n${INIT_REMINDER}`
-			: formatFullView(state, now, facts.waits, { preamble: FULL_PREAMBLE });
+		blocked === undefined ? formatFullView(state, now, facts.waits, { preamble: FULL_PREAMBLE }) : `${currentTimeLine(now)}\n${blocked}`;
 	return { key, body };
 }
 
@@ -73,6 +91,7 @@ function listReminder({ now, facts, state, key }: Moment): Reminder | undefined 
 	if (state.kind === "empty") {
 		return facts.planning.delivered === "empty" ? undefined : { key, body: `${currentTimeLine(now)}\n${INIT_REMINDER}` };
 	}
+	if (roundOf(state) === "closed") return { key, body: `${currentTimeLine(now)}\n${CLOSED_REMINDER}` };
 	const body = formatCompactView(state, now, facts.waits, {
 		preamble: COMPACT_PREAMBLE,
 		highlightExplanations: changedPendingExplanations(facts.planning.seen?.state, state),
@@ -126,8 +145,8 @@ export function registerPlanning(pi: ExtensionAPI): void {
 				}
 				case "edit": {
 					const session = ownSession(ctx);
-					const state = pending.get(session.sessionManager) ?? liveState(session);
-					return state.kind === "empty" ? { block: true, reason: INIT_REMINDER } : undefined;
+					const reason = noOpenItems(pending.get(session.sessionManager) ?? liveState(session));
+					return reason === undefined ? undefined : { block: true, reason };
 				}
 				default:
 					return undefined;

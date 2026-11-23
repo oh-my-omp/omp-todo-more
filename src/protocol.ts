@@ -36,7 +36,11 @@ export const commitParamSchema = z.object({
 });
 
 export const parametersSchema = z.object({
-	goal: goalParamSchema.optional().describe("Initialize or update the goal (required when creating a new list)"),
+	goal: goalParamSchema
+		.optional()
+		.describe(
+			"Initialize or update the goal (required to start a list: on an empty list, or with add once every item is completed or abandoned)",
+		),
 	add: z
 		.array(addItemParamSchema)
 		.min(1)

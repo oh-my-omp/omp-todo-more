@@ -318,6 +318,26 @@ describe("atomic structured todo execution", () => {
 		expect(harness.snapshot().goal).toEqual(goal);
 	});
 
+	test("add on a list whose items are all closed needs goal and starts a new round without the finished items", async () => {
+		const finished: TodoNotes = {
+			goal,
+			items: [
+				note("t1", "Delivery", "Implement", "Done earlier", missing, closed("completed", null)),
+				note("t2", "Delivery", "Review", "Dropped earlier", missing, closed("abandoned", null)),
+			],
+		};
+		const harness = fixture(finished);
+		await expectRejected(harness, () => harness.call({ add: [{ phase: "Next", title: "Follow up", detail: "More work", minutes: 5 }] }));
+		const next = { title: "Round two", summary: "Second measure", acceptance: "Second done" };
+		const result = await harness.call({ goal: next, add: [{ phase: "Next", title: "Follow up", detail: "More work", minutes: 5 }] });
+		expect(result.isError).not.toBe(true);
+		expect(result.details?.op).toBe("init");
+		expect(harness.snapshot().goal).toEqual({ objective: "Round two", measure: "Second measure", doneWhen: "Second done" });
+		expect(harness.snapshot().phases.map((phase) => phase.items.map((item) => [item.id, item.title, item.status]))).toEqual([
+			[["t1", "Follow up", "in_progress"]],
+		]);
+	});
+
 	test("rejects old DSL input shape and allows empty argument object as view", async () => {
 		const harness = fixture();
 		await expectRejected(harness, () => harness.call({ input: "*** Begin Todo\nVIEW\n*** End Todo" }));
