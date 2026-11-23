@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { SCRIPT_MODEL, startMockProvider } from "./mock-provider.ts";
 import { fillBranch } from "../ui-fixture.ts";
+import { SCRIPT_MODEL, startMockProvider } from "./mock-provider.ts";
 
 const args = new Map<string, string>();
 for (let i = 2; i < Bun.argv.length; i += 2) args.set(Bun.argv[i] ?? "", Bun.argv[i + 1] ?? "");

@@ -28,7 +28,7 @@ type Chunk = Record<string, unknown>;
 
 function chunk(model: string, delta: Record<string, unknown>, finish: string | null): Chunk {
 	return {
-		id: "chatcmpl-parity",
+		id: "chatcmpl-mock",
 		object: "chat.completion.chunk",
 		created: 0,
 		model,
@@ -67,7 +67,7 @@ function turnChunks(model: string, turn: ScriptedTurn, callPrefix: string): Chun
 function completion(model: string, turn: ScriptedTurn, callPrefix: string): Record<string, unknown> {
 	const calls = turn.toolCalls ?? [];
 	return {
-		id: "chatcmpl-parity",
+		id: "chatcmpl-mock",
 		object: "chat.completion",
 		created: 0,
 		model,
@@ -122,7 +122,7 @@ export function startMockProvider(requestsFile: string): MockProvider {
 		async fetch(request) {
 			const url = new URL(request.url);
 			if (request.method !== "POST" || !url.pathname.endsWith("/chat/completions")) {
-				return new Response("not served by the parity mock provider", { status: 404 });
+				return new Response("not served by the mock provider", { status: 404 });
 			}
 			const body: unknown = await request.json();
 			const model = typeof body === "object" && body !== null && "model" in body && typeof body.model === "string" ? body.model : "";
