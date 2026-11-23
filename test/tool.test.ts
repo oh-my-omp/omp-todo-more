@@ -120,7 +120,7 @@ function fixture(initial?: TodoNotes): Fixture {
 		sessionManager.appendMessage(todoResultMessage({ op: "batch", phases: phasesOf(initial) }, epoch));
 	}
 	const run: Fixture["run"] = async (raw, leafMaxMinutes) => {
-		const result = await runTodo(session, raw, leafMaxMinutes);
+		const result = await runTodo(session, raw, { leafMaxMinutes });
 		sessionManager.appendMessage(todoResultMessage(result.details, Date.now(), result.isError === true));
 		return result;
 	};

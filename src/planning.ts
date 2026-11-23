@@ -4,7 +4,9 @@ import { type BranchFacts, branchFacts, foldBranch } from "./branch.ts";
 import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { currentTimeLine, formatCompactView, formatFullView } from "./format.ts";
-import { sessionOf } from "./session.ts";
+import { worktreeScope } from "./git.ts";
+import { readProjectConfig } from "./project-config.ts";
+import { parentCwdOf, sessionOf } from "./session.ts";
 import { readSettings } from "./settings.ts";
 import { explanationValue, PLANNING_DELIVERY_TYPE, roundOf, semanticStateKey, type TodoNgState } from "./state.ts";
 import { previewTodo } from "./tool.ts";
@@ -144,13 +146,12 @@ export function registerPlanning(pi: ExtensionAPI): void {
 				case "todo": {
 					const session = ownSession(ctx);
 					const manager = session.sessionManager;
-					const settings = await readSettings(pi, ctx);
-					const preview = previewTodo(
-						branchFacts(manager),
-						pending.get(manager) ?? liveState(session),
-						event.input,
-						settings.leafMaxMinutes,
-					);
+					const [settings, project] = await Promise.all([readSettings(pi, ctx), readProjectConfig(pi.logger, ctx.cwd)]);
+					const preview = previewTodo(branchFacts(manager), pending.get(manager) ?? liveState(session), event.input, {
+						leafMaxMinutes: settings.leafMaxMinutes,
+						project,
+						scope: worktreeScope(manager.getCwd(), parentCwdOf(ctx)()),
+					});
 					if (preview.kind === "state") pending.set(manager, preview.state);
 					return undefined;
 				}

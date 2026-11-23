@@ -39,6 +39,7 @@ function estimatedState(minutes = 1, budgetId = "original-budget", runningSince 
 					estimate: { kind: "estimated", budgetId, minutes },
 					progress: { status: "in_progress", startedAt: epoch, elapsedMs, runningSince },
 					commit: null,
+					tailRule: null,
 				},
 			],
 		},

@@ -64,10 +64,12 @@ export function repositoryRoot(cwd: string): string | null {
 	return repositoryAt(cwd)?.info().repoRoot ?? null;
 }
 
-export function sharedWorktreeRoot(cwd: string, otherCwd: string): string | null {
+export type WorktreeScope = { readonly kind: "main" } | { readonly kind: "isolated" } | { readonly kind: "shared"; readonly root: string };
+
+export function worktreeScope(cwd: string, parentCwd: string | undefined): WorktreeScope {
+	if (parentCwd === undefined) return { kind: "main" };
 	const root = repositoryRoot(cwd);
-	if (root === null) return null;
-	return repositoryRoot(otherCwd) === root ? root : null;
+	return root !== null && repositoryRoot(parentCwd) === root ? { kind: "shared", root } : { kind: "isolated" };
 }
 
 type PathspecOutcome =

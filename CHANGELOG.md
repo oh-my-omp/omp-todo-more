@@ -5,9 +5,12 @@
 ### Added
 
 - `todo` reads a project config file `.omp/todo-ng.json` at the git root (or the session directory outside git) on every call: `effects` switches and `tailItems` tail-item rules, strictly parsed with defaults for omitted fields. An unreadable, malformed or invalid file refuses every `todo` change with the file path and the reason; `todo({})` and `todo({ view })` still answer and append the same reason.
+- A call that starts a list or a new round appends the project's `tailItems` that reach the agent (`main`, `isolated`, `all`) after its own items, each estimated at its `minutes` or the smaller of 15 and `leafMaxMinutes`, and records the rule in the notes; an `add` repeating a tail title is refused. A protected tail item cannot be dropped, and a tail item whose rule has a `check` cannot be completed while other work is open; once its rule leaves the config it completes with a note. Views mark tail items `project rule "<id>"`.
+- `effects.commit: false` lets `done_id` complete without committing or the uncommitted-work refusal, ignoring a `commit` clause with a note; `effects.overtime: false` lets `estimate` change an item that already received an overtime warning.
 
 ### Changed
 
+- Every `todo` change runs through one pipeline — structural planning, the tail-item transform, synchronous guards, acceptance guards, then the completion-commit guard — and the first refusal or exception rejects the whole call before the list, the notes or git change. The edit-gate preview runs the same planning, transform and synchronous guards.
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@e84938e.
 
 ## [0.3.0] - 2026-11-23
