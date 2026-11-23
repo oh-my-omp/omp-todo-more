@@ -76,7 +76,7 @@ export function commitClauseOf(commit: z.infer<typeof commitParamSchema>): TodoC
 
 export type ParsedTodoParams = { kind: "ok"; params: TodoParams } | { kind: "invalid"; message: string };
 
-function formatIssues(error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] }): string {
+export function formatIssues(error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] }): string {
 	return error.issues
 		.map((issue) => {
 			const field = issue.path.map(String).join(".");

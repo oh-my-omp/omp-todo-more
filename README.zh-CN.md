@@ -41,7 +41,8 @@
   - Tern owner-CLI 安装 — 功能：加载时经 `tern plugin dir/list/install --json` 安装或修复该包，副本一致时跳过，Tern 存在但检查失败时拒绝整个扩展工厂。时机：异步工厂内、订阅 review API 之前；`tern` 不在 `PATH` 上时跳过。实例：`src/tern-plugin-install.ts` 的 `initializeTernPlugin`/`isCurrent`。
 - **同步 review 协议**
   - `omp-todo-ng:read` 监听器 — 功能：在事件总线上同步应答请求 `{agentId, reply(value)}`：从指定 agent 的活动分支读取并回复 `{kind: "ok", goal, openItems, counts}` 或 `{kind: "unavailable"}`，不写、不缓存、无定时器。时机：另一进程内扩展在 `pi.events` 上发出 `omp-todo-ng:read` 时；`session_shutdown` 时移除。实例：`src/review-api.ts` 的 `registerReviewApi`，协议见 `omomp-shared/todo-read.ts`。
-- **插件设置**
+- **插件设置与项目配置**
   - 插件设置 — 功能：以原生插件设置声明 `leafMaxMinutes`（默认 `60`，1–1440），非法值回退默认并告警；todo 提醒、提醒上限与 eager 前导都跟随宿主的 `todo.*` 设置。时机：每次 `todo` 调用经 `getPluginSettings` 重读。实例：`package.json` 的 `omp.settings`、`src/settings.ts` 的 `readSettings`；用 `omp plugin config omp-todo-ng` 设置。
+  - 项目配置文件 — 功能：从会话目录所在 git 仓库的根（不在 git 中时就是会话目录本身，不向上合并父目录）读取项目的 `.omp/todo-ng.json` 并严格解析：`effects`（`editGate`、`commit`、`overtime`、`cutOff`，各自默认 `true`）与 `tailItems`（`id`、`title` 不可重复，`detail`，可选 `phase` 默认 `Verification`、`minutes` 1–1440、`scope` 取 `main`/`isolated`/`all` 默认 `main`、`protected` 默认 `true`、`check` 为 `{ kind: "shell", command, timeoutMs ≤ 600000（默认 120000）}` 或 `{ kind: "judge", prompt, timeoutMs ≤ 300000（默认 30000）}`）；没有文件时全部取默认。文件读不出、不是 JSON、出现未知键或越界取值、尾项 `id` 或 `title` 重复时，所有 `todo` 变更都失败并给出文件路径与原因，同时记一条警告；`todo({})` 与 `todo({ view })` 照常返回并附上同一原因。`leafMaxMinutes` 仍是插件设置。时机：每次 `todo` 调用都重新读取，改完文件下一次调用即生效。实例：`src/project-config.ts` 的 `readProjectConfig`，错误 `Project config /repo/.omp/todo-ng.json is invalid: effects.editgate: must be removed. Fix or remove the file: todo changes are refused until it parses.`
 - **语言解析**
   - UI 文本语言 — 功能：把所有面向人的字符串（工具标签、命令说明、HUD、编辑器、通知）按 `OMOMP_LANG` 解析为英文或中文，其次取 `LC_ALL`/`LC_MESSAGES`/`LANG`，否则英文，每次生成时重读，面向模型的文本保持英文。时机：插件每次产出 UI 文本或注册标签时。实例：`src/reminders.ts` 的 `tr("Cancel the pending Todo NG reminder", "取消待发的 Todo NG 提醒")`，`tr` 来自 `omomp-shared/i18n.ts`。
