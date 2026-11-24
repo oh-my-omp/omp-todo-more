@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-24
+
 ### Added
 
 - `todo` reads a project config file `.omp/todo-ng.json` at the git root (or the session directory outside git) on every call: `effects` switches and `tailItems` tail-item rules, strictly parsed with defaults for omitted fields. An unreadable, malformed or invalid file refuses every `todo` change with the file path and the reason; `todo({})` and `todo({ view })` still answer and append the same reason.
