@@ -93,7 +93,7 @@ describe("HUD", () => {
 		expect(after).not.toContain('"hidden":true');
 	});
 
-	test("a repaint without a todo change keeps the same node", () => {
+	test("a repaint without a todo change keeps the same live node", () => {
 		const fx = fixture(`${DIR}/hud-plain-${process.pid}`);
 		fillBranch(fx.raw, 600);
 		const hud = hudController(
@@ -103,7 +103,9 @@ describe("HUD", () => {
 		const first = hud.node();
 		messageEntry(fx.raw, 10_001);
 		hud.refresh();
-		expect(hud.node()).toBe(first);
+		const kept = hud.node();
+		expect(kept).toBe(first);
+		expect(isUiNode(kept) && !kept.disposed).toBe(true);
 	});
 
 	test("expansion adds the popover and collapsing removes it", () => {

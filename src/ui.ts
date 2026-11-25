@@ -232,7 +232,6 @@ export type HudController = {
 export function hudController(snapshotOf: () => TodoNgSnapshot | undefined, open: () => void): HudController {
 	const revision = signal(0);
 	const expanded = signal(false);
-	let cached: { readonly snapshot: TodoNgSnapshot | undefined; readonly expanded: boolean; readonly node: JSXNode } | undefined;
 	const handlers: HudHandlers = {
 		onToggle: (collapsed) => expanded.set(!collapsed),
 		onOpen: () => {
@@ -240,15 +239,14 @@ export function hudController(snapshotOf: () => TodoNgSnapshot | undefined, open
 			open();
 		},
 	};
-	const view = computed<JSXNode>(() => {
-		revision();
-		const wantExpanded = expanded();
-		const snapshot = snapshotOf();
-		if (cached !== undefined && cached.expanded === wantExpanded && Bun.deepEquals(cached.snapshot, snapshot)) return cached.node;
-		const next = hudNode(snapshot, wantExpanded, handlers);
-		cached = { snapshot, expanded: wantExpanded, node: next };
-		return next;
-	});
+	const snapshot = computed<TodoNgSnapshot | undefined>(
+		() => {
+			revision();
+			return snapshotOf();
+		},
+		{ equals: (previous, next) => Bun.deepEquals(previous, next) },
+	);
+	const view = computed<JSXNode>(() => hudNode(snapshot(), expanded(), handlers));
 	return { node: view, expanded, handlers, refresh: () => revision.update((value) => value + 1) };
 }
 
