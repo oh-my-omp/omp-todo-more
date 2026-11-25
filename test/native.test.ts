@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { ensureThemeSync, type NativeChild, type NativeNode, theme } from "@oh-my-pi/pi-tui";
-import { describeSnapshot, describeTodoHud, describeTodoResult } from "../src/native.ts";
+import { createNoOpUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/utils";
+import { printRows } from "@oh-my-pi/pi-coding-agent/ui/print-rows";
+import { resolveChildren, type UiKind, type UiNode } from "@oh-my-pi/pi-tui";
+import { describeSnapshot, describeTodoHud, renderTodoResult } from "../src/native.tsx";
 import { renderReminder } from "../src/reminders.tsx";
 import type { TodoNgSnapshot, TodoStatus } from "../src/state.ts";
 import type { TodoNgDetails } from "../src/tool.ts";
@@ -65,39 +67,44 @@ const snapshot: TodoNgSnapshot = {
 	],
 };
 
-function nativeNodes(children: readonly NativeChild[]): NativeNode[] {
-	const nodes: NativeNode[] = [];
-	for (const child of children) {
-		if (!("k" in child)) throw new Error("Expected native descriptors, not an ANSI component");
-		nodes.push(child, ...nativeNodes(child.c ?? []));
-	}
-	return nodes;
+function nodesIn(value: unknown): UiNode[] {
+	return resolveChildren(value)().flatMap((node) => [node, ...nodesIn(node.children())]);
+}
+
+function isKind<K extends UiKind>(node: UiNode, kind: K): node is UiNode<K> {
+	return node.kind === kind;
+}
+
+function ofKind<K extends UiKind>(value: unknown, kind: K): UiNode<K>[] {
+	return nodesIn(value).filter((node): node is UiNode<K> => isKind(node, kind));
 }
 
 function only<T>(values: readonly T[]): T {
 	expect(values).toHaveLength(1);
 	const value = values[0];
-	if (value === undefined) throw new Error("Expected one native descriptor");
+	if (value === undefined) throw new Error("Expected one node");
 	return value;
 }
 
-function checklist(children: readonly NativeChild[]) {
-	const list = only(
-		nativeNodes(children)
-			.filter((entry) => entry.k === "checklist")
-			.filter((entry) => entry.p?.mode === "full"),
+function checklist(value: unknown) {
+	return only(
+		ofKind(value, "checklist")
+			.map((node) => node.props())
+			.filter((props) => props.mode === "full"),
 	);
-	if (list.p === undefined) throw new Error("Expected checklist properties");
-	return list.p;
 }
 
-function goalItems(children: readonly NativeChild[]) {
-	const goal = only(nativeNodes(children).filter((entry) => entry.k === "kv"));
-	if (goal.p === undefined) throw new Error("Expected goal properties");
-	return goal.p.items;
+function goalItems(value: unknown) {
+	return only(ofKind(value, "kv")).props().items;
 }
 
-function resultFor(more: TodoNgSnapshot): Parameters<typeof describeTodoResult>[0] & { details: TodoNgDetails } {
+function texts(value: unknown): (string | undefined)[] {
+	return ofKind(value, "text").map((node) => node.props().text);
+}
+
+type ResultInput = Parameters<typeof renderTodoResult>[0] & { details: TodoNgDetails };
+
+function resultFor(more: TodoNgSnapshot): ResultInput {
 	return {
 		content: [{ type: "text", text: "This summary is not the native snapshot." }],
 		details: {
@@ -112,21 +119,17 @@ function resultFor(more: TodoNgSnapshot): Parameters<typeof describeTodoResult>[
 	};
 }
 
-function resultBody(result: Parameters<typeof describeTodoResult>[0], expanded = false): readonly NativeChild[] {
-	const view = describeTodoResult(result, { expanded, isPartial: false });
-	if (view?.body === undefined) throw new Error("Expected a native result body");
-	return view.body;
+function resultBody(result: ResultInput, expanded = false): UiNode {
+	return only(resolveChildren(renderTodoResult(result, { expanded }))());
 }
 
-function rows(children: readonly NativeChild[]) {
-	return checklist(children).phases.flatMap((phase) => phase.items);
+function rows(value: unknown) {
+	return checklist(value).phases.flatMap((phase) => phase.items);
 }
 
 describe("native todo presentation", () => {
 	test("expanded disclosure preserves all goal fields, all four statuses, and estimate and explanation notes", () => {
-		const hud = describeTodoHud(snapshot, true);
-		if (hud === null) throw new Error("Expected a native HUD");
-		const body = [hud];
+		const body = describeTodoHud(snapshot, true);
 
 		expect(goalItems(body)).toEqual([
 			{ k: "Objective", v: "Ship the native todo replacement" },
@@ -232,12 +235,10 @@ describe("native todo HUD", () => {
 	test("rich goal, full checklist, and edit content appear only when expanded", () => {
 		for (const expanded of [false, true]) {
 			const hud = describeTodoHud(snapshot, expanded);
-			if (hud === null) throw new Error("Expected a native HUD");
-			const nodes = nativeNodes([hud]);
 
-			expect(nodes.filter((entry) => entry.k === "kv")).toHaveLength(expanded ? 1 : 0);
-			expect(nodes.filter((entry) => entry.k === "checklist" && entry.p?.mode === "full")).toHaveLength(expanded ? 1 : 0);
-			const editControls = nodes.filter((entry) => entry.k === "row" && entry.p?.actions?.click === "todo-ng.open");
+			expect(ofKind(hud, "kv")).toHaveLength(expanded ? 1 : 0);
+			expect(ofKind(hud, "checklist").filter((node) => node.props().mode === "full")).toHaveLength(expanded ? 1 : 0);
+			const editControls = ofKind(hud, "row").filter((node) => node.props().actions?.click === "todo-ng.open");
 			expect(editControls).toHaveLength(expanded ? 1 : 0);
 		}
 	});
@@ -278,10 +279,10 @@ describe("native todo HUD", () => {
 			},
 			false,
 		);
-		if (hud === null) throw new Error("Expected a native HUD");
-		const headings = nativeNodes([hud]).flatMap((entry) =>
-			entry.p !== undefined && "head" in entry.p && typeof entry.p.head === "string" ? [entry.p.head] : [],
-		);
+		const headings = ofKind(hud, "card").flatMap((node) => {
+			const head = node.props().head;
+			return typeof head === "string" ? [head] : [];
+		});
 
 		expect(headings).toContain(label);
 	});
@@ -323,12 +324,9 @@ describe("native result card", () => {
 			}),
 		);
 
-		expect(nativeNodes(body).filter((entry) => entry.k === "kv")).toHaveLength(0);
-		expect(
-			nativeNodes(body)
-				.filter((entry) => entry.k === "text")
-				.map((entry) => entry.p?.text),
-		).toContain("Objective: Ship");
+		expect(body.props().role).toBe("todo-ng.panel");
+		expect(ofKind(body, "kv")).toHaveLength(0);
+		expect(texts(body)).toContain("Objective: Ship");
 		expect(checklist(body).phases.map((phase) => phase.collapsed)).toEqual([true, false]);
 		expect(rows(body).map((item) => item.note)).toEqual([undefined, undefined]);
 		expect(rows(body)[1]?.text).toBe("Waiting task · 12m");
@@ -349,8 +347,8 @@ describe("native result card", () => {
 		).toContain("Keep the host projection");
 	});
 
-	test("settled header shows closed/total progress, and an empty list shows only the title", () => {
-		const progress = describeTodoResult(
+	test("a list with tasks has no empty note, and an empty list shows only the empty note", () => {
+		const progress = resultBody(
 			resultFor({
 				goal: { objective: "Ship", measure: "Measured", doneWhen: "Done" },
 				phases: [
@@ -377,12 +375,16 @@ describe("native result card", () => {
 					},
 				],
 			}),
-			{ expanded: false, isPartial: false },
 		);
-		expect(progress?.tool?.target).toBe("1/2");
+		expect(texts(progress)).not.toContain("Todo list is empty.");
+		expect(rows(progress)).toHaveLength(2);
 
-		const empty = describeTodoResult(resultFor({ goal: null, phases: [] }), { expanded: false, isPartial: false });
-		expect(empty?.tool?.target).toBeUndefined();
+		for (const phases of [[], [{ name: "Empty phase", items: [] }]]) {
+			const empty = resultBody(resultFor({ goal: null, phases }));
+			expect(texts(empty)).toEqual(["Todo list is empty."]);
+			expect(ofKind(empty, "checklist")).toHaveLength(0);
+			expect(ofKind(empty, "kv")).toHaveLength(0);
+		}
 	});
 
 	test("incremental CRUD shows only changed items while collapsed, and expanding restores the full snapshot", () => {
@@ -398,12 +400,8 @@ describe("native result card", () => {
 		];
 
 		const collapsedBody = resultBody(crudResult, false);
-		expect(nativeNodes(collapsedBody).filter((entry) => entry.k === "kv")).toHaveLength(0);
-		expect(
-			nativeNodes(collapsedBody)
-				.filter((entry) => entry.k === "text")
-				.map((entry) => entry.p?.text),
-		).toEqual([]);
+		expect(ofKind(collapsedBody, "kv")).toHaveLength(0);
+		expect(texts(collapsedBody)).toEqual([]);
 		expect(checklist(collapsedBody).phases.map((phase) => phase.title)).toEqual(["Delivery"]);
 		expect(rows(collapsedBody).map((item) => ({ text: item.text, status: item.status, note: item.note }))).toEqual([
 			{ text: "Plan the replacement · no estimate", status: "done", note: undefined },
@@ -438,8 +436,7 @@ describe("native result card", () => {
 	});
 
 	test("active reminder renders only the reminder event and no todo items", () => {
-		ensureThemeSync();
-		const component = renderReminder(
+		const reminder = renderReminder(
 			{
 				role: "custom",
 				customType: "mouriya.omp.todo-more.reminder",
@@ -457,23 +454,24 @@ describe("native result card", () => {
 				},
 			},
 			{ expanded: false },
-			theme,
+			createNoOpUIContext().theme,
 		);
-		if (component === undefined) throw new Error("Expected a reminder component");
 
-		const ansi = component.render(100).join("\n");
+		const card = only(ofKind(reminder, "card"));
+		expect(card.props()).toMatchObject({
+			role: "todo-ng.reminder",
+			tone: "warning",
+			head: [{ t: "2 incomplete todos - reminder 1/3", s: "strong" }],
+		});
+		expect(ofKind(reminder, "checklist")).toHaveLength(0);
+		expect(ofKind(reminder, "kv")).toHaveLength(0);
+		expect(JSON.stringify(nodesIn(reminder).map((node) => node.props()))).not.toContain("Plan the replacement");
+
+		const ansi = printRows(() => card, 100).join("\n");
 		expect(ansi).toContain("2 incomplete");
 		expect(ansi).toContain("1/3");
 		expect(ansi).not.toContain("Plan the replacement");
 		expect(ansi).not.toContain("Implement the card");
-
-		const described = component.describe?.({ supports: () => true } as never);
-		if (described === undefined || described === null) throw new Error("Expected a native reminder node");
-		const allNodes = nativeNodes([described]);
-		expect(allNodes.filter((entry) => entry.k === "checklist")).toHaveLength(0);
-		expect(allNodes.filter((entry) => entry.k === "kv")).toHaveLength(0);
-		expect(JSON.stringify(described)).toContain("2 incomplete");
-		expect(JSON.stringify(described)).not.toContain("Plan the replacement");
 	});
 });
 
