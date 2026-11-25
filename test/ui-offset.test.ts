@@ -18,7 +18,7 @@ import {
 	panelView,
 	selectionChoice,
 	stepSelection,
-} from "../src/ui.tsx";
+} from "../src/ui.ts";
 import { appendTodoChange, fillBranch, fixture, messageEntry } from "./ui-fixture.ts";
 
 const DIR = "/tmp/ui-offset-test";

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { createNoOpUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/utils";
 import { printRows } from "@oh-my-pi/pi-coding-agent/ui/print-rows";
 import { resolveChildren, type UiKind, type UiNode } from "@oh-my-pi/pi-tui";
-import { describeSnapshot, describeTodoHud, renderTodoResult } from "../src/native.tsx";
-import { renderReminder } from "../src/reminders.tsx";
+import { describeSnapshot, describeTodoHud, renderTodoResult } from "../src/native.ts";
+import { renderReminder } from "../src/reminders.ts";
 import type { TodoNgSnapshot, TodoStatus } from "../src/state.ts";
 import type { TodoNgDetails } from "../src/tool.ts";
 

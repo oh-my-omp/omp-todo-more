@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { isUiNode, type JSXNode } from "@oh-my-pi/pi-tui";
 import { liveState } from "../../src/commit.ts";
 import { toSnapshot } from "../../src/state.ts";
-import { type HudController, hudController } from "../../src/ui.tsx";
+import { type HudController, hudController } from "../../src/ui.ts";
 import { appendTodoChange, fillBranch, fixture, messageEntry, type UiFixture } from "../ui-fixture.ts";
 
 const args = new Map<string, string>();

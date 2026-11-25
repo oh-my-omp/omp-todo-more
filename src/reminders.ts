@@ -1,10 +1,9 @@
-/** @jsxImportSource @oh-my-pi/pi-tui */
 import { z } from "@oh-my-pi/omptype/zod";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { AgentSession, ExtensionAPI, ExtensionContext, MessageRenderer, SessionEntry } from "@oh-my-pi/pi-coding-agent";
-import { isSilentAbort, isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/transcript/messages";
 import { EAGER_TODO_PRELUDE_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/todo-tracker";
+import { isSilentAbort, isUserInterruptAbort } from "@oh-my-pi/pi-coding-agent/session/transcript/messages";
 import { cfgTodoEnabled, cfgTodoReminders, cfgTodoRemindersMax } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 import { deferDuringCompaction, isCompacting } from "../omomp-shared/compact-handoff.ts";
@@ -13,6 +12,7 @@ import { branchFacts, type FactsAtEntry, foldBranchAt } from "./branch.ts";
 import { liveState } from "./commit.ts";
 import { errorText } from "./errors.ts";
 import { currentTimeLine, itemTimeSummary } from "./format.ts";
+import { node } from "./node.ts";
 import { readProjectConfig } from "./project-config.ts";
 import { type CutOffWait, cutOffWait, quotaDeadline, quotaNoticeLine } from "./quota-wait.ts";
 import { sessionOf } from "./session.ts";
@@ -387,7 +387,7 @@ function reminderHeader({ items, attempt, max }: ReminderDetails): string {
 export const renderReminder: MessageRenderer = (message) => {
 	const parsed = reminderDetailsSchema.safeParse(message.details);
 	if (!parsed.success) return undefined;
-	return <card role="todo-ng.reminder" tone="warning" head={[{ t: reminderHeader(parsed.data), s: "strong" }]} />;
+	return node("card", { role: "todo-ng.reminder", tone: "warning", head: [{ t: reminderHeader(parsed.data), s: "strong" }] });
 };
 
 function cutOffAnswer(message: AgentMessage | undefined): AssistantMessage | undefined {

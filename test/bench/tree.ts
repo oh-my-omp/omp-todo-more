@@ -34,10 +34,10 @@ const modules: Modules = {
 	...((await import(`${src}/src/tool.ts`)) as Pick<Modules, "runTodo">),
 	...((await import(`${src}/src/planning.ts`)) as Pick<Modules, "registerPlanning">),
 	...((await import(`${src}/src/overtime.ts`)) as Pick<Modules, "registerOvertime">),
-	...((await import(`${src}/src/ui.tsx`)) as Pick<Modules, "hudController">),
+	...((await import(`${src}/src/ui.ts`)) as Pick<Modules, "hudController">),
 	...((await import(`${src}/src/state.ts`)) as Pick<Modules, "toSnapshot">),
 	...((await import(`${src}/src/commit.ts`)) as Pick<Modules, "liveState">),
-	...((await import(`${src}/src/reminders.tsx`)) as Pick<Modules, "contextMessages">),
+	...((await import(`${src}/src/reminders.ts`)) as Pick<Modules, "contextMessages">),
 };
 
 function stubPi(handlers: Map<string, Handler[]>, manager: SessionManager): ExtensionAPI {

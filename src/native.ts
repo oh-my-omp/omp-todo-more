@@ -1,9 +1,9 @@
-/** @jsxImportSource @oh-my-pi/pi-tui */
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { ToolRenderResultOptions } from "@oh-my-pi/pi-coding-agent";
 import { isClosedTodo } from "@oh-my-pi/pi-coding-agent/tools/details/todo";
 import type { JSXNode } from "@oh-my-pi/pi-tui";
 import { tr } from "../omomp-shared/i18n.ts";
+import { node } from "./node.ts";
 import { previewTodoArgs } from "./protocol.ts";
 import { callPreviewLines, compactTodoLabel, detailsSchema, type ReadTodoDetails, resultView } from "./render.ts";
 import { commitRecordText, type SnapshotItem, type TodoNgSnapshot, type TodoStatus } from "./state.ts";
@@ -53,18 +53,19 @@ function snapshotPhases(snapshot: TodoNgSnapshot) {
 	}));
 }
 
-function GoalKv({ goal }: { goal: TodoNgSnapshot["goal"] }): JSXNode {
+function goalKv(goal: TodoNgSnapshot["goal"]): JSXNode {
 	const missing = tr("[goal missing]", "[缺少目标]");
-	return (
-		<kv
-			key="goal"
-			role="todo-ng.goal"
-			items={[
+	return node(
+		"kv",
+		{
+			role: "todo-ng.goal",
+			items: [
 				{ k: tr("Objective", "目标"), v: goal?.objective ?? missing },
 				{ k: tr("Measure", "衡量方式"), v: goal?.measure ?? missing },
 				{ k: tr("Done when", "完成条件"), v: goal?.doneWhen ?? missing },
-			]}
-		/>
+			],
+		},
+		"goal",
 	);
 }
 
@@ -74,24 +75,27 @@ export function explainAction(id: string): string {
 
 export function describeSnapshot(snapshot: TodoNgSnapshot, editable = false, selectedId?: string): JSXNode[] {
 	const body: JSXNode[] = [
-		<GoalKv goal={snapshot.goal} />,
-		<checklist key="list" role="todo-ng.list" mode="full" phases={snapshotPhases(snapshot)} />,
+		goalKv(snapshot.goal),
+		node("checklist", { role: "todo-ng.list", mode: "full", phases: snapshotPhases(snapshot) }, "list"),
 	];
-	if (snapshot.phases.every((phase) => phase.items.length === 0)) body.push(<text text={tr("Todo list is empty.", "待办列表为空。")} />);
+	if (snapshot.phases.every((phase) => phase.items.length === 0))
+		body.push(node("text", { text: tr("Todo list is empty.", "待办列表为空。") }));
 	if (editable) {
 		for (const phase of snapshot.phases) {
 			for (const item of phase.items) {
 				const label = `${tr("Edit explanation", "编辑说明")}: ${item.title}`;
 				body.push(
-					<row
-						key={explainAction(item.id)}
-						role="omp.btn"
-						actions={{ click: explainAction(item.id) }}
-						title={label}
-						tone={selectedId === item.id ? "accent" : undefined}
-					>
-						<text text={label} />
-					</row>,
+					node(
+						"row",
+						{
+							role: "omp.btn",
+							actions: { click: explainAction(item.id) },
+							title: label,
+							tone: selectedId === item.id ? "accent" : undefined,
+							children: node("text", { text: label }),
+						},
+						explainAction(item.id),
+					),
 				);
 			}
 		}
@@ -136,82 +140,107 @@ export function describeTodoHud(snapshot: TodoNgSnapshot, expanded = false, hand
 	}
 	if (total === 0) return null;
 	const label = active ?? pending ?? (closed === total ? tr("All done", "全部完成") : tr("Todos", "待办"));
-	return (
-		<row
-			key="todo-ng.hud"
-			role="omp.hud.activity"
-			aria={tr("Todo NG progress", "Todo NG 进度")}
-			align="center"
-			gap="sm"
-			onAction={(act) => {
+	return node(
+		"row",
+		{
+			role: "omp.hud.activity",
+			aria: tr("Todo NG progress", "Todo NG 进度"),
+			align: "center",
+			gap: "sm",
+			onAction: (act) => {
 				if (act === HUD_OPEN_ACTION) handlers.onOpen();
-			}}
-		>
-			<col key="pill" role="omp.hud.todo" aria={tr("Todo NG pill", "Todo NG 待办条")} gap="none">
-				<card
-					key="control"
-					aria={tr("Todo NG disclosure", "Todo NG 展开项")}
-					head={`${label} ${closed}/${total}`}
-					variant="bare"
-					collapsible={true}
-					collapsed={!expanded}
-					onToggle={(collapsed) => handlers.onToggle(collapsed)}
-				>
-					<checklist key="visual" role="todo-ng.visual" mode="hud" phases={snapshotPhases(snapshot)} />
-				</card>
-				{expanded ? (
-					<col key="popover" role="todo-ng.popover" aria={tr("Todo NG popover", "Todo NG 弹出面板")}>
-						<col key="details" role="todo-ng.details" gap="sm">
-							{describeSnapshot(snapshot)}
-							<row key="edit" role="omp.btn" actions={{ click: HUD_OPEN_ACTION }}>
-								<text text={tr("Edit goal / explanations", "编辑目标/说明")} />
-							</row>
-						</col>
-					</col>
-				) : undefined}
-			</col>
-		</row>
+			},
+			children: node(
+				"col",
+				{
+					role: "omp.hud.todo",
+					aria: tr("Todo NG pill", "Todo NG 待办条"),
+					gap: "none",
+					children: [
+						node(
+							"card",
+							{
+								aria: tr("Todo NG disclosure", "Todo NG 展开项"),
+								head: `${label} ${closed}/${total}`,
+								variant: "bare",
+								collapsible: true,
+								collapsed: !expanded,
+								onToggle: (collapsed) => handlers.onToggle(collapsed),
+								children: node("checklist", { role: "todo-ng.visual", mode: "hud", phases: snapshotPhases(snapshot) }, "visual"),
+							},
+							"control",
+						),
+						expanded
+							? node(
+									"col",
+									{
+										role: "todo-ng.popover",
+										aria: tr("Todo NG popover", "Todo NG 弹出面板"),
+										children: node(
+											"col",
+											{
+												role: "todo-ng.details",
+												gap: "sm",
+												children: [
+													describeSnapshot(snapshot),
+													node(
+														"row",
+														{
+															role: "omp.btn",
+															actions: { click: HUD_OPEN_ACTION },
+															children: node("text", { text: tr("Edit goal / explanations", "编辑目标/说明") }),
+														},
+														"edit",
+													),
+												],
+											},
+											"details",
+										),
+									},
+									"popover",
+								)
+							: undefined,
+					],
+				},
+				"pill",
+			),
+		},
+		"todo-ng.hud",
 	);
 }
 
 export function renderTodoCall(args: unknown): JSXNode {
-	return (
-		<col role="todo-ng.preview" gap="sm">
-			{callPreviewLines(previewTodoArgs(args)).map((text, index) => (
-				<text key={`line-${index}`} text={text} wrap="word" />
-			))}
-		</col>
-	);
+	return node("col", {
+		role: "todo-ng.preview",
+		gap: "sm",
+		children: callPreviewLines(previewTodoArgs(args)).map((text, index) => node("text", { text, wrap: "word" }, `line-${index}`)),
+	});
 }
 
 export function renderTodoResult(result: AgentToolResult<unknown>, options: Pick<ToolRenderResultOptions, "expanded">): JSXNode {
 	const parsed = detailsSchema.safeParse(result.details);
 	if (result.isError || !parsed.success) {
 		const text = result.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
-		return (
-			<text
-				role="todo-ng.error"
-				tone="error"
-				text={text || (result.isError ? tr("Todo operation failed", "待办操作失败") : tr("Invalid todo-ng result details", "Todo NG 结果详情无效"))}
-				wrap="word"
-			/>
-		);
+		return node("text", {
+			role: "todo-ng.error",
+			tone: "error",
+			text:
+				text ||
+				(result.isError ? tr("Todo operation failed", "待办操作失败") : tr("Invalid todo-ng result details", "Todo NG 结果详情无效")),
+			wrap: "word",
+		});
 	}
-	return (
-		<col role="todo-ng.panel" gap="sm">
-			{resultPanel(parsed.data, options.expanded)}
-		</col>
-	);
+	return node("col", { role: "todo-ng.panel", gap: "sm", children: resultPanel(parsed.data, options.expanded) });
 }
 
 function resultPanel(details: ReadTodoDetails, expanded: boolean): JSXNode[] {
 	const { more } = details;
 	const phases = more.phases.filter((phase) => phase.items.length > 0);
-	if (phases.length === 0) return [<text key="empty" text={tr("Todo list is empty.", "待办列表为空。")} wrap="word" />];
+	if (phases.length === 0) return [node("text", { text: tr("Todo list is empty.", "待办列表为空。"), wrap: "word" }, "empty")];
 	const view = resultView(details, expanded);
 	if (view.kind === "delta") {
 		const children: JSXNode[] = [];
-		if (view.goalChanged) children.push(<GoalKv goal={more.goal} />);
+		if (view.goalChanged) children.push(goalKv(more.goal));
 		if (view.phases.length > 0) {
 			const deltaPhases = view.phases.map((phase, p) => ({
 				id: `p${p}`,
@@ -224,19 +253,20 @@ function resultPanel(details: ReadTodoDetails, expanded: boolean): JSXNode[] {
 					note: view.explained.has(item.id) ? explanationNote(item) : undefined,
 				})),
 			}));
-			children.push(<checklist key="list" role="todo-ng.list" mode="full" phases={deltaPhases} />);
+			children.push(node("checklist", { role: "todo-ng.list", mode: "full", phases: deltaPhases }, "list"));
 		}
 		return children;
 	}
-	const goal = expanded ? (
-		<GoalKv goal={more.goal} />
-	) : (
-		<text
-			key="goal"
-			text={`${tr("Objective", "目标")}: ${more.goal?.objective ?? tr("[goal missing]", "[缺少目标]")}`}
-			wrap="word"
-		/>
-	);
+	const goal = expanded
+		? goalKv(more.goal)
+		: node(
+				"text",
+				{
+					text: `${tr("Objective", "目标")}: ${more.goal?.objective ?? tr("[goal missing]", "[缺少目标]")}`,
+					wrap: "word",
+				},
+				"goal",
+			);
 	const fullPhases = phases.map((phase, p) => ({
 		id: `p${p}`,
 		title: phase.name,
@@ -248,5 +278,5 @@ function resultPanel(details: ReadTodoDetails, expanded: boolean): JSXNode[] {
 			note: expanded ? fullNote(item) : undefined,
 		})),
 	}));
-	return [goal, <checklist key="list" role="todo-ng.list" mode="full" phases={fullPhases} />];
+	return [goal, node("checklist", { role: "todo-ng.list", mode: "full", phases: fullPhases }, "list")];
 }

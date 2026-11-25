@@ -5,17 +5,17 @@ import { canonicalToolOrder } from "./omomp-shared/active-tools.ts";
 import { tr } from "./omomp-shared/i18n.ts";
 import { acceptanceGuard } from "./src/acceptance.ts";
 import { errorText } from "./src/errors.ts";
-import { renderTodoCall, renderTodoResult } from "./src/native.tsx";
+import { renderTodoCall, renderTodoResult } from "./src/native.ts";
 import { registerOvertime } from "./src/overtime.ts";
 import { registerPlanning } from "./src/planning.ts";
 import { readProjectConfig } from "./src/project-config.ts";
-import { registerReminders } from "./src/reminders.tsx";
+import { registerReminders } from "./src/reminders.ts";
 import { registerReviewApi } from "./src/review-api.ts";
 import { parentCwdOf, sessionOf } from "./src/session.ts";
 import { readSettings } from "./src/settings.ts";
 import { initializeTernPlugin } from "./src/tern-plugin-install.ts";
 import { DESCRIPTION, parametersSchema, runTodo, type TodoNgDetails } from "./src/tool.ts";
-import { registerUi } from "./src/ui.tsx";
+import { registerUi } from "./src/ui.ts";
 
 const TOOL_NAME = "todo";
 

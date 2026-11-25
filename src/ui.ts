@@ -1,11 +1,11 @@
-/** @jsxImportSource @oh-my-pi/pi-tui */
 import type { AgentSession, ExtensionAPI, ExtensionContext, HtmlFormData, HtmlFormValue } from "@oh-my-pi/pi-coding-agent";
-import { type Accessor, computed, type JSXNode, signal, type Signal } from "@oh-my-pi/pi-tui";
+import { type Accessor, computed, type JSXNode, type Signal, signal } from "@oh-my-pi/pi-tui";
 import { tr } from "../omomp-shared/i18n.ts";
 import { type HostListSession, liveState } from "./commit.ts";
 import { saveTodoEdit, type TodoEditResult } from "./edit.ts";
 import { errorText } from "./errors.ts";
-import { describeSnapshot, describeTodoHud, explainAction, type HudHandlers } from "./native.tsx";
+import { describeSnapshot, describeTodoHud, explainAction, type HudHandlers } from "./native.ts";
+import { node } from "./node.ts";
 import { sessionOf } from "./session.ts";
 import { type TodoGoal, type TodoNgSnapshot, toSnapshot } from "./state.ts";
 
@@ -34,12 +34,7 @@ function goalFieldLabel(field: GoalField): string {
 }
 
 function escapeHtml(text: string): string {
-	return text
-		.replaceAll("&", "&amp;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;")
-		.replaceAll('"', "&quot;")
-		.replaceAll("'", "&#39;");
+	return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
 function formText(data: HtmlFormData, name: string): string | undefined {
@@ -73,7 +68,10 @@ export function explanationFromForm(data: HtmlFormData): string | undefined {
 	return formText(data, EXPLANATION_FIELD);
 }
 
-export type EditOutcome = { readonly kind: "saved" } | { readonly kind: "rejected"; readonly message: string } | { readonly kind: "cancelled" };
+export type EditOutcome =
+	| { readonly kind: "saved" }
+	| { readonly kind: "rejected"; readonly message: string }
+	| { readonly kind: "cancelled" };
 
 function outcomeOf(result: TodoEditResult): EditOutcome {
 	switch (result.kind) {
@@ -156,68 +154,72 @@ export function panelView(session: HostListSession, start: number, done: (choice
 	};
 	const accent = (chosen: () => boolean) => () => (chosen() ? "accent" : undefined);
 
-	return (
-		<card
-			role="todo-ng.panel"
-			head={tr("Todo NG", "Todo NG")}
-			onKey={(key) => {
-				const command = panelKeyCommand(key.id);
-				switch (command) {
-					case undefined:
-						return false;
-					case "next":
-						move(1);
-						return true;
-					case "previous":
-						move(-1);
-						return true;
-					case "activate":
-						done(selectionChoice(snapshot(), selected.peek()));
-						return true;
-					case "cancel":
-						done({ kind: "close" });
-						return true;
-					default: {
-						const unreachable: never = command;
-						throw new Error(`Unexpected panel command: ${String(unreachable)}`);
-					}
-				}
-			}}
-			onAction={(act) => {
-				if (act === PANEL_GOAL_ACT) {
-					done({ kind: "goal" });
-					return;
-				}
-				if (act === PANEL_CLOSE_ACT) {
+	return node("card", {
+		role: "todo-ng.panel",
+		head: tr("Todo NG", "Todo NG"),
+		onKey: (key) => {
+			const command = panelKeyCommand(key.id);
+			switch (command) {
+				case undefined:
+					return false;
+				case "next":
+					move(1);
+					return true;
+				case "previous":
+					move(-1);
+					return true;
+				case "activate":
+					done(selectionChoice(snapshot(), selected.peek()));
+					return true;
+				case "cancel":
 					done({ kind: "close" });
-					return;
+					return true;
+				default: {
+					const unreachable: never = command;
+					throw new Error(`Unexpected panel command: ${String(unreachable)}`);
 				}
-				if (!act.startsWith(EXPLAIN_PREFIX)) return;
-				const id = act.slice(EXPLAIN_PREFIX.length);
-				if (itemIds(snapshot()).includes(id)) done({ kind: "explain", id });
-			}}
-		>
-			<row role="omp.btn" actions={{ click: PANEL_GOAL_ACT }} tone={accent(() => current() === 0)}>
-				<text text={tr("Edit goal", "编辑目标")} />
-			</row>
-			{() => describeSnapshot(snapshot(), true, itemIds(snapshot())[current() - 1])}
-			<text text={tr("Tab / arrows select · Enter edit · Escape close", "Tab / 方向键选择 · Enter 编辑 · Escape 关闭")} wrap="word" />
-			<row role="omp.btn" actions={{ click: PANEL_CLOSE_ACT }} tone={accent(() => current() === panelSize(snapshot()) - 1)}>
-				<text text={tr("Close", "关闭")} />
-			</row>
-		</card>
-	);
+			}
+		},
+		onAction: (act) => {
+			if (act === PANEL_GOAL_ACT) {
+				done({ kind: "goal" });
+				return;
+			}
+			if (act === PANEL_CLOSE_ACT) {
+				done({ kind: "close" });
+				return;
+			}
+			if (!act.startsWith(EXPLAIN_PREFIX)) return;
+			const id = act.slice(EXPLAIN_PREFIX.length);
+			if (itemIds(snapshot()).includes(id)) done({ kind: "explain", id });
+		},
+		children: [
+			node("row", {
+				role: "omp.btn",
+				actions: { click: PANEL_GOAL_ACT },
+				tone: accent(() => current() === 0),
+				children: node("text", { text: tr("Edit goal", "编辑目标") }),
+			}),
+			() => describeSnapshot(snapshot(), true, itemIds(snapshot())[current() - 1]),
+			node("text", {
+				text: tr("Tab / arrows select · Enter edit · Escape close", "Tab / 方向键选择 · Enter 编辑 · Escape 关闭"),
+				wrap: "word",
+			}),
+			node("row", {
+				role: "omp.btn",
+				actions: { click: PANEL_CLOSE_ACT },
+				tone: accent(() => current() === panelSize(snapshot()) - 1),
+				children: node("text", { text: tr("Close", "关闭") }),
+			}),
+		],
+	});
 }
 
 const NO_HUD_HANDLERS: HudHandlers = { onToggle: () => {}, onOpen: () => {} };
 
-export function hudNode(
-	snapshot: TodoNgSnapshot | undefined,
-	expanded: boolean,
-	handlers: HudHandlers = NO_HUD_HANDLERS,
-): JSXNode {
+export function hudNode(snapshot: TodoNgSnapshot | undefined, expanded: boolean, handlers: HudHandlers = NO_HUD_HANDLERS): JSXNode {
 	const hud = snapshot === undefined ? null : describeTodoHud(snapshot, expanded, handlers);
-	return hud ?? <row role="omp.hud.activity" aria={tr("Todo NG progress", "Todo NG 进度")} hidden={true} />;
+	return hud ?? node("row", { role: "omp.hud.activity", aria: tr("Todo NG progress", "Todo NG 进度"), hidden: true });
 }
 
 export type HudController = {
@@ -238,7 +240,7 @@ export function hudController(snapshotOf: () => TodoNgSnapshot | undefined, open
 			open();
 		},
 	};
-	const node = computed<JSXNode>(() => {
+	const view = computed<JSXNode>(() => {
 		revision();
 		const wantExpanded = expanded();
 		const snapshot = snapshotOf();
@@ -247,7 +249,7 @@ export function hudController(snapshotOf: () => TodoNgSnapshot | undefined, open
 		cached = { snapshot, expanded: wantExpanded, node: next };
 		return next;
 	});
-	return { node, expanded, handlers, refresh: () => revision.update((value) => value + 1) };
+	return { node: view, expanded, handlers, refresh: () => revision.update((value) => value + 1) };
 }
 
 export function registerUi(pi: ExtensionAPI): void {
@@ -321,12 +323,7 @@ export function registerUi(pi: ExtensionAPI): void {
 		report(ctx, applyGoalForm(session, data));
 	};
 
-	const editExplanation = async (
-		ctx: ExtensionContext,
-		session: AgentSession,
-		abort: AbortSignal,
-		id: string,
-	): Promise<void> => {
+	const editExplanation = async (ctx: ExtensionContext, session: AgentSession, abort: AbortSignal, id: string): Promise<void> => {
 		const snapshot = toSnapshot(liveState(session));
 		const item = snapshot.phases.flatMap((phase) => phase.items).find((candidate) => candidate.id === id);
 		if (item === undefined) return;
@@ -339,10 +336,10 @@ export function registerUi(pi: ExtensionAPI): void {
 	const runPanel = async (ctx: ExtensionContext, session: AgentSession, controller: AbortController): Promise<void> => {
 		let start = 0;
 		for (;;) {
-			const choice = await ctx.ui.custom<PanelChoice>(
-				(_ui, _theme, _keys, done) => panelView(session, start, done),
-				{ overlay: true, signal: controller.signal },
-			);
+			const choice = await ctx.ui.custom<PanelChoice>((_ui, _theme, _keys, done) => panelView(session, start, done), {
+				overlay: true,
+				signal: controller.signal,
+			});
 			switch (choice.kind) {
 				case "close":
 					return;
@@ -401,7 +398,10 @@ export function registerUi(pi: ExtensionAPI): void {
 			ctx.ui.setWidget(HUD_WIDGET_KEY, undefined);
 			return;
 		}
-		const controller = hudController(() => snapshotOf(session), () => void open(ctx));
+		const controller = hudController(
+			() => snapshotOf(session),
+			() => void open(ctx),
+		);
 		hud = controller;
 		ctx.ui.setWidget(HUD_WIDGET_KEY, () => controller.node, { placement: "aboveEditor" });
 	};
