@@ -15,7 +15,7 @@ import { parentCwdOf, sessionOf } from "./src/session.ts";
 import { readSettings } from "./src/settings.ts";
 import { initializeTernPlugin } from "./src/tern-plugin-install.ts";
 import { DESCRIPTION, parametersSchema, runTodo, type TodoNgDetails } from "./src/tool.ts";
-import { registerUi } from "./src/ui.ts";
+import { registerUi } from "./src/ui.tsx";
 
 const TOOL_NAME = "todo";
 

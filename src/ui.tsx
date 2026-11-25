@@ -361,6 +361,7 @@ export function registerUi(pi: ExtensionAPI): void {
 					throw new Error(`Unexpected panel choice: ${String(unreachable)}`);
 				}
 			}
+			hud?.refresh();
 			if (controller.signal.aborted) return;
 			if (sessionOf(ctx.agent.id) !== session) return;
 		}
