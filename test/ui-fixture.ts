@@ -1,7 +1,7 @@
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-coding-agent/tools/details/todo";
 import type { Theme, TUI } from "@oh-my-pi/pi-tui";
-import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { foldBranch } from "../src/branch.ts";
 import { FRESH, hostPhases, TODO_NG_NOTES_TYPE } from "../src/state.ts";
 import { todoResultMessage } from "./host.ts";

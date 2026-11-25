@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ensureThemeSync, type NativeChild, type NativeNode, theme } from "@oh-my-pi/pi-tui";
 import { describeSnapshot, describeTodoHud, describeTodoResult } from "../src/native.ts";
-import { renderReminder } from "../src/reminders.ts";
+import { renderReminder } from "../src/reminders.tsx";
 import type { TodoNgSnapshot, TodoStatus } from "../src/state.ts";
 import type { TodoNgDetails } from "../src/tool.ts";
 

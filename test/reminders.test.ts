@@ -7,7 +7,7 @@ import { AgentSession, type ExtensionAPI, type ExtensionContext, type ExtensionE
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { enterCompactionBarrier, releaseCompactionBarrier } from "../omomp-shared/compact-handoff.ts";
-import { contextMessages, continuation, registerReminders } from "../src/reminders.ts";
+import { contextMessages, continuation, registerReminders } from "../src/reminders.tsx";
 import { runTodo } from "../src/tool.ts";
 import { hostSession, runPersisted } from "./host.ts";
 

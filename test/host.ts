@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-coding-agent/tools/details/todo";
 import type { TodoSession } from "../src/commit.ts";
 import type { ModelRef } from "../src/models.ts";
 import { hostPhases, TODO_NG_NOTES_TYPE, type TodoNgState, toNotes } from "../src/state.ts";

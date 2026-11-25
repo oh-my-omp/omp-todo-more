@@ -12,7 +12,9 @@
 		"allowImportingTsExtensions": true,
 		"verbatimModuleSyntax": true,
 		"skipLibCheck": true,
-		"noEmit": true
+		"noEmit": true,
+		"jsx": "react-jsx",
+		"jsxImportSource": "@oh-my-pi/pi-tui"
 	},
-	"include": ["index.ts", "src/**/*.ts", "test/**/*.ts", "omomp-shared/**/*.ts"]
+	"include": ["index.ts", "src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "omomp-shared/**/*.ts"]
 }

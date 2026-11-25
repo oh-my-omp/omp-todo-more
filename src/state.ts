@@ -1,7 +1,7 @@
 import { z } from "@oh-my-pi/omptype/zod";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-coding-agent/tools/details/todo";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
-import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 
 export const TODO_NG_ENTRY_TYPE = "mouriya.omp.todo-more";
 

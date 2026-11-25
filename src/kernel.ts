@@ -1,4 +1,4 @@
-import type { TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoCompletionTransition } from "@oh-my-pi/pi-coding-agent/tools/details/todo";
 import { commitClauseOf, type TodoCommitClause, type TodoParams } from "./protocol.ts";
 import {
 	type AskWait,

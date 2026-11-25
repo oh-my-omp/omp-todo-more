@@ -1,17 +1,15 @@
-import type { AgentTool, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { AgentSession, ExtensionAPI, ExtensionContext, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
-import type { Theme } from "@oh-my-pi/pi-tui/theme";
+import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { AgentSession, ExtensionAPI, ExtensionContext, ToolDefinition, ToolRenderResultOptions } from "@oh-my-pi/pi-coding-agent";
 import { logger } from "@oh-my-pi/pi-utils";
 import { canonicalToolOrder } from "./omomp-shared/active-tools.ts";
 import { tr } from "./omomp-shared/i18n.ts";
 import { acceptanceGuard } from "./src/acceptance.ts";
 import { errorText } from "./src/errors.ts";
-import { describeTodoCall, describeTodoResult } from "./src/native.ts";
+import { renderTodoCall, renderTodoResult } from "./src/native.tsx";
 import { registerOvertime } from "./src/overtime.ts";
 import { registerPlanning } from "./src/planning.ts";
 import { readProjectConfig } from "./src/project-config.ts";
-import { registerReminders } from "./src/reminders.ts";
-import { renderTodoCall, renderTodoResult } from "./src/render.ts";
+import { registerReminders } from "./src/reminders.tsx";
 import { registerReviewApi } from "./src/review-api.ts";
 import { parentCwdOf, sessionOf } from "./src/session.ts";
 import { readSettings } from "./src/settings.ts";
@@ -30,10 +28,8 @@ const TOOL_FIELDS = {
 	loadMode: "essential" as const,
 	concurrency: "exclusive" as const,
 	mergeCallAndResult: true,
-	describeCall: describeTodoCall,
-	describeResult: describeTodoResult,
-	renderCall: renderTodoCall,
-	renderResult: renderTodoResult,
+	renderCall: (args: unknown) => renderTodoCall(args),
+	renderResult: (result: AgentToolResult<unknown>, options: ToolRenderResultOptions) => renderTodoResult(result, options),
 };
 
 const ownSession = (ctx: ExtensionContext): AgentSession | undefined => sessionOf(ctx.agent.id);
@@ -65,14 +61,8 @@ async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promis
 			return tr("Todo", "待办");
 		},
 		execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => executeTodo(session, params, ctx, signal),
-		renderCall: (args, options, theme) => (isTheme(theme) ? renderTodoCall(args, options, theme) : undefined),
-		renderResult: (result, options, theme) => (isTheme(theme) ? renderTodoResult(result, options, theme) : undefined),
 	};
 	await session.refreshRpcHostTools([hostTool]);
-}
-
-function isTheme(value: unknown): value is Theme {
-	return typeof value === "object" && value !== null && "fg" in value && "bold" in value && "styledSymbol" in value;
 }
 
 const guardedSessions = new WeakSet<AgentSession>();
