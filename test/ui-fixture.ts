@@ -1,7 +1,6 @@
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-coding-agent/tools/details/todo";
-import type { Theme, TUI } from "@oh-my-pi/pi-tui";
 import { foldBranch } from "../src/branch.ts";
 import { FRESH, hostPhases, TODO_NG_NOTES_TYPE } from "../src/state.ts";
 import { todoResultMessage } from "./host.ts";
@@ -12,8 +11,6 @@ export type UiFixture = {
 	readonly session: AgentSession;
 	readonly counters: { copies: number; views: number; reads: number };
 	resetCounters(): void;
-	theme(): Theme;
-	tui(): TUI;
 };
 
 const isIndex = (prop: string | symbol): prop is string =>
@@ -55,37 +52,35 @@ export function fixture(dir: string): UiFixture {
 		},
 	});
 
-	const hostPhasesOf = (() => {
-		let length = -1;
-		let leaf: string | null = null;
-		let phases: HostTodoPhase[] = [];
-		return () => {
-			const view = proxied.getBranchView();
-			const currentLeaf = proxied.getLeafId();
-			if (view.length === length && currentLeaf === leaf) return phases;
-			phases = hostPhases(foldBranch(view).state);
-			length = view.length;
-			leaf = currentLeaf;
-			return phases;
-		};
-	})();
+	let cachedPhases: HostTodoPhase[] = [];
+	let cachedAt: { readonly length: number; readonly leaf: string | null } | undefined;
+
+	const hostPhasesNow = (): HostTodoPhase[] => {
+		const view = proxied.getBranchView();
+		const leaf = proxied.getLeafId();
+		if (cachedAt !== undefined && cachedAt.length === view.length && cachedAt.leaf === leaf) return cachedPhases;
+		cachedPhases = hostPhases(foldBranch(view).state);
+		cachedAt = { length: view.length, leaf };
+		return cachedPhases;
+	};
 
 	return {
 		manager: proxied as unknown as SessionManager,
 		raw: manager,
-		session: { sessionManager: proxied, getTodoPhases: hostPhasesOf } as unknown as AgentSession,
+		session: {
+			sessionManager: proxied,
+			getTodoPhases: hostPhasesNow,
+			setTodoPhases: (phases: HostTodoPhase[]) => {
+				cachedPhases = structuredClone(phases);
+				cachedAt = { length: proxied.getBranchView().length, leaf: proxied.getLeafId() };
+			},
+		} as unknown as AgentSession,
 		counters,
 		resetCounters: () => {
 			counters.copies = 0;
 			counters.views = 0;
 			counters.reads = 0;
 		},
-		theme: () =>
-			({
-				bold: (value: string) => value,
-				fg: (_color: string, value: string) => value,
-			}) as unknown as Theme,
-		tui: () => ({ requestRender() {}, requestComponentRender() {} }) as unknown as TUI,
 	};
 }
 
