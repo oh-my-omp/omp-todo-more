@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { AgentSession, type ExtensionAPI, type ExtensionContext, type ExtensionEvent, type SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoPhase as HostTodoPhase } from "@oh-my-pi/pi-coding-agent/tools/details/todo";
 import { enterCompactionBarrier, releaseCompactionBarrier } from "../omomp-shared/compact-handoff.ts";
 import { foldBranch } from "../src/branch.ts";
 import { commitTodoState } from "../src/commit.ts";

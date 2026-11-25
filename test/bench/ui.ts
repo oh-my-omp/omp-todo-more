@@ -1,6 +1,9 @@
 import * as jsc from "bun:jsc";
 import { mkdirSync } from "node:fs";
-import { TodoHud as FixedHud, TodoPanel as FixedPanel } from "../../src/ui.ts";
+import { isUiNode, type JSXNode } from "@oh-my-pi/pi-tui";
+import { liveState } from "../../src/commit.ts";
+import { toSnapshot } from "../../src/state.ts";
+import { type HudController, hudController } from "../../src/ui.ts";
 import { appendTodoChange, fillBranch, fixture, messageEntry, type UiFixture } from "../ui-fixture.ts";
 
 const args = new Map<string, string>();
@@ -9,17 +12,7 @@ const scenario = args.get("--scenario") ?? "";
 const frames = Number(args.get("--frames") ?? "50");
 const appends = Number(args.get("--appends") ?? "500");
 const BRANCH_SIZE = 10_000;
-const baseDir = args.get("--base") ?? "";
 
-async function baseAvailable(): Promise<boolean> {
-	if (baseDir === "") return false;
-	try {
-		const mod = (await import(`${baseDir}/src/ui.ts`)) as { TodoHud?: unknown };
-		return typeof mod.TodoHud === "function";
-	} catch {
-		return false;
-	}
-}
 let failed = false;
 const fail = (message: string): void => {
 	failed = true;
@@ -36,88 +29,57 @@ function makeFixture(name: string): UiFixture {
 	return fx;
 }
 
-const counts = (fx: UiFixture): string => `copies=${fx.counters.copies} views=${fx.counters.views} reads=${fx.counters.reads}`;
-const jsonEqual = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
-
-function makeHud(fx: UiFixture): FixedHud {
-	const stubPi = { logger: { warn: () => {} } } as never;
-	return new FixedHud(
-		stubPi,
-		() => fx.session,
-		async () => {},
-		fx.tui(),
+function makeHud(fx: UiFixture): HudController {
+	return hudController(
+		() => toSnapshot(liveState(fx.session)),
 		() => {},
 	);
 }
 
-function makePanel(fx: UiFixture): FixedPanel {
-	const controller = new AbortController();
-	return new FixedPanel(
-		fx.session,
-		fx.theme(),
-		() => {},
-		() => {},
-		controller.signal,
-		() => true,
-	);
+function shows(value: JSXNode, needle: string): boolean {
+	if (isUiNode(value)) return JSON.stringify(value.props()).includes(needle) || value.children().some((child) => shows(child, needle));
+	if (Array.isArray(value)) return value.some((child) => shows(child, needle));
+	return false;
 }
 
-async function scenarioHud(): Promise<void> {
-	const hasBase = await baseAvailable();
+function scenarioHud(): void {
 	const fx = makeFixture("hud");
 	const hud = makeHud(fx);
-	const first = hud.describe();
-	if (hasBase) console.log(`base checkout available at ${baseDir}: cold-frame equivalence checked in row 4 suite`);
-	let totalCopies = 0;
-	let totalReads = 0;
+	const first = hud.node();
+	let copies = 0;
+	let views = 0;
 	for (let i = 1; i < frames; i++) {
 		fx.resetCounters();
-		const node = hud.describe();
-		totalCopies += fx.counters.copies;
-		totalReads += Math.max(0, fx.counters.reads - 1);
-		if (!jsonEqual(node, first)) fail(`frame ${i + 1}: node differs from cold frame`);
+		hud.refresh();
+		const node = hud.node();
+		copies += fx.counters.copies;
+		views += fx.counters.views;
+		if (node !== first) fail(`frame ${i + 1}: an unchanged branch built a new node`);
 	}
-	if (totalCopies !== 0) fail(`frames 2..${frames}: ${totalCopies} branch copies (want 0)`);
-	if (totalReads !== 0) fail(`frames 2..${frames}: ${totalReads} derivation reads (want 0)`);
-	if (!failed) ok(`${frames} frames: output identical, ${totalCopies} copies, end-probe only`);
+	if (copies !== 0) fail(`frames 2..${frames}: ${copies} branch copies (want 0)`);
+	if (!failed) ok(`${frames} repaints of an unchanged branch: one node identity, ${copies} copies, ${views} view reads`);
 }
 
-function scenarioPanelHit(): void {
-	const fx = makeFixture("panel-hit");
-	const panel = makePanel(fx);
-	const cold = panel.describe();
-	fx.resetCounters();
-	const hot = panel.describe();
-	if (fx.counters.copies !== 0) fail(`leaf-hit describe copied ${fx.counters.copies}× (want 0)`);
-	if (!jsonEqual(hot, cold)) fail(`leaf-hit node differs from cold node`);
-	if (!failed) ok(`panel leaf-hit: node identical, ${counts(fx)}`);
-}
-
-async function scenarioGrow(): Promise<void> {
-	await baseAvailable();
+function scenarioGrow(): void {
 	const fx = makeFixture("grow");
 	const hud = makeHud(fx);
-	const panel = makePanel(fx);
-	hud.describe();
-	panel.describe();
+	const before = hud.node();
 	for (let i = 0; i < appends; i++) messageEntry(fx.raw, BRANCH_SIZE + i);
+	fx.resetCounters();
+	hud.refresh();
+	const kept = hud.node();
+	const messageCounts = { ...fx.counters };
+	if (kept !== before) fail("plain message growth replaced the HUD node");
 	appendTodoChange(fx.raw, "Grown task");
 	fx.resetCounters();
-	const hudNext = hud.describe();
-	const hudReads = { ...fx.counters };
-	if (hudReads.copies !== 0) fail(`grown HUD frame copied ${hudReads.copies}× (want 0 — §6 view)`);
-	if (hudReads.reads <= 1) fail(`grown HUD frame re-derived nothing — growth must re-derive`);
-	if (!JSON.stringify(hudNext).includes("Grown task")) fail(`grown HUD frame misses the appended task — growth must re-derive`);
-	appendTodoChange(fx.raw, "Panel grown task");
-	fx.resetCounters();
-	const panelNext = panel.describe();
-	const panelReads = { ...fx.counters };
-	if (panelReads.copies !== 0) fail(`grown panel describe copied ${panelReads.copies}× (want 0 — §6 view)`);
-	if (panelReads.reads <= 1) fail(`grown panel describe re-derived nothing — growth must re-derive`);
-	if (!JSON.stringify(panelNext).includes("Panel grown task"))
-		fail(`grown panel describe misses the appended task — growth must re-derive`);
+	hud.refresh();
+	const grown = hud.node();
+	const todoCounts = { ...fx.counters };
+	if (grown === before) fail("a todo change did not re-derive the HUD");
+	if (!shows(grown, "Grown task")) fail("a todo change is missing from the re-derived HUD");
+	if (todoCounts.copies !== 0) fail(`grown HUD frame copied the branch ${todoCounts.copies}× (want 0)`);
 	if (!failed)
-		ok(`+${appends} entries + todo change: HUD ${JSON.stringify(hudReads)}, panel ${JSON.stringify(panelReads)}, growth re-derived`);
+		ok(`+${appends} entries: node kept (${JSON.stringify(messageCounts)}); todo change re-derived (${JSON.stringify(todoCounts)})`);
 }
 
 function median(values: number[]): number {
@@ -125,59 +87,57 @@ function median(values: number[]): number {
 	return sorted[Math.floor(sorted.length / 2)] ?? 0;
 }
 
-async function scenarioIdleLoop(): Promise<void> {
-	const hasBase = await baseAvailable();
-	if (hasBase) console.log(`base checkout available at ${baseDir}: same-load cost delta reported below`);
+function scenarioIdleLoop(): void {
 	const fx = makeFixture("idle-loop");
-	const hud = makeHud(fx);
-	hud.describe();
+	const warm = makeHud(fx);
+	warm.node();
 	const rounds = 30;
 	const callsPerRound = 100;
-	const refTime: number[] = [];
-	const newTime: number[] = [];
+	const coldTime: number[] = [];
+	const warmTime: number[] = [];
 	for (let r = 0; r < rounds; r++) {
 		const t0 = performance.now();
-		for (let i = 0; i < callsPerRound; i++) makeHud(fx).describe();
-		refTime.push((performance.now() - t0) / callsPerRound);
+		for (let i = 0; i < callsPerRound; i++) makeHud(fx).node();
+		coldTime.push((performance.now() - t0) / callsPerRound);
 		const t1 = performance.now();
-		for (let i = 0; i < callsPerRound; i++) hud.describe();
-		newTime.push((performance.now() - t1) / callsPerRound);
+		for (let i = 0; i < callsPerRound; i++) {
+			warm.refresh();
+			warm.node();
+		}
+		warmTime.push((performance.now() - t1) / callsPerRound);
 	}
-	const refHeap: number[] = [];
-	const refArrays: number[] = [];
-	const newHeap: number[] = [];
-	const newArrays: number[] = [];
+	const coldHeap: number[] = [];
+	const coldArrays: number[] = [];
+	const warmHeap: number[] = [];
+	const warmArrays: number[] = [];
 	for (let r = 0; r < 100; r++) {
 		jsc.gcAndSweep();
-		fx.resetCounters();
 		const a0 = jsc.heapStats().objectTypeCounts.Array ?? 0;
 		const h0 = process.memoryUsage().heapUsed;
-		makeHud(fx).describe();
-		refHeap.push(process.memoryUsage().heapUsed - h0);
-		refArrays.push((jsc.heapStats().objectTypeCounts.Array ?? 0) - a0);
+		makeHud(fx).node();
+		coldHeap.push(process.memoryUsage().heapUsed - h0);
+		coldArrays.push((jsc.heapStats().objectTypeCounts.Array ?? 0) - a0);
 		jsc.gcAndSweep();
-		fx.resetCounters();
 		const a1 = jsc.heapStats().objectTypeCounts.Array ?? 0;
 		const h1 = process.memoryUsage().heapUsed;
-		hud.describe();
-		newHeap.push(process.memoryUsage().heapUsed - h1);
-		newArrays.push((jsc.heapStats().objectTypeCounts.Array ?? 0) - a1);
+		warm.refresh();
+		warm.node();
+		warmHeap.push(process.memoryUsage().heapUsed - h1);
+		warmArrays.push((jsc.heapStats().objectTypeCounts.Array ?? 0) - a1);
 	}
-	const mt = median(refTime);
-	const nt = median(newTime);
-	const mh = median(refHeap);
-	const nh = median(newHeap);
-	const ma = median(refArrays);
-	const na = median(newArrays);
+	const mt = median(coldTime);
+	const nt = median(warmTime);
+	const mh = median(coldHeap);
+	const nh = median(warmHeap);
+	const ma = median(coldArrays);
+	const na = median(warmArrays);
 	console.log(`cold: ${(mt * 1000).toFixed(1)} µs/call, ${(mh / 1024).toFixed(1)} KiB heapUsed, +${ma} Array objects (median)`);
 	console.log(`warm: ${(nt * 1000).toFixed(1)} µs/call, ${(nh / 1024).toFixed(1)} KiB heapUsed, +${na} Array objects (median)`);
-	const ratio = mt / nt;
-	console.log(`ratios:    ${ratio.toFixed(1)}× faster; Array objects/call ${na} vs ${ma}; heapUsed ${nh} vs ${mh} bytes`);
+	console.log(`ratios:    ${(mt / nt).toFixed(1)}× faster; Array objects/call ${na} vs ${ma}; heapUsed ${nh} vs ${mh} bytes`);
 }
 
-const scenarios: Record<string, () => void | Promise<void>> = {
+const scenarios: Record<string, () => void> = {
 	hud: scenarioHud,
-	"panel-hit": scenarioPanelHit,
 	grow: scenarioGrow,
 	"idle-loop": scenarioIdleLoop,
 };
@@ -187,5 +147,5 @@ if (run === undefined) {
 	console.error(`usage: bun test/bench/ui.ts --scenario ${Object.keys(scenarios).join("|")} [--frames N] [--appends N]`);
 	process.exit(2);
 }
-await run();
+run();
 if (failed) process.exit(1);

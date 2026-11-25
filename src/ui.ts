@@ -1,32 +1,22 @@
-import type { AgentSession, ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import {
-	type Component,
-	Container,
-	col,
-	Editor,
-	FormField,
-	getEditorTheme,
-	matchesKey,
-	type NativeChild,
-	type NativeNode,
-	type NativeUiEvent,
-	node,
-	span,
-	Text,
-	type Theme,
-	type TUI,
-} from "@oh-my-pi/pi-tui";
-import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
+import type { AgentSession, ExtensionAPI, ExtensionContext, HtmlFormData, HtmlFormValue } from "@oh-my-pi/pi-coding-agent";
+import { type Accessor, computed, type JSXNode, type Signal, signal } from "@oh-my-pi/pi-tui";
 import { tr } from "../omomp-shared/i18n.ts";
-import { liveState } from "./commit.ts";
-import { saveTodoEdit, type TodoEdit } from "./edit.ts";
+import { type HostListSession, liveState } from "./commit.ts";
+import { saveTodoEdit, type TodoEditResult } from "./edit.ts";
 import { errorText } from "./errors.ts";
-import { describeSnapshot, describeTodoHud, uiTimeEstimate } from "./native.ts";
+import { describeSnapshot, describeTodoHud, explainAction, type HudHandlers } from "./native.ts";
+import { node } from "./node.ts";
 import { sessionOf } from "./session.ts";
-import { type TodoGoal, type TodoNgState, type TodoStatus, toSnapshot } from "./state.ts";
+import { type TodoGoal, type TodoNgSnapshot, toSnapshot } from "./state.ts";
 
-const FIELDS = ["objective", "measure", "doneWhen"] as const;
-type GoalField = (typeof FIELDS)[number];
+const HUD_WIDGET_KEY = "todo-ng.hud";
+const GOAL_FIELDS = ["objective", "measure", "doneWhen"] as const;
+const EXPLANATION_FIELD = "explanation";
+const PANEL_GOAL_ACT = "todo-ng.goal";
+const PANEL_CLOSE_ACT = "close";
+const EXPLAIN_PREFIX = explainAction("");
+
+type GoalField = (typeof GOAL_FIELDS)[number];
 
 function goalFieldLabel(field: GoalField): string {
 	switch (field) {
@@ -43,531 +33,335 @@ function goalFieldLabel(field: GoalField): string {
 	}
 }
 
-function uiGoalLines(goal: TodoGoal): string[] {
-	return [
-		`${tr("Objective", "目标")}: ${goal.objective}`,
-		`${tr("Measure", "衡量方式")}: ${goal.measure}`,
-		`${tr("Done when", "完成条件")}: ${goal.doneWhen}`,
-	];
+function escapeHtml(text: string): string {
+	return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
-function uiStatus(status: TodoStatus): string {
-	switch (status) {
-		case "pending":
-			return tr("pending", "待处理");
-		case "in_progress":
-			return tr("in progress", "进行中");
-		case "completed":
-			return tr("completed", "已完成");
-		case "abandoned":
-			return tr("abandoned", "已放弃");
+function formText(data: HtmlFormData, name: string): string | undefined {
+	const value: HtmlFormValue | undefined = data[name];
+	if (value === undefined) return undefined;
+	return Array.isArray(value) ? value.join("\n") : String(value);
+}
+
+export function goalFormHtml(goal: TodoGoal | undefined): string {
+	const fields = GOAL_FIELDS.map(
+		(field) =>
+			`<label>${escapeHtml(goalFieldLabel(field))}<textarea name="${field}" rows="3">${escapeHtml(goal?.[field] ?? "")}</textarea></label>`,
+	);
+	return `<form><fieldset><legend>${escapeHtml(tr("Edit goal", "编辑目标"))}</legend>${fields.join("")}</fieldset></form>`;
+}
+
+export function explainFormHtml(title: string, explanation: string | undefined): string {
+	const label = escapeHtml(`${tr("Explanation", "说明")}: ${title}`);
+	return `<form><fieldset><legend>${escapeHtml(tr("Edit explanation", "编辑说明"))}</legend><label>${label}<textarea name="${EXPLANATION_FIELD}" rows="4">${escapeHtml(explanation ?? "")}</textarea></label></fieldset></form>`;
+}
+
+export function goalFromForm(data: HtmlFormData): TodoGoal | undefined {
+	const objective = formText(data, "objective");
+	const measure = formText(data, "measure");
+	const doneWhen = formText(data, "doneWhen");
+	if (objective === undefined || measure === undefined || doneWhen === undefined) return undefined;
+	return { objective, measure, doneWhen };
+}
+
+export function explanationFromForm(data: HtmlFormData): string | undefined {
+	return formText(data, EXPLANATION_FIELD);
+}
+
+export type EditOutcome =
+	| { readonly kind: "saved" }
+	| { readonly kind: "rejected"; readonly message: string }
+	| { readonly kind: "cancelled" };
+
+function outcomeOf(result: TodoEditResult): EditOutcome {
+	switch (result.kind) {
+		case "saved":
+			return { kind: "saved" };
+		case "rejected":
+			return { kind: "rejected", message: result.message };
 		default: {
-			const unreachable: never = status;
-			throw new Error(`Unexpected todo status: ${String(unreachable)}`);
+			const unreachable: never = result;
+			throw new Error(`Unexpected todo edit result: ${String(unreachable)}`);
 		}
 	}
 }
 
-type DraftField = { editor: Editor; field: FormField };
-type Mode =
-	| { kind: "panel"; selected: number }
-	| { kind: "goal"; fields: Record<GoalField, DraftField>; active: GoalField }
-	| { kind: "explanation"; id: string; title: string; draft: DraftField };
-export class TodoPanel implements Component {
-	private mode: Mode = { kind: "panel", selected: 0 };
-	private error: string | undefined;
-	private described: NativeNode | undefined;
-	private last: TodoNgState | undefined;
-	private disposed = false;
-	focused = true;
-	readonly nativeOverlay = { role: "todo-ng.panel", size: "lg" as const, anchor: "center" as const };
+export function applyGoalForm(session: HostListSession, data: HtmlFormData): EditOutcome {
+	const goal = goalFromForm(data);
+	if (goal === undefined) return { kind: "cancelled" };
+	return outcomeOf(saveTodoEdit(session, { kind: "set_goal", goal }));
+}
 
-	constructor(
-		private readonly session: AgentSession,
-		private readonly theme: Theme,
-		private readonly requestRender: () => void,
-		private readonly done: () => void,
-		private readonly signal: AbortSignal,
-		private readonly isCurrentSession: () => boolean,
-	) {}
+export function applyExplainForm(session: HostListSession, id: string, data: HtmlFormData): EditOutcome {
+	const explanation = explanationFromForm(data);
+	if (explanation === undefined) return { kind: "cancelled" };
+	return outcomeOf(saveTodoEdit(session, { kind: "explain", id, explanation }));
+}
 
-	private changed(): void {
-		this.described = undefined;
-		this.requestRender();
+export type PanelChoice = { readonly kind: "close" } | { readonly kind: "goal" } | { readonly kind: "explain"; readonly id: string };
+
+export type PanelCommand = "next" | "previous" | "activate" | "cancel";
+
+export function panelKeyCommand(id: string): PanelCommand | undefined {
+	switch (id) {
+		case "tab":
+		case "down":
+			return "next";
+		case "shift+tab":
+		case "up":
+			return "previous";
+		case "enter":
+			return "activate";
+		case "escape":
+			return "cancel";
+		default:
+			return undefined;
 	}
+}
 
-	private readState(): TodoNgState {
-		const state = liveState(this.session);
-		if (this.last === undefined || !Bun.deepEquals(this.last, state)) {
-			this.last = state;
-			this.described = undefined;
-		}
-		return this.last;
-	}
+export function itemIds(snapshot: TodoNgSnapshot): readonly string[] {
+	return snapshot.phases.flatMap((phase) => phase.items.map((item) => item.id));
+}
 
-	private makeField(label: string, text: string): DraftField {
-		const editor = new Editor(getEditorTheme());
-		editor.disableSubmit = true;
-		editor.setText(text);
-		editor.setMaxHeight(6);
-		editor.onChange = () => this.changed();
-		const field = new FormField(editor, {
-			label,
-			theme: {
-				label: (value) => this.theme.bold(value),
-				description: (value) => this.theme.fg("muted", value),
-				error: (value) => this.theme.fg("error", value),
-				hint: (value) => this.theme.fg("muted", value),
-			},
-		});
-		return { editor, field };
-	}
+export function panelSize(snapshot: TodoNgSnapshot): number {
+	return itemIds(snapshot).length + 2;
+}
 
-	private discardDraft(): void {
-		switch (this.mode.kind) {
-			case "panel":
-				break;
-			case "goal":
-				for (const name of FIELDS) this.mode.fields[name].field.dispose();
-				break;
-			case "explanation":
-				this.mode.draft.field.dispose();
-				break;
-			default: {
-				const unreachable: never = this.mode;
-				throw new Error(String(unreachable));
-			}
-		}
-	}
+function normalizeSelection(size: number, selected: number): number {
+	if (size <= 0) return 0;
+	return Math.min(Math.max(selected, 0), size - 1);
+}
 
-	private openGoal(): void {
-		const state = this.readState();
-		if (state.kind === "empty") {
-			this.error = tr("Todo list is empty.", "待办列表为空。");
-			this.changed();
-			return;
-		}
-		const goal = state.goal.kind === "set" ? state.goal.goal : { objective: "", measure: "", doneWhen: "" };
-		this.discardDraft();
-		this.mode = {
-			kind: "goal",
-			active: "objective",
-			fields: {
-				objective: this.makeField(goalFieldLabel("objective"), goal.objective),
-				measure: this.makeField(goalFieldLabel("measure"), goal.measure),
-				doneWhen: this.makeField(goalFieldLabel("doneWhen"), goal.doneWhen),
-			},
-		};
-		this.error = undefined;
-		this.changed();
-	}
+export function stepSelection(size: number, selected: number, step: -1 | 1): number {
+	if (size <= 0) return 0;
+	return (normalizeSelection(size, selected) + step + size) % size;
+}
 
-	private openExplanation(id: string): void {
-		const state = this.readState();
-		if (state.kind === "empty") {
-			this.error = tr("Todo list is empty.", "待办列表为空。");
-			this.changed();
-			return;
-		}
-		const item = state.phases.flatMap((phase) => phase.items).find((candidate) => candidate.id === id);
-		if (!item) {
-			this.error = `${tr("Task", "任务")} ${id} ${tr("not found", "未找到")}`;
-			this.changed();
-			return;
-		}
-		this.discardDraft();
-		this.mode = {
-			kind: "explanation",
-			id,
-			title: item.title,
-			draft: this.makeField(
-				`${tr("Explanation", "说明")}: ${item.title}`,
-				item.explanation.kind === "explained" ? item.explanation.text : "",
-			),
-		};
-		this.error = undefined;
-		this.changed();
-	}
+export function selectionChoice(snapshot: TodoNgSnapshot, selected: number): PanelChoice {
+	const index = normalizeSelection(panelSize(snapshot), selected);
+	if (index === 0) return { kind: "goal" };
+	const id = itemIds(snapshot)[index - 1];
+	return id === undefined ? { kind: "close" } : { kind: "explain", id };
+}
 
-	private close(): void {
-		if (this.mode.kind === "panel") this.done();
-		else {
-			this.discardDraft();
-			this.mode = { kind: "panel", selected: 0 };
-			this.error = undefined;
-			this.changed();
-		}
-	}
+export function panelView(session: HostListSession, start: number, done: (choice: PanelChoice) => void): JSXNode {
+	const selected: Signal<number> = signal(start);
+	const snapshot = (): TodoNgSnapshot => toSnapshot(liveState(session));
+	const current = (): number => normalizeSelection(panelSize(snapshot()), selected());
 
-	private save(): void {
-		if (this.disposed || this.signal.aborted) return;
-		if (!this.isCurrentSession()) {
-			this.done();
-			return;
-		}
-		let edit: TodoEdit;
-		switch (this.mode.kind) {
-			case "panel":
-				return;
-			case "goal":
-				edit = {
-					kind: "set_goal",
-					goal: {
-						objective: this.mode.fields.objective.editor.getExpandedText(),
-						measure: this.mode.fields.measure.editor.getExpandedText(),
-						doneWhen: this.mode.fields.doneWhen.editor.getExpandedText(),
-					},
-				};
-				break;
-			case "explanation":
-				edit = { kind: "explain", id: this.mode.id, explanation: this.mode.draft.editor.getExpandedText() };
-				break;
-			default: {
-				const unreachable: never = this.mode;
-				throw new Error(String(unreachable));
-			}
-		}
-		const result = saveTodoEdit(this.session, edit);
-		switch (result.kind) {
-			case "saved":
-				this.discardDraft();
-				this.mode = { kind: "panel", selected: 0 };
-				this.error = undefined;
-				break;
-			case "rejected":
-				this.error = result.message;
-				break;
-			default: {
-				const unreachable: never = result;
-				throw new Error(String(unreachable));
-			}
-		}
-		this.changed();
-	}
+	const move = (step: -1 | 1): void => {
+		selected.set(stepSelection(panelSize(snapshot()), selected.peek(), step));
+	};
+	const accent = (chosen: () => boolean) => () => (chosen() ? "accent" : undefined);
 
-	describe(): NativeNode {
-		const state = this.readState();
-		if (this.described) return this.described;
-		const body: NativeChild[] = [];
-		let role: string;
-		let head: string;
-		let actions: NativeNode[];
-		switch (this.mode.kind) {
-			case "panel": {
-				role = "todo-ng.panel";
-				head = tr("Todo NG", "Todo NG");
-				const snapshot = toSnapshot(state);
-				const ids = snapshot.phases.flatMap((phase) => phase.items.map((item) => item.id));
-				const selected = Math.min(this.mode.selected, ids.length + 1);
-				body.push(
-					this.button(tr("Edit goal", "编辑目标"), "todo-ng.goal", selected === 0),
-					...describeSnapshot(snapshot, true, ids[selected - 1]),
-				);
-				actions = [this.button(tr("Close", "关闭"), "close", selected === ids.length + 1)];
-				break;
-			}
-			case "goal": {
-				role = "todo-ng.goal-editor";
-				head = tr("Edit goal", "编辑目标");
-				actions = [this.button(tr("Save", "保存"), "todo-ng.save"), this.button(tr("Cancel", "取消"), "close")];
-				for (const name of FIELDS) {
-					const draft = this.mode.fields[name];
-					draft.field.focused = this.focused && name === this.mode.active;
-					body.push(
-						name === this.mode.active
-							? draft.field
-							: node(
-									"col",
-									{ gap: "xs", actions: { click: `todo-ng.field.${name}` } },
-									[
-										node("text", { spans: [span(goalFieldLabel(name), "strong")] }),
-										node("text", { text: draft.editor.getExpandedText() || tr("[empty]", "[空]"), wrap: "word" }),
-									],
-									name,
-								),
-					);
+	return node("card", {
+		role: "todo-ng.panel",
+		head: tr("Todo NG", "Todo NG"),
+		onKey: (key) => {
+			const command = panelKeyCommand(key.id);
+			switch (command) {
+				case undefined:
+					return false;
+				case "next":
+					move(1);
+					return true;
+				case "previous":
+					move(-1);
+					return true;
+				case "activate":
+					done(selectionChoice(snapshot(), selected.peek()));
+					return true;
+				case "cancel":
+					done({ kind: "close" });
+					return true;
+				default: {
+					const unreachable: never = command;
+					throw new Error(`Unexpected panel command: ${String(unreachable)}`);
 				}
-				break;
 			}
-			case "explanation":
-				role = "todo-ng.explanation-editor";
-				head = `${tr("Edit explanation", "编辑说明")}: ${this.mode.title}`;
-				this.mode.draft.field.focused = this.focused;
-				body.push(this.mode.draft.field);
-				actions = [this.button(tr("Save", "保存"), "todo-ng.save"), this.button(tr("Cancel", "取消"), "close")];
-				break;
-			default: {
-				const unreachable: never = this.mode;
-				throw new Error(String(unreachable));
+		},
+		onAction: (act) => {
+			if (act === PANEL_GOAL_ACT) {
+				done({ kind: "goal" });
+				return;
 			}
-		}
-		if (this.error) body.push(node("text", { spans: [span(this.error, "error")], wrap: "word" }, undefined, "error"));
-		body.push(
+			if (act === PANEL_CLOSE_ACT) {
+				done({ kind: "close" });
+				return;
+			}
+			if (!act.startsWith(EXPLAIN_PREFIX)) return;
+			const id = act.slice(EXPLAIN_PREFIX.length);
+			if (itemIds(snapshot()).includes(id)) done({ kind: "explain", id });
+		},
+		children: [
+			node("row", {
+				role: "omp.btn",
+				actions: { click: PANEL_GOAL_ACT },
+				tone: accent(() => current() === 0),
+				children: node("text", { text: tr("Edit goal", "编辑目标") }),
+			}),
+			() => describeSnapshot(snapshot(), true, itemIds(snapshot())[current() - 1]),
 			node("text", {
-				text:
-					this.mode.kind === "panel"
-						? tr("Tab / arrows select · Enter edit · Escape close", "Tab / 方向键选择 · Enter 编辑 · Escape 关闭")
-						: tr(
-								"Enter newline · Tab / Shift+Tab field · Ctrl+Enter save · Escape cancel",
-								"Enter 换行 · Tab / Shift+Tab 切换字段 · Ctrl+Enter 保存 · Escape 取消",
-							),
+				text: tr("Tab / arrows select · Enter edit · Escape close", "Tab / 方向键选择 · Enter 编辑 · Escape 关闭"),
 				wrap: "word",
 			}),
-		);
-		body.push(col(actions, { gap: "xs" }));
-		this.described = node("card", { role, head }, body);
-		return this.described;
-	}
-
-	private button(label: string, act: string, selected = false): NativeNode {
-		return node(
-			"row",
-			{ role: "omp.btn", actions: { click: act }, title: label, tone: selected ? "accent" : undefined },
-			[node("text", { text: label })],
-			act,
-		);
-	}
-
-	handleNativeEvent(event: NativeUiEvent): void {
-		if (this.disposed || this.signal.aborted || event.type !== "action") return;
-		if (event.act === "todo-ng.save") this.save();
-		else if (event.act === "close") this.close();
-		else if (event.act === "todo-ng.goal") this.openGoal();
-		else if (event.act.startsWith("todo-ng.explain:")) this.openExplanation(event.act.slice("todo-ng.explain:".length));
-		else if (this.mode.kind === "goal") {
-			const name = FIELDS.find((field) => event.act === `todo-ng.field.${field}`);
-			if (name) {
-				this.mode.active = name;
-				this.changed();
-			}
-		}
-	}
-
-	handleInput(data: string): void {
-		if (this.disposed || this.signal.aborted) return;
-		if (matchesKey(data, "escape")) {
-			this.close();
-			return;
-		}
-		if (matchesKey(data, "ctrl+enter")) {
-			this.save();
-			return;
-		}
-		if (this.mode.kind === "panel") {
-			const state = this.readState();
-			const ids = state.kind === "list" ? state.phases.flatMap((phase) => phase.items.map((item) => item.id)) : [];
-			const selected = Math.min(this.mode.selected, ids.length + 1);
-			if (matchesKey(data, "tab") || matchesKey(data, "down")) this.mode.selected = (selected + 1) % (ids.length + 2);
-			else if (matchesKey(data, "shift+tab") || matchesKey(data, "up")) this.mode.selected = (selected + ids.length + 1) % (ids.length + 2);
-			else if (matchesKey(data, "enter")) {
-				const id = ids[selected - 1];
-				if (selected === 0) this.openGoal();
-				else if (id === undefined) this.close();
-				else this.openExplanation(id);
-			}
-			this.changed();
-			return;
-		}
-		if (this.mode.kind === "goal" && (matchesKey(data, "tab") || matchesKey(data, "shift+tab"))) {
-			const next = FIELDS[(FIELDS.indexOf(this.mode.active) + (matchesKey(data, "shift+tab") ? 2 : 1)) % FIELDS.length];
-			if (next !== undefined) this.mode.active = next;
-			this.changed();
-			return;
-		}
-		const editor = this.mode.kind === "goal" ? this.mode.fields[this.mode.active].editor : this.mode.draft.editor;
-		editor.handleInput(matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n" ? "\n" : data);
-		this.changed();
-	}
-
-	render(width: number): readonly string[] {
-		const lines = [
-			this.theme.bold(
-				this.mode.kind === "panel"
-					? tr("Todo NG", "Todo NG")
-					: this.mode.kind === "goal"
-						? tr("Edit goal", "编辑目标")
-						: `${tr("Edit explanation", "编辑说明")}: ${this.mode.title}`,
-			),
-		];
-		switch (this.mode.kind) {
-			case "panel": {
-				const state = this.readState();
-				const labels = [tr("Edit goal", "编辑目标")];
-				if (state.kind === "empty") lines.push(tr("Todo list is empty.", "待办列表为空。"));
-				else {
-					lines.push(...(state.goal.kind === "set" ? uiGoalLines(state.goal.goal) : [tr("Goal: [missing]", "目标：[缺少]")]));
-					for (const phase of state.phases) {
-						lines.push(phase.name);
-						for (const item of phase.items) {
-							lines.push(
-								`${item.title} [${uiStatus(item.progress.status)}]`,
-								uiTimeEstimate(item),
-								item.explanation.kind === "explained" ? item.explanation.text : tr("[explanation missing]", "[缺少说明]"),
-							);
-							labels.push(`${tr("Edit explanation", "编辑说明")}: ${item.title}`);
-						}
-					}
-				}
-				labels.push(tr("Close", "关闭"));
-				const selected = Math.min(this.mode.selected, labels.length - 1);
-				lines.push(...labels.map((label, index) => `${index === selected ? ">" : " "} ${label}`));
-				break;
-			}
-			case "goal":
-				for (const name of FIELDS) {
-					this.mode.fields[name].field.focused = this.focused && name === this.mode.active;
-					lines.push(...this.mode.fields[name].field.render(width));
-				}
-				break;
-			case "explanation":
-				this.mode.draft.field.focused = this.focused;
-				lines.push(...this.mode.draft.field.render(width));
-				break;
-			default: {
-				const unreachable: never = this.mode;
-				throw new Error(String(unreachable));
-			}
-		}
-		if (this.error) lines.push(this.theme.fg("error", this.error));
-		lines.push(tr("Ctrl+Enter save · Escape cancel/close · Tab next", "Ctrl+Enter 保存 · Escape 取消/关闭 · Tab 下一个"));
-		return new Text(lines.join("\n"), 0, 0).render(width);
-	}
-
-	invalidate(): void {
-		this.described = undefined;
-		this.last = undefined;
-	}
-	dispose(): void {
-		if (this.disposed) return;
-		this.disposed = true;
-		this.discardDraft();
-		this.described = undefined;
-		this.last = undefined;
-	}
+			node("row", {
+				role: "omp.btn",
+				actions: { click: PANEL_CLOSE_ACT },
+				tone: accent(() => current() === panelSize(snapshot()) - 1),
+				children: node("text", { text: tr("Close", "关闭") }),
+			}),
+		],
+	});
 }
 
-const HUD_WIDGET_KEY = "todo-ng.hud";
-const NO_ANSI_HUD_ROWS: readonly string[] = [];
+const NO_HUD_HANDLERS: HudHandlers = { onToggle: () => {}, onOpen: () => {} };
 
-function findPromptEditor(component: Component): CustomEditor | undefined {
-	if (component instanceof CustomEditor) return component;
-	if (component instanceof Container) {
-		for (let index = component.children.length - 1; index >= 0; index--) {
-			const child = component.children[index];
-			if (child === undefined) continue;
-			const editor = findPromptEditor(child);
-			if (editor !== undefined) return editor;
-		}
-	}
-	return undefined;
+export function hudNode(snapshot: TodoNgSnapshot | undefined, expanded: boolean, handlers: HudHandlers = NO_HUD_HANDLERS): JSXNode {
+	const hud = snapshot === undefined ? null : describeTodoHud(snapshot, expanded, handlers);
+	return hud ?? node("row", { role: "omp.hud.activity", aria: tr("Todo NG progress", "Todo NG 进度"), hidden: true });
 }
 
-function viewedSession(tui: TUI, mainAgentId: string): AgentSession | undefined {
-	const editor = findPromptEditor(tui);
-	if (editor === undefined) return undefined;
-	return sessionOf(editor.composerState().viewing?.at(-1) ?? mainAgentId);
-}
-type HudDisclosure = { kind: "closed" } | { kind: "open"; session: AgentSession; stopInput: () => void };
+export type HudController = {
+	readonly node: Accessor<JSXNode>;
+	readonly expanded: Signal<boolean>;
+	readonly handlers: HudHandlers;
+	refresh(): void;
+};
 
-type HudRead = { sessionId: string; state: TodoNgState; node: NativeNode };
-
-export class TodoHud implements Component {
-	private disclosure: HudDisclosure = { kind: "closed" };
-	private last: HudRead | undefined;
-
-	constructor(
-		private readonly pi: ExtensionAPI,
-		private readonly readSession: () => AgentSession | undefined,
-		private readonly open: () => Promise<void>,
-		private readonly tui: TUI,
-		private readonly onDispose: () => void,
-	) {}
-
-	describe(): NativeNode | null {
-		try {
-			const session = this.readSession();
-			if (this.disclosure.kind === "open" && this.disclosure.session !== session) this.closeDisclosure();
-			const previousSession = this.last?.sessionId;
-			if (previousSession !== undefined && (session === undefined || session.sessionManager.getSessionId() !== previousSession))
-				this.last = undefined;
-			const expanded = this.disclosure.kind === "open";
-			if (session !== undefined) {
-				const state = liveState(session);
-				const previous = this.last;
-				const sessionId = session.sessionManager.getSessionId();
-				if (previous !== undefined && previous.sessionId === sessionId && Bun.deepEquals(previous.state, state)) return previous.node;
-				const hud = describeTodoHud(toSnapshot(state), expanded);
-				const derived = hud ?? node("row", { role: "omp.hud.activity", aria: tr("Todo NG progress", "Todo NG 进度"), hidden: true });
-				this.last = { sessionId, state, node: derived };
-				if (hud === null) this.closeDisclosure();
-				return derived;
-			}
-			if (this.disclosure.kind === "open") this.closeDisclosure();
-			return node("row", { role: "omp.hud.activity", aria: tr("Todo NG progress", "Todo NG 进度"), hidden: true });
-		} catch (error) {
-			this.closeDisclosure();
-			this.pi.logger.warn("todo-ng HUD could not read the current branch", { error: errorText(error) });
-			return null;
-		}
-	}
-
-	render(): readonly string[] {
-		return NO_ANSI_HUD_ROWS;
-	}
-
-	closeDisclosure(): void {
-		if (this.disclosure.kind === "closed") return;
-		this.disclosure.stopInput();
-		this.disclosure = { kind: "closed" };
-		this.last = undefined;
-	}
-
-	handleNativeEvent(event: NativeUiEvent): void {
-		if (event.type === "toggle" && event.key === "pill/control") {
-			this.closeDisclosure();
-			if (!event.collapsed) {
-				const session = this.readSession();
-				if (session === undefined) return;
-				const stopInput = this.tui.addInputListener((data) => {
-					if (this.disclosure.kind === "closed") return;
-					if (this.readSession() !== this.disclosure.session) {
-						this.closeDisclosure();
-						this.tui.requestRender();
-						return;
-					}
-					if (!matchesKey(data, "escape")) return;
-					this.closeDisclosure();
-					this.tui.requestRender();
-					return { consume: true };
-				});
-				this.disclosure = { kind: "open", session, stopInput };
-				this.last = undefined;
-			}
-			this.tui.requestRender();
-		} else if (event.type === "action" && event.act === "todo-ng.open") {
-			void this.open();
-		}
-	}
-
-	dispose(): void {
-		this.closeDisclosure();
-		this.onDispose();
-	}
+export function hudController(snapshotOf: () => TodoNgSnapshot | undefined, open: () => void): HudController {
+	const revision = signal(0);
+	const expanded = signal(false);
+	const handlers: HudHandlers = {
+		onToggle: (collapsed) => expanded.set(!collapsed),
+		onOpen: () => {
+			expanded.set(false);
+			open();
+		},
+	};
+	const snapshot = computed<TodoNgSnapshot | undefined>(
+		() => {
+			revision();
+			return snapshotOf();
+		},
+		{ equals: (previous, next) => Bun.deepEquals(previous, next) },
+	);
+	const view = computed<JSXNode>(() => hudNode(snapshot(), expanded(), handlers));
+	return { node: view, expanded, handlers, refresh: () => revision.update((value) => value + 1) };
 }
 
 export function registerUi(pi: ExtensionAPI): void {
-	let active: { controller: AbortController; session: AgentSession } | undefined;
-	let hudTui: TUI | undefined;
-	let hud: TodoHud | undefined;
+	let active: AbortController | undefined;
+	let hud: HudController | undefined;
+
 	const cancel = (): void => {
-		active?.controller.abort();
+		active?.abort();
 		active = undefined;
 	};
-	const currentSession = (tui: TUI, mainAgentId: string): AgentSession | undefined => {
-		const session = viewedSession(tui, mainAgentId);
-		if (active !== undefined && active.session !== session) cancel();
-		return session;
+
+	const snapshotOf = (session: AgentSession): TodoNgSnapshot | undefined => {
+		try {
+			return toSnapshot(liveState(session));
+		} catch (error) {
+			pi.logger.warn("todo-ng HUD could not read the current branch", { error: errorText(error) });
+			return undefined;
+		}
 	};
+
+	const readGoalForm = async (ctx: ExtensionContext, abort: AbortSignal, goal: TodoGoal | undefined): Promise<HtmlFormData | undefined> => {
+		const dialog = ctx.ui.formDialog;
+		if (dialog !== undefined) {
+			const result = await dialog.call(ctx.ui, goalFormHtml(goal), { signal: abort });
+			return result?.data;
+		}
+		const data: HtmlFormData = {};
+		for (const field of GOAL_FIELDS) {
+			const text = await ctx.ui.editor(goalFieldLabel(field), goal?.[field] ?? "", { signal: abort });
+			if (text === undefined) return undefined;
+			data[field] = text;
+		}
+		return data;
+	};
+
+	const readExplainForm = async (
+		ctx: ExtensionContext,
+		abort: AbortSignal,
+		title: string,
+		explanation: string | undefined,
+	): Promise<HtmlFormData | undefined> => {
+		const dialog = ctx.ui.formDialog;
+		if (dialog !== undefined) {
+			const result = await dialog.call(ctx.ui, explainFormHtml(title, explanation), { signal: abort });
+			return result?.data;
+		}
+		const text = await ctx.ui.editor(`${tr("Explanation", "说明")}: ${title}`, explanation ?? "", { signal: abort });
+		if (text === undefined) return undefined;
+		return { [EXPLANATION_FIELD]: text };
+	};
+
+	const report = (ctx: ExtensionContext, outcome: EditOutcome): void => {
+		switch (outcome.kind) {
+			case "saved":
+			case "cancelled":
+				return;
+			case "rejected":
+				ctx.ui.notify(outcome.message, "error");
+				return;
+			default: {
+				const unreachable: never = outcome;
+				throw new Error(`Unexpected edit outcome: ${String(unreachable)}`);
+			}
+		}
+	};
+
+	const editGoal = async (ctx: ExtensionContext, session: AgentSession, abort: AbortSignal): Promise<void> => {
+		const data = await readGoalForm(ctx, abort, toSnapshot(liveState(session)).goal ?? undefined);
+		if (data === undefined) return;
+		if (sessionOf(ctx.agent.id) !== session) return;
+		report(ctx, applyGoalForm(session, data));
+	};
+
+	const editExplanation = async (ctx: ExtensionContext, session: AgentSession, abort: AbortSignal, id: string): Promise<void> => {
+		const snapshot = toSnapshot(liveState(session));
+		const item = snapshot.phases.flatMap((phase) => phase.items).find((candidate) => candidate.id === id);
+		if (item === undefined) return;
+		const data = await readExplainForm(ctx, abort, item.title, item.explanation ?? undefined);
+		if (data === undefined) return;
+		if (sessionOf(ctx.agent.id) !== session) return;
+		report(ctx, applyExplainForm(session, id, data));
+	};
+
+	const runPanel = async (ctx: ExtensionContext, session: AgentSession, controller: AbortController): Promise<void> => {
+		let start = 0;
+		for (;;) {
+			const choice = await ctx.ui.custom<PanelChoice>((_ui, _theme, _keys, done) => panelView(session, start, done), {
+				overlay: true,
+				signal: controller.signal,
+			});
+			switch (choice.kind) {
+				case "close":
+					return;
+				case "goal":
+					start = 0;
+					await editGoal(ctx, session, controller.signal);
+					break;
+				case "explain": {
+					const index = itemIds(toSnapshot(liveState(session))).indexOf(choice.id);
+					start = index < 0 ? 0 : index + 1;
+					await editExplanation(ctx, session, controller.signal, choice.id);
+					break;
+				}
+				default: {
+					const unreachable: never = choice;
+					throw new Error(`Unexpected panel choice: ${String(unreachable)}`);
+				}
+			}
+			hud?.refresh();
+			if (controller.signal.aborted) return;
+			if (sessionOf(ctx.agent.id) !== session) return;
+		}
+	};
+
 	const open = async (ctx: ExtensionContext): Promise<void> => {
 		if (!ctx.hasUI) {
 			pi.sendMessage({
@@ -578,87 +372,58 @@ export function registerUi(pi: ExtensionAPI): void {
 			});
 			return;
 		}
-		hud?.closeDisclosure();
-		hudTui?.requestRender();
-		const session = hudTui === undefined ? undefined : currentSession(hudTui, ctx.agent.id);
-		if (session == null || active) return;
-		const opened = { controller: new AbortController(), session };
-		active = opened;
+		const session = sessionOf(ctx.agent.id);
+		if (session === undefined || active !== undefined) return;
+		const controller = new AbortController();
+		active = controller;
 		try {
-			await ctx.ui.custom<void>(
-				(tui, theme, _keys, done) =>
-					new TodoPanel(
-						session,
-						theme,
-						() => tui.requestRender(),
-						() => done(),
-						opened.controller.signal,
-						() => currentSession(tui, ctx.agent.id) === session,
-					),
-				{ overlay: true, signal: opened.controller.signal },
-			);
+			await runPanel(ctx, session, controller);
 		} catch (error) {
-			if (!opened.controller.signal.aborted) {
+			if (!controller.signal.aborted) {
 				pi.logger.warn("todo-ng UI failed", { error: errorText(error) });
 				ctx.ui.notify(`${tr("Todo NG UI failed", "Todo NG 界面失败")}: ${errorText(error)}`, "error");
 			}
 		} finally {
-			if (active === opened) active = undefined;
+			if (active === controller) active = undefined;
 		}
 	};
+
 	const installHud = (ctx: ExtensionContext): void => {
+		hud = undefined;
 		if (!ctx.hasUI) return;
 		const session = sessionOf(ctx.agent.id);
-		hudTui = undefined;
-		ctx.ui.setWidget(
-			HUD_WIDGET_KEY,
-			session === undefined
-				? undefined
-				: (tui) => {
-						hudTui = tui;
-						const widget: TodoHud = new TodoHud(
-							pi,
-							() => currentSession(tui, ctx.agent.id),
-							() => open(ctx),
-							tui,
-							() => {
-								if (hud === widget) {
-									hud = undefined;
-									hudTui = undefined;
-								}
-							},
-						);
-						hud = widget;
-						return widget;
-					},
-			{ placement: "aboveEditor" },
+		if (session === undefined) {
+			ctx.ui.setWidget(HUD_WIDGET_KEY, undefined);
+			return;
+		}
+		const controller = hudController(
+			() => snapshotOf(session),
+			() => void open(ctx),
 		);
+		hud = controller;
+		ctx.ui.setWidget(HUD_WIDGET_KEY, () => controller.node, { placement: "aboveEditor" });
 	};
+
 	pi.on("session_start", (_event, ctx) => installHud(ctx));
-	pi.on("session_switch", (_event, ctx) => {
+	const reinstall = (_event: unknown, ctx: ExtensionContext): void => {
 		cancel();
 		installHud(ctx);
-	});
-	pi.on("session_branch", (_event, ctx) => {
-		cancel();
-		installHud(ctx);
-	});
-	pi.on("session_tree", (_event, ctx) => {
-		cancel();
-		installHud(ctx);
-	});
+	};
+	pi.on("session_switch", reinstall);
+	pi.on("session_branch", reinstall);
+	pi.on("session_tree", reinstall);
 	pi.on("session_shutdown", (_event, ctx) => {
 		cancel();
+		hud = undefined;
 		if (ctx.hasUI) ctx.ui.setWidget(HUD_WIDGET_KEY, undefined);
-		hudTui = undefined;
 	});
-	pi.on("input", (event, ctx) => {
-		if (event.source !== "interactive" || !ctx.hasUI || !hudTui?.nativeRendering) return;
-		const command = /^\/todo(?:[\s:]+(.*))?$/s.exec(event.text.trim());
-		if (command === null) return;
-		const args = (command[1] ?? "").trim().toLowerCase();
-		if (args === "" || args === "edit") return { text: "/todo-ng" };
-	});
+	const repaint = (): void => hud?.refresh();
+	pi.on("tool_execution_end", repaint);
+	pi.on("tool_result", repaint);
+	pi.on("message_end", repaint);
+	pi.on("turn_end", repaint);
+	pi.on("agent_end", repaint);
+	pi.on("session_compact", repaint);
 	pi.registerCommand("todo-ng", {
 		description: tr("Show rich todos and edit the current session's goal and explanations", "显示丰富待办并编辑当前会话的目标和说明"),
 		handler: async (_args: string, ctx: ExtensionContext) => open(ctx),

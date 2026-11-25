@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-coding-agent/tools/details/todo";
 import { logger } from "@oh-my-pi/pi-utils";
 import { type BranchFacts, branchFacts } from "./branch.ts";
 import { commitTodoState, liveState, type TodoSession } from "./commit.ts";
