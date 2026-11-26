@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { z } from "@oh-my-pi/omptype/zod";
 
-const MODELS = ["futureppo-pool/ernie-5.5-flash-preview", "futureppo-pool/nemotron-3-ultra-550b-a55b", "anthropic/claude-haiku-5-5"];
+const MODELS = ["futureppo-pool/gpt-6.2-sol", "futureppo-pool/gpt-6-luna", "futureppo-pool/nemotron-3-ultra-550b-a55b", "anthropic/claude-haiku-5-5"];
 const SILENCE_MS = 30_000;
 const EXTENSION = path.resolve(import.meta.dir, "../../index.ts");
 const PROMPT = [
