@@ -34,7 +34,7 @@ jobs:
       - name: Pick the oh-my-omp/shared branch
         id: shared
         env:
-          BRANCH: ${{ github.base_ref || github.ref_name }}
+          BRANCH: ${{ github.base_ref }}
         run: |
           ref=main
           if [ -n "$BRANCH" ] && git ls-remote --exit-code --heads https://github.com/oh-my-omp/shared "refs/heads/$BRANCH" >/dev/null; then
