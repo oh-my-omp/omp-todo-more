@@ -37,8 +37,14 @@ jobs:
           BRANCH: ${{ github.base_ref }}
         run: |
           ref=main
-          if [ -n "$BRANCH" ] && git ls-remote --exit-code --heads https://github.com/oh-my-omp/shared "refs/heads/$BRANCH" >/dev/null; then
-            ref="$BRANCH"
+          if [ -n "$BRANCH" ]; then
+            found=0
+            git ls-remote --exit-code --heads https://github.com/oh-my-omp/shared "refs/heads/$BRANCH" >/dev/null || found=$?
+            case "$found" in
+              0) ref="$BRANCH" ;;
+              2) ;;
+              *) echo "git ls-remote oh-my-omp/shared failed with exit $found" >&2; exit "$found" ;;
+            esac
           fi
           echo "oh-my-omp/shared@$ref"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
