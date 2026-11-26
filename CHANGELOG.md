@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-26
+
+### Fixed
+
+- Todo NG loads on omp 19.2: it no longer fails with `Failed to load extension … Cannot find package '@oh-my-pi/pi-tui'`, so the `todo` the model sees is this plugin's again instead of the host built-in.
+
+### Changed
+
+- The `todo` card body, the reminder card, the `todo-ng.hud` widget and the `/todo-ng` panel are drawn as pi-tui 19.2 nodes; the card head is the host's `Todo closed/total`. The panel edits the goal and explanations through a host form (`formDialog`, or one `editor` dialog per field) and reopens on the saved list.
+
+### Removed
+
+- The rewrite of interactive `/todo` and `/todo edit` input to `/todo-ng`, and the HUD and panel following a viewed subagent's session: omp 19.2 exposes neither the composer's viewed session nor native-rendering state to extensions. The HUD and the panel show the session the extension runs in; open the editor with `/todo-ng`.
+
 ## [0.4.0] - 2026-11-24
 
 ### Added

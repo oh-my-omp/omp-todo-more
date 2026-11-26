@@ -19,12 +19,14 @@ const reminderCounts = (args.get("--reminders") ?? "0,119,704").split(",").map(N
 const selected = args.get("--paths")?.split(",");
 
 type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
-type Hud = { describe(): unknown };
+type Hud = { node(): unknown; refresh(): void };
 type Modules = {
 	runTodo: (session: unknown, raw: unknown) => Promise<unknown>;
 	registerPlanning: (pi: ExtensionAPI) => void;
 	registerOvertime: (pi: ExtensionAPI) => void;
-	TodoHud: new (pi: ExtensionAPI, readSession: () => unknown, open: () => Promise<void>, tui: unknown, onDispose: () => void) => Hud;
+	hudController: (snapshotOf: () => unknown, open: () => void) => Hud;
+	toSnapshot: (state: unknown) => unknown;
+	liveState: (session: unknown) => unknown;
 	contextMessages: (messages: AgentMessage[], session: AgentSession) => AgentMessage[] | undefined;
 };
 
@@ -32,7 +34,9 @@ const modules: Modules = {
 	...((await import(`${src}/src/tool.ts`)) as Pick<Modules, "runTodo">),
 	...((await import(`${src}/src/planning.ts`)) as Pick<Modules, "registerPlanning">),
 	...((await import(`${src}/src/overtime.ts`)) as Pick<Modules, "registerOvertime">),
-	...((await import(`${src}/src/ui.ts`)) as Pick<Modules, "TodoHud">),
+	...((await import(`${src}/src/ui.ts`)) as Pick<Modules, "hudController">),
+	...((await import(`${src}/src/state.ts`)) as Pick<Modules, "toSnapshot">),
+	...((await import(`${src}/src/commit.ts`)) as Pick<Modules, "liveState">),
 	...((await import(`${src}/src/reminders.ts`)) as Pick<Modules, "contextMessages">),
 };
 
@@ -142,15 +146,14 @@ async function todoPath(n: number): Promise<Sample> {
 async function hudPath(n: number): Promise<Sample> {
 	const manager = freshBranch(n);
 	const session = sessionOver(manager);
-	const handlers = new Map<string, Handler[]>();
-	const hud = new modules.TodoHud(
-		stubPi(handlers, manager),
-		() => session,
-		async () => {},
-		{ requestRender() {}, requestComponentRender() {} },
+	const hud = modules.hudController(
+		() => modules.toSnapshot(modules.liveState(session)),
 		() => {},
 	);
-	return measure(manager, () => hud.describe());
+	return measure(manager, () => {
+		hud.refresh();
+		hud.node();
+	});
 }
 
 async function overtimePath(n: number): Promise<Sample> {
