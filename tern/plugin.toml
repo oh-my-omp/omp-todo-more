@@ -1,6 +1,6 @@
 schema = 1
 id = "omp-todo-ng"
 name = "Todo NG"
-version = "0.4.0"
+version = "0.4.1"
 window = "window.luau"
 styles = ["todo-ng.css"]

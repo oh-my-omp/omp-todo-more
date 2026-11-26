@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-26
+
 ### Fixed
 
 - Todo NG loads on omp 19.2: it no longer fails with `Failed to load extension … Cannot find package '@oh-my-pi/pi-tui'`, so the `todo` the model sees is this plugin's again instead of the host built-in.
