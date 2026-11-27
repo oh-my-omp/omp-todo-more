@@ -212,6 +212,7 @@ export function registerPlanning(pi: ExtensionAPI): void {
 		pi,
 		defineStatefulHarnessHandoff({
 			pluginId: "omp-todo-ng",
+			inactiveClaim: `\`omp-todo-ng\` (\`source="${PLANNING_SOURCE}"\`) confirms the todo list is currently empty and manages planning reminders automatically after compaction — NEVER restate todo rules, time budgets, or todo items in the summary.`,
 			captureState(compactCtx) {
 				const agentId = compactCtx.extensionCtx?.agent?.id;
 				const session = agentId !== undefined ? sessionOf(agentId) : undefined;

@@ -146,7 +146,9 @@ class SchedulerFixture {
 	readonly clock = new DeadlineClock();
 	readonly agentId = `overtime-regression-${crypto.randomUUID()}`;
 	readonly errors: string[] = [];
+	readonly deliveries: unknown[] = [];
 	readonly handlers = new Map<string, Handler[]>();
+	idle = true;
 	manager = SessionManager.inMemory("/tmp/overtime-regression");
 	phases: HostTodoPhase[] = [];
 
@@ -177,8 +179,9 @@ class SchedulerFixture {
 			handlers.push(handler);
 			this.handlers.set(event, handlers);
 		},
-		sendMessage: ((message) => {
+		sendMessage: ((message, options) => {
 			if (typeof message === "string") throw new Error("Expected a structured overtime warning");
+			this.deliveries.push(options);
 			this.manager.appendCustomMessageEntry(message.customType, message.content, message.display, message.details, message.attribution);
 		}) satisfies ExtensionAPI["sendMessage"],
 		logger: { warn: (message: string) => this.errors.push(message) },
@@ -193,7 +196,7 @@ class SchedulerFixture {
 			cwd: this.cwd,
 			agent: { id: this.agentId },
 			sessionManager: this.manager,
-			isIdle: () => true,
+			isIdle: () => this.idle,
 			setTimeout: this.clock.setTimeout,
 			clearTimer: this.clock.clearTimer,
 		} as unknown as ExtensionContext;
@@ -449,5 +452,19 @@ describe("overtime deadline scheduling", () => {
 			expect(fixture.errors).toContain("todo-ng project config is invalid");
 			fixture.errors.length = 0;
 		}, projectDir("{ not json"));
+	});
+
+	test("delivers idle overtime warnings with nextTurn silent append and running warnings as aside", async () => {
+		await withScheduler(async (fixture) => {
+			fixture.idle = true;
+			await fixture.append(estimatedState(1, "idle-budget"));
+			await fixture.clock.advanceTo(epoch + 60_000);
+			expect(fixture.deliveries).toEqual([{ deliverAs: "nextTurn", triggerTurn: false }]);
+
+			fixture.idle = false;
+			await fixture.append(estimatedState(1, "busy-budget", fixture.clock.now));
+			await fixture.clock.advanceTo(epoch + 120_000);
+			expect(fixture.deliveries).toEqual([{ deliverAs: "nextTurn", triggerTurn: false }, { deliverAs: "aside" }]);
+		});
 	});
 });
