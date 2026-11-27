@@ -336,7 +336,11 @@ describe("planning injection granularity, deduplication and recovery", () => {
 			emptyPruneReport,
 		);
 		expect(emptySnapshot.inactiveStatefulPluginIds).toContain("omp-todo-ng");
-		expect(emptySnapshot.compactingResult.context?.join("\n")).not.toContain("[omp-todo-ng]");
+		expect(emptySnapshot.activeHandoffs.some((h) => h.pluginId === "omp-todo-ng")).toBe(false);
+		const emptyClaimLine = emptySnapshot.compactingResult.context?.find((line) => line.startsWith("harness-provided [omp-todo-ng]"));
+		expect(emptyClaimLine).toBeDefined();
+		expect(emptyClaimLine).toContain("currently empty");
+		expect(emptyClaimLine).not.toContain("\n");
 
 		await runPersisted(session, multi);
 		await emit("session_before_compact", {
