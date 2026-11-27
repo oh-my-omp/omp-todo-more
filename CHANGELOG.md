@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `todo` treats an empty value in an optional field as omitting the field: a blank `view`, `start_id` or `done_id`, an empty `add`, `explain`, `estimate` or `drop_ids` array, and an empty `goal` or `commit` object no longer fail validation, and a call whose fields are all empty shows the whole list like `todo({})`. A blank `add[].phase` goes to `"Tasks"` like an omitted phase. An array holding an empty element (for example a blank string inside `commit.paths` or `drop_ids`) is refused with the element index and changes nothing, and a blank required text (`goal.title`, `add[].title` and the like) is still rejected.
+
 ## [0.4.1] - 2026-11-26
 
 ### Fixed

@@ -3,6 +3,7 @@ import type { AgentSession, ExtensionAPI, ExtensionContext, ToolDefinition, Tool
 import { logger } from "@oh-my-pi/pi-utils";
 import { canonicalToolOrder } from "./omomp-shared/active-tools.ts";
 import { tr } from "./omomp-shared/i18n.ts";
+import { omompTool } from "./omomp-shared/tool-entry.ts";
 import { acceptanceGuard } from "./src/acceptance.ts";
 import { errorText } from "./src/errors.ts";
 import { renderTodoCall, renderTodoResult } from "./src/native.ts";
@@ -62,7 +63,7 @@ async function restoreTodo(session: AgentSession, ctx: ExtensionContext): Promis
 		},
 		execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => executeTodo(session, params, ctx, signal),
 	};
-	await session.refreshRpcHostTools([hostTool]);
+	await session.refreshRpcHostTools([omompTool(hostTool)]);
 }
 
 const guardedSessions = new WeakSet<AgentSession>();
@@ -102,7 +103,7 @@ export const TODO_TOOL_DEFINITION = {
 } satisfies ToolDefinition<typeof parametersSchema, TodoNgDetails>;
 
 export default async function todoNg(pi: ExtensionAPI): Promise<void> {
-	pi.registerTool(TODO_TOOL_DEFINITION);
+	pi.registerTool(omompTool(TODO_TOOL_DEFINITION));
 
 	pi.on("before_agent_start", (_event, ctx) => {
 		try {
