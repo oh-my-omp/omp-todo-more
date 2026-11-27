@@ -6,6 +6,10 @@
 
 - When the todo list is empty at compaction, `omp-todo-ng` emits an empty-state `harness-provided` exclusion claim so summaries do not copy planning reminder rules or invent todo items, and syncs `omomp-shared/compact-handoff.ts` to `COMPACT_HANDOFF_REVISION = 3` ([#126](https://github.com/oh-my-omp/omp-todo-ng/issues/126)).
 
+### Fixed
+
+- Appended idle overtime warnings without rebuilding the chat or starting a new turn ([#130](https://github.com/oh-my-omp/omp-todo-ng/issues/130))
+
 ## [0.4.1] - 2026-11-26
 
 ### Fixed
