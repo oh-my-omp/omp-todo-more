@@ -50,7 +50,7 @@ function stageAdds(params: TodoParams, previous: TodoNgState): Staged[] {
 	return (params.add ?? []).map((param) => {
 		const id = allocate();
 		return {
-			phase: param.phase?.trim() || "Tasks",
+			phase: param.phase?.trim() ?? "Tasks",
 			item: {
 				id,
 				title: param.title,

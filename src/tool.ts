@@ -3,6 +3,7 @@ import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { TodoPhase as HostTodoPhase, TodoCompletionTransition } from "@oh-my-pi/pi-coding-agent/tools/details/todo";
 import { logger } from "@oh-my-pi/pi-utils";
+import { omompTool } from "../omomp-shared/tool-entry.ts";
 import { type BranchFacts, branchFacts } from "./branch.ts";
 import { commitTodoState, liveState, type TodoSession } from "./commit.ts";
 import { commitGuard } from "./commit-guard.ts";
@@ -37,13 +38,25 @@ export type PreviewOutcome = { readonly kind: "state"; readonly state: TodoNgSta
 
 export type PreviewEnv = { readonly leafMaxMinutes: number; readonly project: ProjectConfigState; readonly scope: WorktreeScope };
 
+const previewTool = omompTool({
+	name: "todo",
+	parameters: parametersSchema,
+	execute: (_toolCallId: string, params: unknown) => params,
+});
+
 export function previewTodo(
 	facts: Pick<BranchFacts, "waits" | "overtimeWarned">,
 	previous: TodoNgState,
 	raw: unknown,
 	env: PreviewEnv,
 ): PreviewOutcome {
-	const parsed = parseTodoParams(raw);
+	let normalized: unknown;
+	try {
+		normalized = previewTool.execute("preview", raw);
+	} catch {
+		return { kind: "rejected" };
+	}
+	const parsed = parseTodoParams(normalized);
 	if (parsed.kind === "invalid") return { kind: "rejected" };
 	if (!hasTodoMutation(parsed.params)) return { kind: "state", state: previous };
 	if (env.project.kind === "invalid") return { kind: "rejected" };
