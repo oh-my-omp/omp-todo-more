@@ -87,7 +87,7 @@ export function registerOvertime(pi: ExtensionAPI): void {
 							pending.add(estimate.budgetId);
 							pi.sendMessage(
 								{ ...notice.message, customType: OVERTIME_TYPE, display: true, details },
-								binding.ctx.isIdle() ? { triggerTurn: false } : { deliverAs: "aside" },
+								binding.ctx.isIdle() ? { deliverAs: "nextTurn", triggerTurn: false } : { deliverAs: "aside" },
 							);
 						} catch (error) {
 							pending.delete(estimate.budgetId);
