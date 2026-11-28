@@ -1,6 +1,6 @@
 {
 	"name": "omp-todo-ng",
-	"version": "0.4.1",
+	"version": "0.4.2",
 	"description": "Branch-owned rich todos, reminders and native OMP/Tern editing",
 	"type": "module",
 	"repository": {
